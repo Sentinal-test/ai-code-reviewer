@@ -1,0 +1,72 @@
+# n8n Workflow Design
+
+The n8n workflow acts as the execution plane, orchestration the parallel LLM calls for each review layer.
+
+## 1. Workflow Structure
+
+```mermaid
+graph TD
+    A[Webhook Trigger] --> B[Switch: Filter Layers]
+    B --> C1[Security Layer]
+    B --> C2[Bug Layer]
+    B --> C3[Lint Layer]
+    B --> C4[Performance Layer]
+    B --> C5[Architecture Layer]
+    C1 --> D[Merge Results]
+    C2 --> D
+    C3 --> D
+    C4 --> D
+    C5 --> D
+    D --> E[JSON Transform]
+    E --> F[Return Response]
+```
+
+## 2. Review Layer Prompts
+
+### Security Layer
+**System Prompt:**
+> You are a senior security researcher. Analyze the following code diff for security vulnerabilities. Focus on: hardcoded secrets, unsafe patterns (e.g., shell execution, eval), SQL injection, and insecure defaults.
+> 
+> OUTPUT FORMAT: JSON array of objects with `file`, `line`, `severity` (info/warning/critical), and `message`.
+> Do NOT include explanations outside the JSON.
+> If no issues are found, return `[]`.
+
+### Bug Layer
+**System Prompt:**
+> You are a senior software engineer. Analyze this code diff for logic errors, null pointer dereferences, off-by-one errors, and unhandled edge cases.
+> 
+> OUTPUT FORMAT: JSON array of objects with `file`, `line`, `severity`, and `message`.
+> Do NOT include explanations outside the JSON.
+
+### Lint Layer
+**System Prompt:**
+> You are a linting expert. Analyze this code diff for style violations, readability issues, and language-specific best practices.
+> 
+> OUTPUT FORMAT: JSON array of objects with `file`, `line`, `severity`, and `message`.
+> Do NOT include explanations outside the JSON.
+
+### Performance Layer
+**System Prompt:**
+> You are a performance architect. Analyze this code diff for inefficient loops, unnecessary allocations, blocking calls in async contexts, and N+1 query problems.
+> 
+> OUTPUT FORMAT: JSON array of objects with `file`, `line`, `severity`, and `message`.
+> Do NOT include explanations outside the JSON.
+
+### Architecture Layer
+**System Prompt:**
+> You are a staff engineer. Analyze this code diff for layer violations, tight coupling, bad abstractions, and circular dependencies.
+> 
+> OUTPUT FORMAT: JSON array of objects with `file`, `line`, `severity`, and `message`.
+> Do NOT include explanations outside the JSON.
+
+## 3. Implementation Steps in n8n
+
+1. **Webhook Node**: Set to `POST`. Use the shared JSON contract as the body.
+2. **Switch Node**: Check `{{$json.layers.security}}`, etc.
+3. **OpenAI Node (or other LLM)**: 
+    - **Resource**: Chat
+    - **Model**: `gpt-4o` or similar.
+    - **Prompt Role**: System (use the prompts above).
+    - **User Prompt**: `{{$json.diff}}`
+4. **Merge Node**: Mode: "Wait for all inputs" or "Append".
+5. **Code Node**: Consolidate the parallel results into the final [n8nResponse](file:///Users/tegi/Desktop/code-review/backend/github.go#39-43) schema.

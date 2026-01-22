@@ -1,0 +1,151 @@
+{
+    "name": "Layered AI Code Review (Agent Fan-out)",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "review",
+                "options": {}
+            },
+            "id": "webhook-trigger",
+            "name": "Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [
+                0,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const tasks = [];\nconst layers = $json.layers || ($json.body ? $json.body.layers : {});\nconst diff = $json.diff || ($json.body ? $json.body.diff : \"\");\nconst llm_api_key = $json.llm_api_key || ($json.body ? $json.body.llm_api_key : \"\") || $env.GEMINI_API_KEY;\n\nfor (const key of Object.keys(layers)) {\n  if (layers[key] === true) {\n    tasks.push({\n      task: key,\n      diff: diff,\n      apiKey: llm_api_key\n    });\n  }\n}\n\nreturn tasks;"
+            },
+            "id": "ai-orchestrator",
+            "name": "AI Orchestrator",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 1,
+            "position": [
+                200,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={{$json.apiKey}}",
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": \"You are a senior expert in {{ $json.task }}. Analyze the following code diff for related issues.\\n\\nOutput MUST be a JSON array of objects. Each object must have: {\\\"file\\\": string, \\\"line\\\": number, \\\"severity\\\": \\\"critical|warning|info\\\", \\\"layer\\\": \\\"{{ $json.task }}\\\", \\\"message\\\": string}.\\n\\nCODE DIFF:\\n{{ $json.diff }}\"\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": { \"temperature\": 0.1, \"maxOutputTokens\": 2048 }\n}",
+                "options": {}
+            },
+            "id": "gemini-review",
+            "name": "Gemini Review",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4,
+            "position": [
+                450,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const text = $json.candidates[0].content.parts[0].text;\ntry {\n  // Handle cases where Gemini wraps JSON in markdown blocks\n  const cleaned = text.replace(/```json|```/g, '').trim();\n  return JSON.parse(cleaned);\n} catch (e) {\n  return { error: \"Failed to parse Gemini response\", text: text };\n}"
+            },
+            "id": "parse-gemini",
+            "name": "Parse Gemini JSON",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 1,
+            "position": [
+                700,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "mode": "combine",
+                "combinationMode": "mergeByPosition",
+                "options": {
+                    "multipleOutputs": true
+                }
+            },
+            "id": "merge-reviews",
+            "name": "Merge Reviews",
+            "type": "n8n-nodes-base.merge",
+            "typeVersion": 2,
+            "position": [
+                950,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const comments = [];\nfor (const item of $input.all()) {\n  if (Array.isArray(item.json)) {\n    comments.push(...item.json);\n  } else if (item.json.file && item.json.message) {\n    comments.push(item.json);\n  }\n}\nreturn [{ summary: \"AI Review Complete\", comments: comments }];"
+            },
+            "id": "final-response",
+            "name": "Final Response",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 1,
+            "position": [
+                1200,
+                300
+            ]
+        }
+    ],
+    "connections": {
+        "webhook-trigger": {
+            "main": [
+                [
+                    {
+                        "node": "ai-orchestrator",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "ai-orchestrator": {
+            "main": [
+                [
+                    {
+                        "node": "gemini-review",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "gemini-review": {
+            "main": [
+                [
+                    {
+                        "node": "parse-gemini",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "parse-gemini": {
+            "main": [
+                [
+                    {
+                        "node": "merge-reviews",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "merge-reviews": {
+            "main": [
+                [
+                    {
+                        "node": "final-response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}

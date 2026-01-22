@@ -1,0 +1,35 @@
+# GitHub App Setup Guide
+
+Follow these steps to create and configure the GitHub App for the Layered AI Code Review system.
+
+## 1. Create the App
+1. Go to your GitHub Settings > Developer settings > GitHub Apps.
+2. Click **New GitHub App**.
+3. **GitHub App name**: `Layered AI Reviewer (Dev)` (or your preferred name).
+4. **Homepage URL**: `http://localhost:3000` (for now).
+5. **Webhook**:
+    - **Active**: Checked.
+    - **Webhook URL**: Your backend URL (e.g., via ngrok) + `/webhook`.
+    - **Webhook secret**: Generate a strong secret (save this).
+
+## 2. Permissions
+Set the following permissions:
+- **Repository permissions**:
+    - **Pull requests**: Read & Write (to fetch diffs and post comments).
+    - **Contents**: Read (to access files).
+    - **Metadata**: Read-only (mandatory).
+- **Organization permissions**: (Optional, if installing on an org).
+
+## 3. Subscribe to Events
+In the "Subscribe to events" section, check:
+- **Pull request**
+- **Push**
+
+## 4. Identification
+1. Click **Create GitHub App**.
+2. **App ID**: Note this down.
+3. **Private keys**: Click **Generate a private key**. Download the `.pem` file and move it to the `backend/` directory.
+
+## 5. Installation
+1. Go to **Install App** in the sidebar.
+2. Install it on your test repository.
