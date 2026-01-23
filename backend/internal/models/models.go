@@ -1,15 +1,17 @@
 package models
 
 type User struct {
-	ID        int
-	GitHubID  string
-	LLMAPIKey string
+	ID                int
+	GitHubID          string
+	LLMAPIKey         string
+	GitHubAccessToken string
 }
 
 type RepoSettings struct {
 	ID                  int
 	RepoID              string
 	UserID              int
+	IsActive            bool
 	SecurityEnabled     bool
 	BugEnabled          bool
 	LintEnabled         bool

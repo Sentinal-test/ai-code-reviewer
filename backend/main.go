@@ -13,6 +13,9 @@ import (
 	"os"
 	"strings"
 
+	"code-review/backend/internal/api"
+	"code-review/backend/internal/auth"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -37,7 +40,8 @@ func main() {
 		"GITHUB_APP_ID",
 		"GITHUB_PRIVATE_KEY_PATH",
 		"GITHUB_WEBHOOK_SECRET",
-		// "N8N_WEBHOOK_URL", // Removed
+		"GITHUB_CLIENT_ID",
+		"GITHUB_CLIENT_SECRET",
 	}
 	for _, env := range requiredEnv {
 		if os.Getenv(env) == "" {
@@ -47,7 +51,7 @@ func main() {
 	}
 
 	if os.Getenv("GEMINI_API_KEY") == "" {
-		fmt.Printf("Note: GEMINI_API_KEY is not set. Dashboard settings will be required for reviews to work.\n")
+		fmt.Printf("Note: GEMINI_API_KEY is not set. Dashboard settings might be required for reviews to work.\n")
 	}
 
 	// 3. Initialize DB
@@ -57,6 +61,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+
+	// 3.5 Init Auth
+	auth.InitAuth()
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -77,9 +84,18 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
+	// Auth Routes
+	r.Get("/auth/login", auth.LoginHandler)
+	r.Get("/auth/callback", auth.CallbackHandler(db))
+
+	// API Routes
 	r.Route("/api", func(r chi.Router) {
-		r.Post("/settings", updateSettings(db))
-		r.Get("/settings/{repoID}", getSettings(db))
+		r.Use(auth.AuthMiddleware) // Protect API
+		r.Get("/me", auth.GetMeHandler(db))
+		r.Get("/repos", api.ListReposHandler(db))
+		r.Put("/users/apikey", api.UpdateUserAPIKeyHandler(db))
+		r.Put("/settings", api.UpdateRepoSettingsHandler(db))
+		r.Get("/settings/{repoID}", api.GetRepoSettingsHandler(db))
 	})
 
 	port := os.Getenv("PORT")
@@ -144,16 +160,17 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 	var settings models.RepoSettings
 	var apiKey string
 	err := db.QueryRow(`
-		SELECT rs.security_enabled, rs.bug_enabled, rs.lint_enabled, rs.performance_enabled, rs.architecture_enabled, u.llm_api_key 
+		SELECT rs.is_active, rs.security_enabled, rs.bug_enabled, rs.lint_enabled, rs.performance_enabled, rs.architecture_enabled, u.llm_api_key 
 		FROM repo_settings rs 
 		JOIN users u ON rs.user_id = u.id 
 		WHERE rs.repo_id = ?`, repoID).Scan(
-		&settings.SecurityEnabled, &settings.BugEnabled, &settings.LintEnabled, &settings.PerformanceEnabled, &settings.ArchitectureEnabled, &apiKey,
+		&settings.IsActive, &settings.SecurityEnabled, &settings.BugEnabled, &settings.LintEnabled, &settings.PerformanceEnabled, &settings.ArchitectureEnabled, &apiKey,
 	)
 
 	if err == sql.ErrNoRows {
 		fmt.Printf("ℹ️  No settings found for repo ID %s. Using safe defaults (All layers enabled).\n", repoID)
 		settings = models.RepoSettings{
+			IsActive:            true,
 			SecurityEnabled:     true,
 			BugEnabled:          true,
 			LintEnabled:         true,
@@ -162,7 +179,12 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		}
 	} else if err != nil {
 		fmt.Printf("❌ DB Error fetching settings for repo %s: %v. Falling back to defaults.\n", repoID, err)
-		settings = models.RepoSettings{SecurityEnabled: true, BugEnabled: true} // Basic fallback
+		settings = models.RepoSettings{IsActive: true, SecurityEnabled: true, BugEnabled: true} // Basic fallback
+	}
+
+	if !settings.IsActive {
+		fmt.Printf("ℹ️  Repo %s is disabled for AI review. Skipping.\n", repo.GetFullName())
+		return
 	}
 
 	// API Key fallback to environment variable
