@@ -407,5 +407,4 @@ func getSettings(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-
-this is not a tool to
+//this code is 
