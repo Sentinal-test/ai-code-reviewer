@@ -406,5 +406,3 @@ func getSettings(db *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(settings)
 	}
 }
-
-//this code is 
