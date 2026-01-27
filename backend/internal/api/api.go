@@ -247,24 +247,3 @@ func GetRepoSettingsHandler(db *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(settings)
 	}
 }
-
-
-func init() {
-	// Ensure repo_settings table exists
-	// This is a simple migration step for MVP
-}	func EnsureRepoSettingsTable(db *sql.DB) error {
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS repo_settings (
-			repo_id TEXT PRIMARY KEY,
-			user_id INTEGER,
-			is_active BOOLEAN DEFAULT 1,
-			security_enabled BOOLEAN DEFAULT 1,
-			bug_enabled BOOLEAN DEFAULT 1,
-			lint_enabled BOOLEAN DEFAULT 1,
-			performance_enabled BOOLEAN DEFAULT 1,
-			architecture_enabled BOOLEAN DEFAULT 1,
-			FOREIGN KEY(user_id) REFERENCES users(id)
-		)
-	`)
-	return err
-}
