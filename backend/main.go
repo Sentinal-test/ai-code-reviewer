@@ -202,8 +202,13 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 	var appID int64
 	fmt.Sscanf(appIDStr, "%d", &appID)
 	pkPath := os.Getenv("GITHUB_PRIVATE_KEY_PATH")
+	pkBytes, err := os.ReadFile(pkPath)
+	if err != nil {
+		fmt.Printf("❌ Failed to read private key: %v\n", err)
+		return
+	}
 
-	client, err := internalGH.GetInstallationClient(ctx, appID, installationID, pkPath)
+	client, err := internalGH.GetInstallationClient(ctx, appID, installationID, pkBytes)
 	if err != nil {
 		fmt.Printf("❌ GitHub App Auth Failed: %v\n", err)
 		return
@@ -256,7 +261,7 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 
 	// 5. Run LLM Review (With PR Context)
 	fmt.Printf("🧠 Running LLM review for PR #%d...\n", pr.GetNumber())
-	review, err := llm.RunReview(ctx, diff, settings, apiKey, prContext)
+	review, err := llm.RunReview(ctx, nil, diff, settings, apiKey, prContext)
 	if err != nil {
 		fmt.Printf("❌ LLM Review Failed: %v\n", err)
 		if checkRunID != 0 {

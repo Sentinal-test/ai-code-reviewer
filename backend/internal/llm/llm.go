@@ -18,7 +18,7 @@ const (
 )
 
 // RunReview analyzes the diff using the provided API key, settings, and PR context.
-func RunReview(ctx context.Context, diff string, settings models.RepoSettings, apiKey string, prContext models.PRContext) (*models.ReviewResult, error) {
+func RunReview(ctx context.Context, client *http.Client, diff string, settings models.RepoSettings, apiKey string, prContext models.PRContext) (*models.ReviewResult, error) {
 	// 1. Construct Prompt
 	prompt := buildPrompt(diff, settings, prContext)
 
@@ -49,7 +49,9 @@ func RunReview(ctx context.Context, diff string, settings models.RepoSettings, a
 	req.Header.Set("Content-Type", "application/json")
 
 	// 3. Execute Request
-	client := &http.Client{Timeout: 60 * time.Second}
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("LLM request failed: %v", err)
