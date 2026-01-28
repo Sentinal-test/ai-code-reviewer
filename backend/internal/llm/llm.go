@@ -18,9 +18,9 @@ const (
 )
 
 // RunReview analyzes the diff using the provided API key, settings, and PR context.
-func RunReview(ctx context.Context, client *http.Client, diff string, settings models.RepoSettings, repoStructure string, apiKey string, prContext models.PRContext) (*models.ReviewResult, error) {
+func RunReview(ctx context.Context, client *http.Client, diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, apiKey string, prContext models.PRContext) (*models.ReviewResult, error) {
 	// 1. Construct Prompt
-	prompt := buildPrompt(diff, settings, repoStructure, prContext)
+	prompt := buildPrompt(diff, changedFiles, dependencies, settings, repoStructure, prContext)
 
 	// 2. Prepare Request
 	reqBody := map[string]interface{}{
@@ -92,7 +92,62 @@ func RunReview(ctx context.Context, client *http.Client, diff string, settings m
 	return &result, nil
 }
 
-func buildPrompt(diff string, settings models.RepoSettings, repoStructure string, prContext models.PRContext) string {
+func buildPrompt(diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, prContext models.PRContext) string {
+	// Context Window Management (Simple implementation)
+	// Priority: Diff > Changed Files > Dependencies > Repo Structure
+	// Target Max Chars: ~400,000 (approx 100k tokens safety)
+	const MaxContextChars = 400000
+
+	currentSize := len(diff)
+
+	// Helper to format map
+	formatFiles := func(files map[string]string) string {
+		var b strings.Builder
+		for path, content := range files {
+			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n%s\n", path, content))
+		}
+		return b.String()
+	}
+
+	changedContent := formatFiles(changedFiles)
+	if currentSize+len(changedContent) > MaxContextChars {
+		// Truncate changed files
+		available := MaxContextChars - currentSize
+		if available > 0 {
+			if len(changedContent) > available {
+				changedContent = changedContent[:available] + "\n...[TRUNCATED]..."
+			}
+		} else {
+			changedContent = ""
+		}
+	}
+	currentSize += len(changedContent)
+
+	depsContent := formatFiles(dependencies)
+	if currentSize+len(depsContent) > MaxContextChars {
+		available := MaxContextChars - currentSize
+		if available > 0 {
+			if len(depsContent) > available {
+				depsContent = depsContent[:available] + "\n...[TRUNCATED]..."
+			}
+		} else {
+			depsContent = ""
+		}
+	}
+	currentSize += len(depsContent)
+
+	// Repo structure
+	if currentSize+len(repoStructure) > MaxContextChars {
+		available := MaxContextChars - currentSize
+		if available > 0 {
+			if len(repoStructure) > available {
+				repoStructure = repoStructure[:available] + "\n...[TRUNCATED]..."
+			}
+		} else {
+			repoStructure = ""
+		}
+	}
+
 	var layers = []string{}
 	if settings.SecurityEnabled {
 		layers = append(layers, "Security (vulnerabilities, secrets)")
@@ -140,6 +195,14 @@ func buildPrompt(diff string, settings models.RepoSettings, repoStructure string
 
 	return fmt.Sprintf(`You are a senior software engineer conducting a code review.
 Your goal is to review the provided git diff and provide actionable, specific feedback.
+
+**Diff:**
+%s
+
+**Full Content of Changed Files:**
+%s
+
+**Related Dependency Files:**
 %s
 
 **Repository Structure:**
@@ -173,5 +236,114 @@ Your goal is to review the provided git diff and provide actionable, specific fe
     }
   ]
 }
-`, prContextSection, repoStructure, layers, diff)
+`, prContextSection, diff, changedContent, depsContent, repoStructure, layers)
+}
+
+// AnalyzeDependencyNeeds asks the LLM which other files are needed for context.
+func AnalyzeDependencyNeeds(ctx context.Context, client *http.Client, diff string, changedFiles map[string]string, repoStructure string, prContext models.PRContext, apiKey string) ([]string, error) {
+	// Construct Prompt
+	var fileList []string
+	for path := range changedFiles {
+		fileList = append(fileList, path)
+	}
+
+	prompt := fmt.Sprintf(`You are a senior software engineer planning a code review.
+Your goal is to identify which *additional* files from the repository you need to read to fully understand and validate the changes.
+
+**Input Diff:**
+%s
+
+**Changed Files List:**
+%v
+
+**Repository Structure:**
+%s
+
+**Task:**
+Analyze the diff and changed files (imports, function calls, type usage).
+Return a JSON list of file paths that are NOT in the "Changed Files List" but are CRITICAL for verifying the correctness of the changes (e.g., definitions of used types, updated interfaces, middleware logic).
+Do not request standard library files or external dependencies.
+Only request files that exist in the "Repository Structure".
+
+**Output Schema (JSON):**
+{
+  "files": ["path/to/file1.go", "path/to/file2.ts"]
+}
+If no extra files are needed, return {"files": []}.
+`, diff, fileList, repoStructure)
+
+	if prContext.Title != "" {
+		prompt += fmt.Sprintf("\nReview Context from PR: %s\n%s", prContext.Title, prContext.Body)
+	}
+
+	// Prepare Request
+	reqBody := map[string]interface{}{
+		"contents": []map[string]interface{}{
+			{
+				"parts": []map[string]string{
+					{"text": prompt},
+				},
+			},
+		},
+		"generationConfig": map[string]interface{}{
+			"responseMimeType": "application/json",
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf("%s?key=%s", geminiURL, apiKey)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Execute
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("LLM scout failed status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse
+	var geminiResp struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
+		return nil, err
+	}
+
+	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		return []string{}, nil
+	}
+
+	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
+	var result struct {
+		Files []string `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(responseText), &result); err != nil {
+		// Try to find JSON in text if md blocked
+		return []string{}, nil
+	}
+
+	return result.Files, nil
 }

@@ -62,7 +62,7 @@ func TestRunReview_Success(t *testing.T) {
 		},
 	}
 
-	result, err := RunReview(context.Background(), mockClient, "diff content", models.RepoSettings{}, "", "test-api-key", models.PRContext{})
+	result, err := RunReview(context.Background(), mockClient, "diff content", nil, nil, models.RepoSettings{}, "", "test-api-key", models.PRContext{})
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, "Good code", result.Summary)
@@ -82,7 +82,7 @@ func TestRunReview_APIError(t *testing.T) {
 		},
 	}
 
-	_, err := RunReview(context.Background(), mockClient, "diff", models.RepoSettings{}, "", "key", models.PRContext{})
+	_, err := RunReview(context.Background(), mockClient, "diff", nil, nil, models.RepoSettings{}, "", "key", models.PRContext{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "LLM returned status 500")
 }
@@ -106,7 +106,7 @@ func TestRunReview_EmptyResponse(t *testing.T) {
 		},
 	}
 
-	_, err := RunReview(context.Background(), mockClient, "diff", models.RepoSettings{}, "", "key", models.PRContext{})
+	_, err := RunReview(context.Background(), mockClient, "diff", nil, nil, models.RepoSettings{}, "", "key", models.PRContext{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "LLM returned empty response")
 }
@@ -138,7 +138,7 @@ func TestRunReview_MalformedJSON(t *testing.T) {
 		},
 	}
 
-	_, err := RunReview(context.Background(), mockClient, "diff", models.RepoSettings{}, "", "key", models.PRContext{})
+	_, err := RunReview(context.Background(), mockClient, "diff", nil, nil, models.RepoSettings{}, "", "key", models.PRContext{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to unmarshal JSON content")
 }

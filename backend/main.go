@@ -274,9 +274,40 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		fmt.Printf("📂 Repo Structure:\n%s\n", repoStructure)
 	}
 
-	// 5. Run LLM Review (With PR Context)
-	fmt.Printf("🧠 Running LLM review for PR #%d...\n", pr.GetNumber())
-	review, err := llm.RunReview(ctx, nil, diff, settings, repoStructure, apiKey, prContext)
+	// 4.6 Fetch Changed Files Content
+	fmt.Printf("📄 Fetching content of changed files...\n")
+	changedFiles, err := internalGH.GetChangedFilesContent(ctx, client, repo.GetOwner().GetLogin(), repo.GetName(), pr.GetNumber(), commitSHA)
+	if err != nil {
+		fmt.Printf("⚠️ Failed to fetch changed files content: %v\n", err)
+		changedFiles = make(map[string]string)
+	}
+
+	// 4.7 Scout Pass: Analyze Dependencies
+	dependencies := make(map[string]string)
+	fmt.Printf("🕵️‍♀️ Scout Pass: Analyzing dependency needs...\n")
+	depPaths, err := llm.AnalyzeDependencyNeeds(ctx, nil, diff, changedFiles, repoStructure, prContext, apiKey)
+	if err != nil {
+		fmt.Printf("⚠️ Scout Pass failed: %v\n", err)
+	} else {
+		fmt.Printf("🔍 Scout identified %d dependencies: %v\n", len(depPaths), depPaths)
+		for _, path := range depPaths {
+			// Skip if already in changedFiles
+			if _, exists := changedFiles[path]; exists {
+				continue
+			}
+			fmt.Printf("  📥 Fetching dependency: %s\n", path)
+			content, err := internalGH.GetFileContent(ctx, client, repo.GetOwner().GetLogin(), repo.GetName(), path, commitSHA)
+			if err != nil {
+				fmt.Printf("  ⚠️ Failed to fetch dependency %s: %v\n", path, err)
+			} else {
+				dependencies[path] = content
+			}
+		}
+	}
+
+	// 5. Run LLM Review (With PR Context & Dependencies)
+	fmt.Printf("🧠 Running LLM review for PR #%d (with %d changed files, %d deps)...\n", pr.GetNumber(), len(changedFiles), len(dependencies))
+	review, err := llm.RunReview(ctx, nil, diff, changedFiles, dependencies, settings, repoStructure, apiKey, prContext)
 	if err != nil {
 		fmt.Printf("❌ LLM Review Failed: %v\n", err)
 		if checkRunID != 0 {
@@ -331,6 +362,18 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		err := internalGH.PostComment(ctx, client, repo.GetOwner().GetLogin(), repo.GetName(), pr.GetNumber(), ghComment)
 		if err != nil {
 			fmt.Printf("  ⚠️  Failed to post comment on %s:L%d: %v\n", comment.File, comment.Line, err)
+			// Fallback: Post as general comment if validation failed (likely line outside diff)
+			if strings.Contains(err.Error(), "422") || strings.Contains(err.Error(), "Validation Failed") {
+				fmt.Printf("  🔄 Retrying as general comment...\n")
+				generalBody := fmt.Sprintf("failed to comment on %s:L%d (likely outside diff):\n\n%s", comment.File, comment.Line, body)
+				genErr := internalGH.PostGeneralComment(ctx, client, repo.GetOwner().GetLogin(), repo.GetName(), pr.GetNumber(), generalBody)
+				if genErr != nil {
+					fmt.Printf("  ❌ Failed to post general comment fallback: %v\n", genErr)
+				} else {
+					successCount++
+					fmt.Printf("  ✅ Posted as general comment fallback.\n")
+				}
+			}
 		} else {
 			successCount++
 		}

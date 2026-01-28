@@ -58,6 +58,14 @@ func PostComment(ctx context.Context, client *github.Client, owner, repo string,
 	return err
 }
 
+func PostGeneralComment(ctx context.Context, client *github.Client, owner, repo string, prNumber int, body string) error {
+	comment := &github.IssueComment{
+		Body: github.String(body),
+	}
+	_, _, err := client.Issues.CreateComment(ctx, owner, repo, prNumber, comment)
+	return err
+}
+
 func CreateCheckRun(ctx context.Context, client *github.Client, owner, repo string, headSHA string) (int64, error) {
 	opts := github.CreateCheckRunOptions{
 		Name:      "AI Code Review",
@@ -152,4 +160,49 @@ func shouldIgnore(path string) bool {
 	}
 
 	return false
+}
+
+func GetFileContent(ctx context.Context, client *github.Client, owner, repo, path, ref string) (string, error) {
+	fc, _, _, err := client.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{Ref: ref})
+	if err != nil {
+		return "", err
+	}
+
+	if fc == nil {
+		return "", fmt.Errorf("file content is nil")
+	}
+
+	content, err := fc.GetContent()
+	if err != nil {
+		return "", err
+	}
+
+	return content, nil
+}
+
+func GetChangedFilesContent(ctx context.Context, client *github.Client, owner, repo string, prNumber int, ref string) (map[string]string, error) {
+	files, _, err := client.PullRequests.ListFiles(ctx, owner, repo, prNumber, &github.ListOptions{PerPage: 100})
+	if err != nil {
+		return nil, err
+	}
+
+	contentMap := make(map[string]string)
+
+	for _, f := range files {
+		path := f.GetFilename()
+		if shouldIgnore(path) {
+			continue
+		}
+		if f.GetStatus() == "deleted" {
+			continue
+		}
+
+		content, err := GetFileContent(ctx, client, owner, repo, path, ref)
+		if err != nil {
+			fmt.Printf("⚠️ Failed to fetch content for %s: %v\n", path, err)
+			continue
+		}
+		contentMap[path] = content
+	}
+	return contentMap, nil
 }
