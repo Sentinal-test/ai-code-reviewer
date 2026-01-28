@@ -1,55 +1,83 @@
-# Layered AI Code Review System
+# 🧪 Layered AI Code Review System
 
-This repository contains a high-performance, automated AI code review system. It uses a **Go backend** with **internal LLM orchestration** (Gemini) to review Pull Requests in real-time, coupled with a **Next.js dashboard** for configuration.
+An automated, hyper-critical code defect detection system. It leverages a Go backend, a multi-pass LLM orchestration strategy (Gemini), and a Next.js dashboard to provide deep, contextual feedback directly on GitHub Pull Requests.
 
-## 🚀 Quick Start (Local Development)
+## 🔄 Application Flow
 
-### 1. Backend Setup (Go)
-1.  **Dependencies**: Run `go mod tidy` in the `backend/` directory.
-2.  **Environment**: Create `backend/.env` with:
+```mermaid
+graph TD
+    A[Pull Request Event] -->|Webhook| B(Go Backend)
+    B --> C{Scout Pass}
+    C -->|Analyze Diff + Tree| D[Identify Dependencies]
+    D --> E[Fetch File Contents from GitHub]
+    E --> F{Reviewer Pass}
+    F -->|Analyze Context + Diff| G[Detect Defects]
+    G --> H{Post Comments}
+    H -->|Valid Diff Line| I[Inline GitHub Comment]
+    H -->|Invalid/Context Line| J[General PR Comment]
+```
+
+---
+
+## 🛠️ How it Works
+
+1.  **Intent Discovery**: The system reads your PR title, description, and last 10 commits to understand *what* you are trying to build.
+2.  **Breadcrumb Strategy (Scout)**: An LLM analyzes the file structure and the changed code to find "missing pieces" (e.g., if you changed a model call, it asks to read the model definition).
+3.  **Audit Mode**: The Reviewer LLM is placed in a "Security & Reliability Audit" mode. It is forbidden from praising your code and focuses entirely on finding bugs, security flaws, and performance leaks using the **Full File Context**.
+4.  **Resilient Feedback**: If the AI finds a bug in a related file (not the one you edited), it will still tell you via a general PR comment.
+
+---
+
+## 🚀 Local Development Setup
+
+### 1. GitHub App Setup
+1.  Go to **GitHub Settings > Developer Settings > GitHub Apps > New GitHub App**.
+2.  Set **Webhook URL** to your ngrok URL (e.g., `https://xyz.ngrok-free.app/webhook`).
+3.  Set a **Webhook Secret** (any random string).
+4.  **Permissions**:
+    - `Pull Requests`: Read & Write
+    - `Checks`: Read & Write
+    - `Contents`: Read (for fetching files)
+    - `Metadata`: Read
+5.  **Events**: Subscribe to `Pull request`.
+6.  Generate a **Private Key** (.pem) and save it as `backend/private-key.pem`.
+7.  Note your **App ID**, **Client ID**, and **Client Secret**.
+
+### 2. Backend Setup (Go)
+1.  Navigate to `backend/`: `cd backend`
+2.  Install dependencies: `go mod tidy`
+3.  Create `.env` file:
     ```env
-    # GitHub App Configuration
-    GITHUB_APP_ID="your_app_id"
+    # GitHub App Credentials
+    GITHUB_APP_ID="123456"
+    GITHUB_CLIENT_ID="your_client_id"
+    GITHUB_CLIENT_SECRET="your_client_secret"
     GITHUB_PRIVATE_KEY_PATH="./private-key.pem"
     GITHUB_WEBHOOK_SECRET="your_shared_secret"
-    
-    # LLM Configuration
-    GEMINI_API_KEY="your_gemini_api_key"
+
+    # LLM API Key
+    GEMINI_API_KEY="your_google_ai_studio_api_key"
+
+    # Server Config
+    PORT="8080"
     ```
-3.  **Run**: `go run .`
-    - Server starts on port `8080`.
-    - Validates environment variables and DB connection at startup.
+4.  Run the server: `go run main.go`
 
-### 2. Frontend Setup (Next.js)
-1.  **Dependencies**: Run `npm install` in the `dashboard/` directory.
-2.  **Run**: `npm run dev`
-    - Dashboard available at `http://localhost:3000`.
+### 3. Frontend Setup (Next.js)
+1.  Navigate to `dashboard/`: `cd dashboard`
+2.  Install dependencies: `npm install`
+3.  Run development server: `npm run dev`
+4.  Access at `http://localhost:3000`. Use the dashboard to enable/disable specific review layers (Security, Performance, etc.) for each repo.
 
-### 3. Exposing for GitHub (ngrok)
-Run `ngrok http 8080` and update your GitHub App's **Webhook URL** to `https://<your-ngrok-id>.ngrok-free.app/webhook`.
-
----
-
-## 🛠️ Verification Checklist
-
-### ✅ Webhook Connectivity
-- [ ] Receive a "Received Webhook" log in the Go terminal when you push/open a PR.
-- [ ] Log should show "🐙 Pull Request Event | Action: opened".
-
-### ✅ AI Review Process
-- [ ] **GitHub Check Run**: A check named "AI Code Review" should appear on the PR as "In Progress".
-- [ ] **LLM Processing**: Logs should show "🧠 Running LLM review...".
-- [ ] **Completion**: Check Run updates to "Success" and comments are posted.
-
-### ✅ GitHub Comments
-- [ ] Inline comments appear on the "Files changed" tab.
-- [ ] Comments are prefixed with emojis (e.g., 🔐 Security, 🐛 Bug).
-- [ ] Logs show "💬 Posting X comments...".
+### 4. Running Checks
+1.  Expose your local port: `ngrok http 8080`
+2.  Update the **Webhook URL** in your GitHub App settings to match the ngrok URL.
+3.  Open a Pull Request on a repository where you've installed the app.
+4.  Watch the backend logs and your PR "Checks" tab!
 
 ---
 
-## 🛡️ Architecture Highlights
-- **Internal Orchestration**: Direct integration with Gemini API (no external low-code tools).
-- **Type-Safe**: Fully typed Go implementation for GitHub interactions and LLM responses.
-- **Resilient**: Background processing, comprehensive error handling, and timeout management (60s).
-- **Secure**: Robust HMAC signature validation for all webhooks.
+## 🛡️ Key Documentation
+- [Project Overview](./docs/PROJECT_OVERVIEW.md)
+- [Architectural Decision Records](./docs/ARCHITECTURAL_DECISION_RECORDS.md)
+- [Advanced Context Strategy](./docs/advanced_context_strategy.md)
