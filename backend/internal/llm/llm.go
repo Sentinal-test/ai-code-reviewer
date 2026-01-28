@@ -146,7 +146,6 @@ Your goal is to review the provided git diff and provide actionable, specific fe
 %s
 
 **Focus Areas:**
-**Focus Areas:**
 %v
 
 **Rules:**
