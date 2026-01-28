@@ -245,8 +245,11 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		Body:           pr.GetBody(),
 		CommitMessages: commitMessages,
 	}
-	fmt.Printf("📋 PR Context Log:\n  Title: %s\n  Body (len): %d\n  Commits: %v\n",
-		prContext.Title, len(prContext.Body), prContext.CommitMessages)
+	fmt.Printf("📋 PR Context Log:\n  Title: %s\n  Body (len): %d\n  Commits:\n",
+		prContext.Title, len(prContext.Body))
+	for _, commit := range prContext.CommitMessages {
+		fmt.Printf("    - %s\n", commit)
+	}
 
 	// 4. Fetch Diff
 	fmt.Printf("🔍 Fetching diff for PR #%d...\n", pr.GetNumber())
@@ -271,7 +274,6 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		repoStructure = ""
 	} else {
 		fmt.Printf("✅ Repo structure fetched (%d chars)\n", len(repoStructure))
-		fmt.Printf("📂 Repo Structure:\n%s\n", repoStructure)
 	}
 
 	// 4.6 Fetch Changed Files Content

@@ -84,9 +84,17 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 
 	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
 
+	// Robust parsing: try Result object first, then fallback to Array of comments
 	var result models.ReviewResult
 	if err := json.Unmarshal([]byte(responseText), &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal JSON content: %v | content: %s", err, responseText)
+		// Fallback: Check if it's a naked array of comments
+		var comments []models.ReviewComment
+		if errArray := json.Unmarshal([]byte(responseText), &comments); errArray == nil {
+			result.Comments = comments
+			result.Summary = "Automated review comments"
+		} else {
+			return nil, fmt.Errorf("failed to unmarshal JSON content: %v | content: %s", err, responseText)
+		}
 	}
 
 	return &result, nil
@@ -183,12 +191,11 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 			prContextSection += fmt.Sprintf("- Description: %s\n", body)
 		}
 		if len(prContext.CommitMessages) > 0 {
-			// Only include first 10 commits to avoid bloat
-			msgs := prContext.CommitMessages
-			if len(msgs) > 10 {
-				msgs = msgs[:10]
+			// Format as a list for better LLM understanding
+			prContextSection += "- Commits in this PR:\n"
+			for _, msg := range prContext.CommitMessages {
+				prContextSection += fmt.Sprintf("  * %s\n", msg)
 			}
-			prContextSection += fmt.Sprintf("- Commits: %s\n", strings.Join(msgs, "; "))
 		}
 		prContextSection += "(This context is supplementary. Focus your review on the actual diff below.)\n"
 	}
@@ -196,32 +203,31 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	return fmt.Sprintf(`You are a senior software engineer conducting a code review.
 Your goal is to review the provided git diff and provide actionable, specific feedback.
 
-**Diff:**
 %s
 
-**Full Content of Changed Files:**
+**Diff (Changes to Review):**
 %s
 
-**Related Dependency Files:**
+**Full Content of Changed Files (Complete Context):**
 %s
 
-**Repository Structure:**
+**Related Dependency Files (Requested Context):**
+%s
+
+**Repository Structure (File Tree):**
 %s
 
 **Focus Areas:**
 %v
 
 **Rules:**
-1. Review ONLY the changed lines in the diff.
+1. Review ONLY the changed lines in the diff. However, if you spot a CRITICAL bug in the related dependency files that affects the changes, include it in your comments.
 2. Be specific and actionable. Suggest fixes where possible.
 3. Max 2 short sentences per comment.
 4. No explanations or praise (e.g., "Good job", "This looks correct").
 5. Only problem + fix suggestion in the comment message.
 6. Output MUST be valid JSON matching the schema below.
 7. If no issues are found, return an empty "comments" list.
-
-**Input Diff:**
-%s
 
 **Output Schema (JSON):**
 {
@@ -337,12 +343,28 @@ If no extra files are needed, return {"files": []}.
 	}
 
 	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
+
+	// Extraction logic to handle markdown backticks if LLM provides them
+	jsonStr := responseText
+	if idx := strings.Index(jsonStr, "```json"); idx != -1 {
+		jsonStr = jsonStr[idx+7:]
+		if endIdx := strings.Index(jsonStr, "```"); endIdx != -1 {
+			jsonStr = jsonStr[:endIdx]
+		}
+	} else if idx := strings.Index(jsonStr, "```"); idx != -1 {
+		jsonStr = jsonStr[idx+3:]
+		if endIdx := strings.Index(jsonStr, "```"); endIdx != -1 {
+			jsonStr = jsonStr[:endIdx]
+		}
+	}
+	jsonStr = strings.TrimSpace(jsonStr)
+
 	var result struct {
 		Files []string `json:"files"`
 	}
-	if err := json.Unmarshal([]byte(responseText), &result); err != nil {
-		// Try to find JSON in text if md blocked
-		return []string{}, nil
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		fmt.Printf("⚠️ Scout JSON Parse Failed: %v | Response: %s\n", err, responseText)
+		return nil, fmt.Errorf("failed to parse scout JSON: %v", err)
 	}
 
 	return result.Files, nil
