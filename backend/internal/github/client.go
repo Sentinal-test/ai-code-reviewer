@@ -2,6 +2,8 @@ package github
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -83,4 +85,71 @@ func UpdateCheckRun(ctx context.Context, client *github.Client, owner, repo stri
 	}
 	_, _, err := client.Checks.UpdateCheckRun(ctx, owner, repo, checkRunID, opts)
 	return err
+}
+
+func GetRepoTree(ctx context.Context, client *github.Client, owner, repo string, branch string) (string, error) {
+	// Get the tree recursively
+	// We need the SHA of the branch first.
+	// Actually, we can pass the branch name as the SHA to GetTree if using the API directly,
+	// but strictly we should resolve the ref.
+	// client.Git.GetTree accepts a SHA.
+
+	// Let's resolve the branch ref to get the SHA
+	ref, _, err := client.Git.GetRef(ctx, owner, repo, "heads/"+branch)
+	if err != nil {
+		// If branch not found, maybe it's a SHA already?
+		// Or try default.
+		return "", fmt.Errorf("could not resolve branch %s: %v", branch, err)
+	}
+	sha := ref.GetObject().GetSHA()
+
+	tree, _, err := client.Git.GetTree(ctx, owner, repo, sha, true) // true for recursive
+	if err != nil {
+		return "", err
+	}
+
+	var fileList []string
+	for _, entry := range tree.Entries {
+		path := entry.GetPath()
+		// Filter unnecessary parts
+		if shouldIgnore(path) {
+			continue
+		}
+		// We only want files for structure context usually, or maybe dirs too?
+		// Let's include everything that isn't ignored to show structure.
+		fileList = append(fileList, path)
+	}
+
+	return strings.Join(fileList, "\n"), nil
+}
+
+func shouldIgnore(path string) bool {
+	// Simple ignore list
+	ignoredPrefixes := []string{
+		".git/", ".github/", ".idea/", ".vscode/",
+		"node_modules/", "vendor/", "dist/", "build/",
+		"coverage/", "test/", "__tests__/",
+	}
+	ignoredSuffixes := []string{
+		".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+		".pdf", ".zip", ".tar", ".gz", ".exe", ".dll", ".so", ".dylib",
+		".lock", "go.sum", "yarn.lock", "package-lock.json",
+	}
+
+	for _, p := range ignoredPrefixes {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	for _, s := range ignoredSuffixes {
+		if strings.HasSuffix(path, s) {
+			return true
+		}
+	}
+	// Ignore hidden files (starting with .)
+	if strings.HasPrefix(path, ".") {
+		return true // simple check covering .gitignore etc.
+	}
+
+	return false
 }

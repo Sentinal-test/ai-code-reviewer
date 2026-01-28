@@ -18,9 +18,9 @@ const (
 )
 
 // RunReview analyzes the diff using the provided API key, settings, and PR context.
-func RunReview(ctx context.Context, client *http.Client, diff string, settings models.RepoSettings, apiKey string, prContext models.PRContext) (*models.ReviewResult, error) {
+func RunReview(ctx context.Context, client *http.Client, diff string, settings models.RepoSettings, repoStructure string, apiKey string, prContext models.PRContext) (*models.ReviewResult, error) {
 	// 1. Construct Prompt
-	prompt := buildPrompt(diff, settings, prContext)
+	prompt := buildPrompt(diff, settings, repoStructure, prContext)
 
 	// 2. Prepare Request
 	reqBody := map[string]interface{}{
@@ -92,7 +92,7 @@ func RunReview(ctx context.Context, client *http.Client, diff string, settings m
 	return &result, nil
 }
 
-func buildPrompt(diff string, settings models.RepoSettings, prContext models.PRContext) string {
+func buildPrompt(diff string, settings models.RepoSettings, repoStructure string, prContext models.PRContext) string {
 	var layers = []string{}
 	if settings.SecurityEnabled {
 		layers = append(layers, "Security (vulnerabilities, secrets)")
@@ -141,6 +141,11 @@ func buildPrompt(diff string, settings models.RepoSettings, prContext models.PRC
 	return fmt.Sprintf(`You are a senior software engineer conducting a code review.
 Your goal is to review the provided git diff and provide actionable, specific feedback.
 %s
+
+**Repository Structure:**
+%s
+
+**Focus Areas:**
 **Focus Areas:**
 %v
 
@@ -169,5 +174,5 @@ Your goal is to review the provided git diff and provide actionable, specific fe
     }
   ]
 }
-`, prContextSection, layers, diff)
+`, prContextSection, repoStructure, layers, diff)
 }
