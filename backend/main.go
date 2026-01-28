@@ -271,6 +271,7 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		repoStructure = ""
 	} else {
 		fmt.Printf("✅ Repo structure fetched (%d chars)\n", len(repoStructure))
+		fmt.Printf("📂 Repo Structure:\n%s\n", repoStructure)
 	}
 
 	// 5. Run LLM Review (With PR Context)
