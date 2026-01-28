@@ -202,8 +202,13 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 	var appID int64
 	fmt.Sscanf(appIDStr, "%d", &appID)
 	pkPath := os.Getenv("GITHUB_PRIVATE_KEY_PATH")
+	pkBytes, err := os.ReadFile(pkPath)
+	if err != nil {
+		fmt.Printf("❌ Failed to read private key: %v\n", err)
+		return
+	}
 
-	client, err := internalGH.GetInstallationClient(ctx, appID, installationID, pkPath)
+	client, err := internalGH.GetInstallationClient(ctx, appID, installationID, pkBytes)
 	if err != nil {
 		fmt.Printf("❌ GitHub App Auth Failed: %v\n", err)
 		return
@@ -215,7 +220,33 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		fmt.Printf("⚠️ Failed to create check run: %v\n", err)
 	}
 
-	// 3. Fetch Diff
+	// 3. Fetch PR Commits for context
+	fmt.Printf("📜 Fetching commits for PR #%d...\n", pr.GetNumber())
+	commits, _, err := client.PullRequests.ListCommits(ctx, repo.GetOwner().GetLogin(), repo.GetName(), pr.GetNumber(), &github.ListOptions{PerPage: 20})
+	var commitMessages []string
+	if err != nil {
+		fmt.Printf("⚠️ Could not fetch commits: %v (continuing without commit context)\n", err)
+	} else {
+		for _, c := range commits {
+			if c.Commit != nil && c.Commit.Message != nil {
+				// Take first line of commit message
+				msg := *c.Commit.Message
+				if idx := strings.Index(msg, "\n"); idx != -1 {
+					msg = msg[:idx]
+				}
+				commitMessages = append(commitMessages, msg)
+			}
+		}
+	}
+
+	// Build PR Context
+	prContext := models.PRContext{
+		Title:          pr.GetTitle(),
+		Body:           pr.GetBody(),
+		CommitMessages: commitMessages,
+	}
+
+	// 4. Fetch Diff
 	fmt.Printf("🔍 Fetching diff for PR #%d...\n", pr.GetNumber())
 	diff, err := internalGH.FetchPRDiff(ctx, client, repo.GetOwner().GetLogin(), repo.GetName(), pr.GetNumber())
 	if err != nil {
@@ -228,9 +259,9 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		return
 	}
 
-	// 4. Run LLM Review (Replaces n8n)
+	// 5. Run LLM Review (With PR Context)
 	fmt.Printf("🧠 Running LLM review for PR #%d...\n", pr.GetNumber())
-	review, err := llm.RunReview(ctx, diff, settings, apiKey)
+	review, err := llm.RunReview(ctx, nil, diff, settings, apiKey, prContext)
 	if err != nil {
 		fmt.Printf("❌ LLM Review Failed: %v\n", err)
 		if checkRunID != 0 {

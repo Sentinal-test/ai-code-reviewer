@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -16,10 +17,10 @@ const (
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
 )
 
-// RunReview analyzes the diff using the provided API key and settings.
-func RunReview(ctx context.Context, diff string, settings models.RepoSettings, apiKey string) (*models.ReviewResult, error) {
+// RunReview analyzes the diff using the provided API key, settings, and PR context.
+func RunReview(ctx context.Context, client *http.Client, diff string, settings models.RepoSettings, apiKey string, prContext models.PRContext) (*models.ReviewResult, error) {
 	// 1. Construct Prompt
-	prompt := buildPrompt(diff, settings)
+	prompt := buildPrompt(diff, settings, prContext)
 
 	// 2. Prepare Request
 	reqBody := map[string]interface{}{
@@ -48,7 +49,9 @@ func RunReview(ctx context.Context, diff string, settings models.RepoSettings, a
 	req.Header.Set("Content-Type", "application/json")
 
 	// 3. Execute Request
-	client := &http.Client{Timeout: 60 * time.Second}
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("LLM request failed: %v", err)
@@ -89,7 +92,7 @@ func RunReview(ctx context.Context, diff string, settings models.RepoSettings, a
 	return &result, nil
 }
 
-func buildPrompt(diff string, settings models.RepoSettings) string {
+func buildPrompt(diff string, settings models.RepoSettings, prContext models.PRContext) string {
 	var layers = []string{}
 	if settings.SecurityEnabled {
 		layers = append(layers, "Security (vulnerabilities, secrets)")
@@ -107,9 +110,37 @@ func buildPrompt(diff string, settings models.RepoSettings) string {
 		layers = append(layers, "Architecture (design patterns, structure)")
 	}
 
+	// Build PR context section (optional, for extra knowledge)
+	var prContextSection string
+	if prContext.Title != "" || prContext.Body != "" || len(prContext.CommitMessages) > 0 {
+		prContextSection = `
+**PR Context (for background only, do NOT base your review solely on this):**
+`
+		if prContext.Title != "" {
+			prContextSection += fmt.Sprintf("- Title: %s\n", prContext.Title)
+		}
+		if prContext.Body != "" {
+			// Truncate body if too long
+			body := prContext.Body
+			if len(body) > 500 {
+				body = body[:500] + "..."
+			}
+			prContextSection += fmt.Sprintf("- Description: %s\n", body)
+		}
+		if len(prContext.CommitMessages) > 0 {
+			// Only include first 10 commits to avoid bloat
+			msgs := prContext.CommitMessages
+			if len(msgs) > 10 {
+				msgs = msgs[:10]
+			}
+			prContextSection += fmt.Sprintf("- Commits: %s\n", strings.Join(msgs, "; "))
+		}
+		prContextSection += "(This context is supplementary. Focus your review on the actual diff below.)\n"
+	}
+
 	return fmt.Sprintf(`You are a senior software engineer conducting a code review.
 Your goal is to review the provided git diff and provide actionable, specific feedback.
-
+%s
 **Focus Areas:**
 %v
 
@@ -138,5 +169,5 @@ Your goal is to review the provided git diff and provide actionable, specific fe
     }
   ]
 }
-`, layers, diff)
+`, prContextSection, layers, diff)
 }

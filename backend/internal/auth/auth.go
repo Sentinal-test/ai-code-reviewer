@@ -14,7 +14,11 @@ import (
 	"golang.org/x/oauth2/github"
 )
 
-var oauthConf *oauth2.Config
+var (
+	oauthConf       *oauth2.Config
+	githubUserAPI   = "https://api.github.com/user"
+	githubEmailsAPI = "https://api.github.com/user/emails"
+)
 
 func InitAuth() {
 	oauthConf = &oauth2.Config{
@@ -56,7 +60,7 @@ func CallbackHandler(db *sql.DB) http.HandlerFunc {
 		client := oauthConf.Client(ctx, token)
 
 		// 1. Get User Info
-		userResp, err := client.Get("https://api.github.com/user")
+		userResp, err := client.Get(githubUserAPI)
 		if err != nil {
 			fmt.Printf("❌ Failed to get user info: %v\n", err)
 			http.Error(w, "Failed to get user info: "+err.Error(), http.StatusInternalServerError)
@@ -75,7 +79,7 @@ func CallbackHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		// 2. Validate Email Domain (@appointy.com)
-		emailsResp, err := client.Get("https://api.github.com/user/emails")
+		emailsResp, err := client.Get(githubEmailsAPI)
 		if err != nil {
 			fmt.Printf("❌ Failed to get user emails: %v\n", err)
 			http.Error(w, "Failed to get user emails: "+err.Error(), http.StatusInternalServerError)

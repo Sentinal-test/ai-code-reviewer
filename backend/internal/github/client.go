@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -10,12 +9,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func GetInstallationClient(ctx context.Context, appID int64, installationID int64, privateKeyPath string) (*github.Client, error) {
+func GetInstallationClient(ctx context.Context, appID int64, installationID int64, privateKeyBytes []byte) (*github.Client, error) {
 	// 1. Generate JWT
-	privateKeyBytes, err := os.ReadFile(privateKeyPath)
-	if err != nil {
-		return nil, err
-	}
 	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(privateKeyBytes)
 	if err != nil {
 		return nil, err

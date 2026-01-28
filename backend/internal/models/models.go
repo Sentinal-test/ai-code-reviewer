@@ -31,3 +31,10 @@ type ReviewResult struct {
 	Summary  string          `json:"summary"`
 	Comments []ReviewComment `json:"comments"`
 }
+
+// PRContext holds metadata about a PR for enhanced LLM context
+type PRContext struct {
+	Title          string
+	Body           string
+	CommitMessages []string
+}
