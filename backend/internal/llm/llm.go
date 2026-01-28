@@ -177,10 +177,10 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	var prContextSection string
 	if prContext.Title != "" || prContext.Body != "" || len(prContext.CommitMessages) > 0 {
 		prContextSection = `
-**PR Context (for background only, do NOT base your review solely on this):**
+**PR CONTEXT (Background Information - Use for Understanding Intent Only):**
 `
 		if prContext.Title != "" {
-			prContextSection += fmt.Sprintf("- Title: %s\n", prContext.Title)
+			prContextSection += fmt.Sprintf("- PR Title: %s\n", prContext.Title)
 		}
 		if prContext.Body != "" {
 			// Truncate body if too long
@@ -188,60 +188,145 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 			if len(body) > 500 {
 				body = body[:500] + "..."
 			}
-			prContextSection += fmt.Sprintf("- Description: %s\n", body)
+			prContextSection += fmt.Sprintf("- PR Description: %s\n", body)
 		}
 		if len(prContext.CommitMessages) > 0 {
 			// Format as a list for better LLM understanding
-			prContextSection += "- Commits in this PR:\n"
-			for _, msg := range prContext.CommitMessages {
+			prContextSection += "- Recent Commits (last 10):\n"
+			msgs := prContext.CommitMessages
+			if len(msgs) > 10 {
+				msgs = msgs[len(msgs)-10:]
+			}
+			for _, msg := range msgs {
 				prContextSection += fmt.Sprintf("  * %s\n", msg)
 			}
 		}
-		prContextSection += "(This context is supplementary. Focus your review on the actual diff below.)\n"
+		prContextSection += "\nIMPORTANT: This context helps you understand what the developer intended. Your review must focus on the actual diff below, identifying problems regardless of intent.\n"
 	}
 
-	return fmt.Sprintf(`You are a senior software engineer conducting a code review.
-Your goal is to review the provided git diff and provide actionable, specific feedback.
+	return fmt.Sprintf(`You are an automated code defect detection system performing static analysis.
+Your SOLE objective is to identify defects, vulnerabilities, bugs, and code quality issues in the git diff provided below.
 
 %s
 
-**Diff (Changes to Review):**
+═══════════════════════════════════════════════════════════════════════════════
+PRIMARY ANALYSIS TARGET: GIT DIFF (Changes Under Review)
+═══════════════════════════════════════════════════════════════════════════════
 %s
 
-**Full Content of Changed Files (Complete Context):**
+═══════════════════════════════════════════════════════════════════════════════
+SUPPORTING CONTEXT: Complete Changed Files (For Reference)
+═══════════════════════════════════════════════════════════════════════════════
 %s
 
-**Related Dependency Files (Requested Context):**
+═══════════════════════════════════════════════════════════════════════════════
+SUPPORTING CONTEXT: Related Dependencies (For Interface/Type Verification)
+═══════════════════════════════════════════════════════════════════════════════
 %s
 
-**Repository Structure (File Tree):**
+═══════════════════════════════════════════════════════════════════════════════
+SUPPORTING CONTEXT: Repository Structure (For Architecture Analysis)
+═══════════════════════════════════════════════════════════════════════════════
 %s
 
-**Focus Areas:**
+═══════════════════════════════════════════════════════════════════════════════
+ACTIVE DETECTION LAYERS
+═══════════════════════════════════════════════════════════════════════════════
 %v
 
-**Rules:**
-1. Review ONLY the changed lines in the diff. However, if you spot a CRITICAL bug in the related dependency files that affects the changes, include it in your comments.
-2. Be specific and actionable. Suggest fixes where possible.
-3. Max 2 short sentences per comment.
-4. No explanations or praise (e.g., "Good job", "This looks correct").
-5. Only problem + fix suggestion in the comment message.
-6. Output MUST be valid JSON matching the schema below.
-7. If no issues are found, return an empty "comments" list.
+═══════════════════════════════════════════════════════════════════════════════
+MANDATORY ANALYSIS RULES - STRICT COMPLIANCE REQUIRED
+═══════════════════════════════════════════════════════════════════════════════
 
-**Output Schema (JSON):**
+RULE 1 - PRIMARY FOCUS ON DIFF:
+  ✓ Analyze ONLY the changed lines in the git diff (lines with + or - prefixes)
+  ✓ Each comment MUST reference a specific line number from a changed file
+  ✓ DO NOT comment on unchanged code unless Rule 2 applies
+  ✗ NEVER comment on code that is not part of the diff
+
+RULE 2 - CRITICAL ISSUES IN CONTEXT FILES:
+  ✓ IF you find a CRITICAL security vulnerability or severe bug in dependency/context files
+  ✓ AND it DIRECTLY impacts or is called by the changed code
+  ✓ THEN report it with: file=<dependency_file>, line=0, message="[CONTEXT] <problem>"
+  ✓ Use ONLY for severity: critical or warning
+  ✗ DO NOT use for general code suggestions or info-level issues
+
+RULE 3 - ZERO FALSE POSITIVES:
+  ✗ DO NOT comment on code that is correct, functional, or follows best practices
+  ✗ DO NOT provide praise, confirmations, or acknowledgments ("Good implementation", "This is correct")
+  ✗ DO NOT comment on style preferences unless they violate language standards or cause bugs
+  ✗ DO NOT provide educational content or explanations
+  ✗ DO NOT comment if you cannot identify a concrete, measurable defect
+  ✓ Silence on correct code is EXPECTED and DESIRED
+
+RULE 4 - COMMENT STRUCTURE (Strict Format):
+  Format: "<Problem>. <Fix>."
+  
+  ✓ CORRECT Examples:
+    - "SQL injection via unsanitized input. Use parameterized queries."
+    - "Nil pointer dereference if user is nil. Add nil check before accessing user.ID."
+    - "Race condition on shared map access. Use mutex or sync.Map."
+    - "Memory leak from unclosed file handle. Defer file.Close() after error check."
+  
+  ✗ INCORRECT Examples:
+    - "This is a good approach" (praise - forbidden)
+    - "The code handles errors properly" (confirmation - forbidden)
+    - "Consider using a different pattern here" (vague - not actionable)
+    - "This might cause issues in some edge cases" (unspecific - not actionable)
+  
+  Maximum: 2 concise sentences per comment
+  
+RULE 5 - SEVERITY CLASSIFICATION (Precise Definitions):
+  critical: Security vulnerabilities (injection, XSS, auth bypass), data corruption, guaranteed crashes, 
+           breaking API changes, exposed secrets/credentials
+  
+  warning:  Logic errors, potential nil panics, resource leaks, race conditions, incorrect error handling,
+           deprecated APIs, improper error propagation, off-by-one errors
+  
+  info:     Minor inefficiencies, missing non-critical error checks, suboptimal patterns that don't affect 
+           correctness, redundant code
+
+RULE 6 - OUTPUT FORMAT (Strict JSON Schema):
+  ✓ MUST be valid JSON with no markdown formatting
+  ✓ Summary format: "Found X critical, Y warning, Z info issue(s)" (use exact counts)
+  ✓ If no issues: {"summary": "No issues detected", "comments": []}
+  ✗ NEVER include markdown code fences, extra text, or explanations
+
+RULE 7 - CONTEXT USAGE GUIDELINES:
+  - PR title/description/commits → Understand developer intent (what they tried to do)
+  - Changed files (full content) → Understand code flow, dependencies, and usage patterns
+  - Dependency files → Verify interface contracts, type definitions, function signatures
+  - Repository structure → Validate import paths, architecture decisions, module organization
+  
+  Remember: Context helps you understand the code, but your review must identify actual problems
+  in the diff, not validate whether the implementation matches the intent.
+
+═══════════════════════════════════════════════════════════════════════════════
+OUTPUT JSON SCHEMA (No markdown, no extra text)
+═══════════════════════════════════════════════════════════════════════════════
 {
-  "summary": "Brief summary of the review (1 sentence)",
+  "summary": "Found <count> critical, <count> warning, <count> info issue(s)" | "No issues detected",
   "comments": [
     {
       "file": "relative/path/to/file.go",
       "line": 42,
       "layer": "security|bug|lint|performance|architecture",
-      "message": "Clear explanation with fix suggestion",
+      "message": "<Problem>. <Fix>.",
       "severity": "critical|warning|info"
     }
   ]
 }
+
+═══════════════════════════════════════════════════════════════════════════════
+FINAL REMINDER
+═══════════════════════════════════════════════════════════════════════════════
+You are a DEFECT DETECTOR, not a code reviewer or mentor.
+- Report ONLY actual problems with concrete fixes
+- NO praise, NO confirmations, NO educational content
+- Silence on correct code is correct behavior
+- Focus on the DIFF, reference context only when necessary
+
+BEGIN ANALYSIS NOW.
 `, prContextSection, diff, changedContent, depsContent, repoStructure, layers)
 }
 
@@ -253,33 +338,74 @@ func AnalyzeDependencyNeeds(ctx context.Context, client *http.Client, diff strin
 		fileList = append(fileList, path)
 	}
 
-	prompt := fmt.Sprintf(`You are a senior software engineer planning a code review.
-Your goal is to identify which *additional* files from the repository you need to read to fully understand and validate the changes.
+	prompt := fmt.Sprintf(`You are a dependency analyzer for automated code review systems.
+Your task is to identify which additional repository files are REQUIRED to accurately validate the changes in the provided diff.
 
-**Input Diff:**
+═══════════════════════════════════════════════════════════════════════════════
+INPUT: GIT DIFF
+═══════════════════════════════════════════════════════════════════════════════
 %s
 
-**Changed Files List:**
+═══════════════════════════════════════════════════════════════════════════════
+ALREADY AVAILABLE: Changed Files
+═══════════════════════════════════════════════════════════════════════════════
 %v
 
-**Repository Structure:**
+═══════════════════════════════════════════════════════════════════════════════
+AVAILABLE: Repository Structure
+═══════════════════════════════════════════════════════════════════════════════
 %s
 
-**Task:**
-Analyze the diff and changed files (imports, function calls, type usage).
-Return a JSON list of file paths that are NOT in the "Changed Files List" but are CRITICAL for verifying the correctness of the changes (e.g., definitions of used types, updated interfaces, middleware logic).
-Do not request standard library files or external dependencies.
-Only request files that exist in the "Repository Structure".
+═══════════════════════════════════════════════════════════════════════════════
+ANALYSIS TASK
+═══════════════════════════════════════════════════════════════════════════════
 
-**Output Schema (JSON):**
+Analyze the diff and identify files that are CRITICAL for validating the changes.
+
+INCLUDE files that provide:
+✓ Type definitions, struct definitions, or interfaces used in the diff
+✓ Function/method signatures that are called by the changed code
+✓ Constants, enums, or configuration referenced in the changes
+✓ Parent classes, base implementations, or mixins that the changed code extends
+✓ Database schema or model definitions if the diff includes queries
+✓ API endpoint definitions if the diff implements handlers
+✓ Middleware or interceptors that process the changed code's execution flow
+✓ Critical utility functions that the changed code depends on
+
+EXCLUDE files that are:
+✗ Standard library imports (e.g., "fmt", "encoding/json", "react")
+✗ External dependencies from node_modules, vendor, or package managers
+✗ Test files unless the diff modifies production code called by those tests
+✗ Documentation, README, or configuration files (unless diff validates config)
+✗ Files not present in the "Repository Structure" above
+✗ Changed files already listed in "ALREADY AVAILABLE" section
+
+PRIORITIZATION (request max 10 files, highest priority first):
+1. Direct dependencies: files imported or referenced by changed code
+2. Type definitions: interfaces, structs, classes used in the diff
+3. Architectural dependencies: middleware, base classes, core utilities
+
+═══════════════════════════════════════════════════════════════════════════════
+OUTPUT REQUIREMENTS
+═══════════════════════════════════════════════════════════════════════════════
+
+Return ONLY valid JSON matching this schema:
 {
   "files": ["path/to/file1.go", "path/to/file2.ts"]
 }
-If no extra files are needed, return {"files": []}.
+
+Rules:
+- Return empty array if no additional files are needed: {"files": []}
+- Maximum 10 files (prioritize most critical)
+- Paths must exactly match those in "Repository Structure"
+- No markdown formatting, no explanations, only JSON
+
+BEGIN ANALYSIS NOW.
 `, diff, fileList, repoStructure)
 
+	// Optionally add PR context if available
 	if prContext.Title != "" {
-		prompt += fmt.Sprintf("\nReview Context from PR: %s\n%s", prContext.Title, prContext.Body)
+		prompt += fmt.Sprintf("\n\nPR Context (for understanding intent):\nTitle: %s\nDescription: %s", prContext.Title, prContext.Body)
 	}
 
 	// Prepare Request

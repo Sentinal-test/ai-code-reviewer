@@ -245,9 +245,13 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		Body:           pr.GetBody(),
 		CommitMessages: commitMessages,
 	}
-	fmt.Printf("📋 PR Context Log:\n  Title: %s\n  Body (len): %d\n  Commits:\n",
+	fmt.Printf("📋 PR Context Log:\n  Title: %s\n  Body (len): %d\n  Commits (last 10):\n",
 		prContext.Title, len(prContext.Body))
-	for _, commit := range prContext.CommitMessages {
+	msgs := prContext.CommitMessages
+	if len(msgs) > 10 {
+		msgs = msgs[len(msgs)-10:]
+	}
+	for _, commit := range msgs {
 		fmt.Printf("    - %s\n", commit)
 	}
 
