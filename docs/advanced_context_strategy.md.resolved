@@ -50,9 +50,8 @@ This involves indexing the entire repository into a graph database or vector sto
     *   **Stale Data**: If the index is behind, the context is wrong.
     *   **Overhead**: Significant infrastructure setup.
 
-## Recommendation
 
-**Start with Option 1 (Multi-Pass Review).**
+**Starting with Option 1 (Multi-Pass Review).**
 
 **Why?**
 1.  **implementation Speed**: We can implement this *now* without setting up new databases or writing complex parsers for multiple languages.

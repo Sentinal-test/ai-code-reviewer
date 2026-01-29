@@ -22,6 +22,17 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	// 1. Construct Prompt
 	prompt := buildPrompt(diff, changedFiles, dependencies, settings, repoStructure, prContext)
 
+	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println("🔍 [REVIEW PASS] - PROMPT CONTEXT")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Printf("Diff Size: %d bytes\n", len(diff))
+	fmt.Printf("Changed Files: %v\n", getFileKeys(changedFiles))
+	fmt.Printf("Dependency Files: %v\n", getFileKeys(dependencies))
+	// Log the actual prompt for full transparency as requested
+	fmt.Println("\n--- FULL PROMPT ---")
+	fmt.Println(prompt)
+	fmt.Println(strings.Repeat("=", 80) + "\n")
+
 	// 2. Prepare Request
 	reqBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
@@ -84,6 +95,12 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 
 	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
 
+	fmt.Println("\n" + strings.Repeat("*", 80))
+	fmt.Println("📥 [REVIEW PASS] - RAW LLM RESPONSE")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println(responseText)
+	fmt.Println(strings.Repeat("*", 80) + "\n")
+
 	// Robust parsing: try Result object first, then fallback to Array of comments
 	var result models.ReviewResult
 	if err := json.Unmarshal([]byte(responseText), &result); err != nil {
@@ -97,7 +114,20 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 		}
 	}
 
+	fmt.Println("✅ [REVIEW PASS] - PARSED RESULT")
+	fmt.Printf("Summary: %s\n", result.Summary)
+	fmt.Printf("Comments Count: %d\n", len(result.Comments))
+	fmt.Println(strings.Repeat("=", 80) + "\n")
+
 	return &result, nil
+}
+
+func getFileKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func buildPrompt(diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, prContext models.PRContext) string {
@@ -408,6 +438,14 @@ BEGIN ANALYSIS NOW.
 		prompt += fmt.Sprintf("\n\nPR Context (for understanding intent):\nTitle: %s\nDescription: %s", prContext.Title, prContext.Body)
 	}
 
+	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println("🔭 [SCOUT PASS] - PROMPT CONTEXT")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Printf("Diff Size: %d bytes\n", len(diff))
+	fmt.Println("\n--- FULL PROMPT ---")
+	fmt.Println(prompt)
+	fmt.Println(strings.Repeat("=", 80) + "\n")
+
 	// Prepare Request
 	reqBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
@@ -470,6 +508,12 @@ BEGIN ANALYSIS NOW.
 
 	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
 
+	fmt.Println("\n" + strings.Repeat("*", 80))
+	fmt.Println("📥 [SCOUT PASS] - RAW LLM RESPONSE")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println(responseText)
+	fmt.Println(strings.Repeat("*", 80) + "\n")
+
 	// Extraction logic to handle markdown backticks if LLM provides them
 	jsonStr := responseText
 	if idx := strings.Index(jsonStr, "```json"); idx != -1 {
@@ -492,6 +536,10 @@ BEGIN ANALYSIS NOW.
 		fmt.Printf("⚠️ Scout JSON Parse Failed: %v | Response: %s\n", err, responseText)
 		return nil, fmt.Errorf("failed to parse scout JSON: %v", err)
 	}
+
+	fmt.Println("✅ [SCOUT PASS] - IDENTIFIED DEPENDENCIES")
+	fmt.Printf("Files: %v\n", result.Files)
+	fmt.Println(strings.Repeat("=", 80) + "\n")
 
 	return result.Files, nil
 }
