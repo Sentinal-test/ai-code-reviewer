@@ -9,20 +9,45 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
-	geminiModel = "gemini-3-flash-preview"
+	// FIX #2: Use valid Gemini model name
+	geminiModel = "gemini-1.5-flash" // Changed from "gemini-3-flash-preview"
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
 )
+
+// FIX #4: Safe UTF-8 truncation helper
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	
+	// Find the last valid UTF-8 character boundary before maxBytes
+	truncated := s[:maxBytes]
+	
+	// Walk backwards to find a valid UTF-8 boundary
+	for len(truncated) > 0 {
+		if utf8.ValidString(truncated) {
+			return truncated + "\n...[TRUNCATED]..."
+		}
+		// Remove one byte and try again
+		truncated = truncated[:len(truncated)-1]
+	}
+	
+	return "\n...[TRUNCATED]..."
+}
 
 // isDocumentationFile checks if a file is documentation/config and shouldn't be reviewed
 func isDocumentationFile(path string) bool {
 	lowerPath := strings.ToLower(path)
+	baseName := strings.ToLower(filepath.Base(path))
 	
-	// Documentation files
+	// Documentation file extensions
 	docExtensions := []string{".md", ".txt", ".rst", ".adoc"}
 	for _, ext := range docExtensions {
 		if strings.HasSuffix(lowerPath, ext) {
@@ -30,16 +55,30 @@ func isDocumentationFile(path string) bool {
 		}
 	}
 	
-	// Common doc filenames
-	docFiles := []string{
+	// FIX #3: More precise matching for common doc filenames
+	// Use exact match or match with common doc extensions
+	docFilePatterns := []string{
 		"readme", "license", "changelog", "contributing",
-		"code_of_conduct", "authors", "contributors", "todo",
+		"code_of_conduct", "authors", "contributors",
 		"history", "news", "thanks", "acknowledgments",
 	}
 	
-	baseName := strings.ToLower(filepath.Base(path))
-	for _, docFile := range docFiles {
-		if strings.HasPrefix(baseName, docFile) {
+	// Extract base name without extension for comparison
+	baseWithoutExt := baseName
+	for _, ext := range docExtensions {
+		baseWithoutExt = strings.TrimSuffix(baseWithoutExt, ext)
+	}
+	
+	// Check for exact match (e.g., "readme", "todo")
+	for _, docPattern := range docFilePatterns {
+		if baseWithoutExt == docPattern {
+			return true
+		}
+	}
+	
+	// Special case: also check if filename is just the pattern (e.g., "README", "TODO", "LICENSE")
+	for _, docPattern := range docFilePatterns {
+		if baseName == docPattern {
 			return true
 		}
 	}
@@ -73,6 +112,9 @@ func filterReviewableFiles(files map[string]string) map[string]string {
 	return filtered
 }
 
+// FIX #1: Improved diff path extraction using regex
+var diffPathRegex = regexp.MustCompile(`^diff --git a/(.*) b/(.*)$`)
+
 // extractChangedLinesFromDiff extracts only the changed lines with their context
 // Returns a map of file -> list of changed line sections
 func extractChangedLinesFromDiff(diff string) map[string][]string {
@@ -90,10 +132,18 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 			}
 			currentSection = []string{}
 			
-			// Extract filename
-			parts := strings.Fields(line)
-			if len(parts) >= 4 {
-				currentFile = strings.TrimPrefix(parts[3], "b/")
+			// FIX #1: Use regex to extract filename (handles spaces and quoted paths)
+			matches := diffPathRegex.FindStringSubmatch(line)
+			if len(matches) >= 3 {
+				// Use b/ path (destination), remove quotes if present
+				currentFile = strings.Trim(matches[2], "\"")
+			} else {
+				// Fallback: try to extract using the old method for edge cases
+				parts := strings.Fields(line)
+				if len(parts) >= 4 {
+					currentFile = strings.TrimPrefix(parts[3], "b/")
+					currentFile = strings.Trim(currentFile, "\"")
+				}
 			}
 			continue
 		}
@@ -273,8 +323,9 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	currentSize := 0
 	changedContent := formatFilesWithDiff(changedFiles, diffMap)
 	
+	// FIX #4: Use UTF-8 safe truncation
 	if len(changedContent) > MaxContextChars {
-		changedContent = changedContent[:MaxContextChars] + "\n...[TRUNCATED]..."
+		changedContent = truncateUTF8(changedContent, MaxContextChars)
 	}
 	currentSize += len(changedContent)
 
@@ -284,7 +335,7 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 		available := MaxContextChars - currentSize
 		if available > 0 {
 			if len(depsContent) > available {
-				depsContent = depsContent[:available] + "\n...[TRUNCATED]..."
+				depsContent = truncateUTF8(depsContent, available)
 			}
 		} else {
 			depsContent = ""
@@ -297,7 +348,7 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 		available := MaxContextChars - currentSize
 		if available > 0 {
 			if len(repoStructure) > available {
-				repoStructure = repoStructure[:available] + "\n...[TRUNCATED]..."
+				repoStructure = truncateUTF8(repoStructure, available)
 			}
 		} else {
 			repoStructure = ""
@@ -356,7 +407,7 @@ the ACTUAL CODE CHANGES, not on whether the code matches the stated intent.
 		if prContext.Body != "" {
 			body := prContext.Body
 			if len(body) > 1000 {
-				body = body[:1000] + "..."
+				body = truncateUTF8(body, 1000)
 			}
 			prContextSection += fmt.Sprintf("**PR Description:** %s\n", body)
 		}
