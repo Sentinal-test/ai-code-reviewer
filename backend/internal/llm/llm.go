@@ -8,30 +8,141 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 const (
-	geminiModel = "gemini-2.5-flash"
+	geminiModel = "gemini-3-flash-preview"
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
 )
 
+// isDocumentationFile checks if a file is documentation/config and shouldn't be reviewed
+func isDocumentationFile(path string) bool {
+	lowerPath := strings.ToLower(path)
+	
+	// Documentation files
+	docExtensions := []string{".md", ".txt", ".rst", ".adoc"}
+	for _, ext := range docExtensions {
+		if strings.HasSuffix(lowerPath, ext) {
+			return true
+		}
+	}
+	
+	// Common doc filenames
+	docFiles := []string{
+		"readme", "license", "changelog", "contributing",
+		"code_of_conduct", "authors", "contributors", "todo",
+		"history", "news", "thanks", "acknowledgments",
+	}
+	
+	baseName := strings.ToLower(filepath.Base(path))
+	for _, docFile := range docFiles {
+		if strings.HasPrefix(baseName, docFile) {
+			return true
+		}
+	}
+	
+	// Configuration/metadata files (no code logic to review)
+	configFiles := []string{
+		".gitignore", ".dockerignore", ".editorconfig", ".env.example",
+		"makefile", ".prettierrc", ".eslintrc",
+		"tsconfig.json", "package.json", "package-lock.json",
+		"go.mod", "go.sum", "requirements.txt", "pipfile",
+		"poetry.lock", "yarn.lock", "composer.json",
+	}
+	
+	for _, configFile := range configFiles {
+		if strings.Contains(lowerPath, configFile) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// filterReviewableFiles removes documentation and config files from the map
+func filterReviewableFiles(files map[string]string) map[string]string {
+	filtered := make(map[string]string)
+	for path, content := range files {
+		if !isDocumentationFile(path) {
+			filtered[path] = content
+		}
+	}
+	return filtered
+}
+
+// extractChangedLinesFromDiff extracts only the changed lines with their context
+// Returns a map of file -> list of changed line sections
+func extractChangedLinesFromDiff(diff string) map[string][]string {
+	result := make(map[string][]string)
+	lines := strings.Split(diff, "\n")
+	
+	var currentFile string
+	var currentSection []string
+	
+	for _, line := range lines {
+		// File header: diff --git a/file b/file
+		if strings.HasPrefix(line, "diff --git") {
+			if currentFile != "" && len(currentSection) > 0 {
+				result[currentFile] = append(result[currentFile], strings.Join(currentSection, "\n"))
+			}
+			currentSection = []string{}
+			
+			// Extract filename
+			parts := strings.Fields(line)
+			if len(parts) >= 4 {
+				currentFile = strings.TrimPrefix(parts[3], "b/")
+			}
+			continue
+		}
+		
+		// Track hunk headers and changed lines
+		if strings.HasPrefix(line, "@@") {
+			if len(currentSection) > 0 {
+				result[currentFile] = append(result[currentFile], strings.Join(currentSection, "\n"))
+			}
+			currentSection = []string{line}
+		} else if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
+			currentSection = append(currentSection, line)
+		} else if len(currentSection) > 0 && !strings.HasPrefix(line, "\\") {
+			// Context line within a hunk
+			currentSection = append(currentSection, line)
+		}
+	}
+	
+	// Add final section
+	if currentFile != "" && len(currentSection) > 0 {
+		result[currentFile] = append(result[currentFile], strings.Join(currentSection, "\n"))
+	}
+	
+	return result
+}
+
 // RunReview analyzes the diff using the provided API key, settings, and PR context.
 func RunReview(ctx context.Context, client *http.Client, diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, apiKey string, prContext models.PRContext) (*models.ReviewResult, error) {
+	// Filter out documentation files
+	reviewableFiles := filterReviewableFiles(changedFiles)
+	reviewableDeps := filterReviewableFiles(dependencies)
+	
+	if len(reviewableFiles) == 0 {
+		return &models.ReviewResult{
+			Summary:  "No reviewable code files changed (only documentation/config files)",
+			Comments: []models.ReviewComment{},
+		}, nil
+	}
+	
 	// 1. Construct Prompt
-	prompt := buildPrompt(diff, changedFiles, dependencies, settings, repoStructure, prContext)
+	prompt := buildPrompt(diff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
 
 	fmt.Println("\n" + strings.Repeat("=", 80))
 	fmt.Println("🔍 [REVIEW PASS] - PROMPT CONTEXT")
 	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("Diff Size: %d bytes\n", len(diff))
-	fmt.Printf("Changed Files: %v\n", getFileKeys(changedFiles))
-	fmt.Printf("Dependency Files: %v\n", getFileKeys(dependencies))
-	// Log the actual prompt for full transparency as requested
-	fmt.Println("\n--- FULL PROMPT ---")
-	fmt.Println(prompt)
-	fmt.Println(strings.Repeat("=", 80) + "\n")
+	fmt.Printf("Reviewable Files: %v\n", getFileKeys(reviewableFiles))
+	fmt.Printf("Dependency Files: %v\n", getFileKeys(reviewableDeps))
+	fmt.Printf("Filtered Out (docs/config): %d files\n", len(changedFiles)-len(reviewableFiles))
 
 	// 2. Prepare Request
 	reqBody := map[string]interface{}{
@@ -95,12 +206,6 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 
 	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
 
-	fmt.Println("\n" + strings.Repeat("*", 80))
-	fmt.Println("📥 [REVIEW PASS] - RAW LLM RESPONSE")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Println(responseText)
-	fmt.Println(strings.Repeat("*", 80) + "\n")
-
 	// Robust parsing: try Result object first, then fallback to Array of comments
 	var result models.ReviewResult
 	if err := json.Unmarshal([]byte(responseText), &result); err != nil {
@@ -114,11 +219,6 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 		}
 	}
 
-	fmt.Println("✅ [REVIEW PASS] - PARSED RESULT")
-	fmt.Printf("Summary: %s\n", result.Summary)
-	fmt.Printf("Comments Count: %d\n", len(result.Comments))
-	fmt.Println(strings.Repeat("=", 80) + "\n")
-
 	return &result, nil
 }
 
@@ -131,14 +231,33 @@ func getFileKeys(m map[string]string) []string {
 }
 
 func buildPrompt(diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, prContext models.PRContext) string {
-	// Context Window Management (Simple implementation)
-	// Priority: Diff > Changed Files > Dependencies > Repo Structure
+	// Context Window Management
+	// Priority: Complete Files with Diff Annotations > Dependencies > Repo Structure
 	// Target Max Chars: ~400,000 (approx 100k tokens safety)
 	const MaxContextChars = 400000
 
-	currentSize := len(diff)
+	// Helper to format files with inline diff annotations
+	formatFilesWithDiff := func(files map[string]string, diffMap map[string][]string) string {
+		var b strings.Builder
+		for path, content := range files {
+			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n", path))
+			
+			// If we have diff information for this file, annotate it
+			if diffSections, hasDiff := diffMap[path]; hasDiff && len(diffSections) > 0 {
+				b.WriteString("/* CHANGED SECTIONS IN THIS FILE: */\n")
+				for i, section := range diffSections {
+					b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s\n*/\n\n", i+1, section))
+				}
+				b.WriteString("/* COMPLETE FILE CONTENT FOR CONTEXT: */\n")
+			}
+			
+			b.WriteString(content)
+			b.WriteString("\n")
+		}
+		return b.String()
+	}
 
-	// Helper to format map
+	// Helper for dependencies (no diff annotations)
 	formatFiles := func(files map[string]string) string {
 		var b strings.Builder
 		for path, content := range files {
@@ -147,20 +266,19 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 		return b.String()
 	}
 
-	changedContent := formatFiles(changedFiles)
-	if currentSize+len(changedContent) > MaxContextChars {
-		// Truncate changed files
-		available := MaxContextChars - currentSize
-		if available > 0 {
-			if len(changedContent) > available {
-				changedContent = changedContent[:available] + "\n...[TRUNCATED]..."
-			}
-		} else {
-			changedContent = ""
-		}
+	// Extract changed lines from diff
+	diffMap := extractChangedLinesFromDiff(diff)
+
+	// Build annotated changed files section
+	currentSize := 0
+	changedContent := formatFilesWithDiff(changedFiles, diffMap)
+	
+	if len(changedContent) > MaxContextChars {
+		changedContent = changedContent[:MaxContextChars] + "\n...[TRUNCATED]..."
 	}
 	currentSize += len(changedContent)
 
+	// Add dependencies
 	depsContent := formatFiles(dependencies)
 	if currentSize+len(depsContent) > MaxContextChars {
 		available := MaxContextChars - currentSize
@@ -188,65 +306,90 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 
 	var layers = []string{}
 	if settings.SecurityEnabled {
-		layers = append(layers, "Security (vulnerabilities, secrets)")
+		layers = append(layers, "Security (vulnerabilities, secrets, unsafe operations)")
 	}
 	if settings.BugEnabled {
-		layers = append(layers, "Bugs (logic errors, crashes)")
+		layers = append(layers, "Bugs (logic errors, crashes, data corruption)")
 	}
 	if settings.LintEnabled {
 		layers = append(layers, "Lint (style, formatting, best practices)")
 	}
 	if settings.PerformanceEnabled {
-		layers = append(layers, "Performance (inefficiencies, memory leaks)")
+		layers = append(layers, "Performance (inefficiencies, memory leaks, algorithmic issues)")
 	}
 	if settings.ArchitectureEnabled {
-		layers = append(layers, "Architecture (design patterns, structure)")
+		layers = append(layers, "Architecture (design patterns, structure, maintainability)")
 	}
 
-	// Build PR context section (optional, for extra knowledge)
+	// Build PR context section with clear intent guidance
 	var prContextSection string
 	if prContext.Title != "" || prContext.Body != "" || len(prContext.CommitMessages) > 0 {
 		prContextSection = `
-**PR CONTEXT (Background Information - Use for Understanding Intent Only):**
+═══════════════════════════════════════════════════════════════════════════════
+PR CONTEXT (Developer Intent - Use as Background Only)
+═══════════════════════════════════════════════════════════════════════════════
+This section provides the developer's stated intent. Your review must be based on
+the ACTUAL CODE CHANGES, not on whether the code matches the stated intent.
+
+**IMPORTANT DISTINCTIONS:**
+- If developer says "added logging for debugging" → This is INTENT, not a defect
+- If the logging code actually exposes sensitive data → This IS a defect (review it)
+- If developer says "fixed bug X" but code still has bug Y → Review bug Y
+- If developer says "temporary change" but code has security flaw → Review the flaw
+
+**USE THIS CONTEXT TO:**
+✓ Understand what the developer was trying to accomplish
+✓ Distinguish between intentional debugging code vs accidental security issues
+✓ Recognize temporary/experimental code (but still flag genuine issues in it)
+✓ Understand business logic context for the changes
+
+**DO NOT USE THIS CONTEXT TO:**
+✗ Assume code is correct because it matches the description
+✗ Skip reviewing code that's marked as "debug", "temp", or "testing"
+✗ Flag intentional debugging/logging as issues UNLESS it has actual security implications
+✗ Treat the PR description as source of truth for correctness
+
 `
 		if prContext.Title != "" {
-			prContextSection += fmt.Sprintf("- PR Title: %s\n", prContext.Title)
+			prContextSection += fmt.Sprintf("**PR Title:** %s\n", prContext.Title)
 		}
 		if prContext.Body != "" {
-			// Truncate body if too long
 			body := prContext.Body
-			if len(body) > 500 {
-				body = body[:500] + "..."
+			if len(body) > 1000 {
+				body = body[:1000] + "..."
 			}
-			prContextSection += fmt.Sprintf("- PR Description: %s\n", body)
+			prContextSection += fmt.Sprintf("**PR Description:** %s\n", body)
 		}
 		if len(prContext.CommitMessages) > 0 {
-			// Format as a list for better LLM understanding
-			prContextSection += "- Recent Commits (last 10):\n"
+			prContextSection += "\n**Commit Messages (last 10):**\n"
 			msgs := prContext.CommitMessages
 			if len(msgs) > 10 {
 				msgs = msgs[len(msgs)-10:]
 			}
 			for _, msg := range msgs {
-				prContextSection += fmt.Sprintf("  * %s\n", msg)
+				prContextSection += fmt.Sprintf("  • %s\n", msg)
 			}
 		}
-		prContextSection += "\nIMPORTANT: This context helps you understand what the developer intended. Your review must focus on the actual diff below, identifying problems regardless of intent.\n"
+		prContextSection += "\n"
 	}
 
-	return fmt.Sprintf(`You are an automated code defect detection system performing static analysis.
-Your SOLE objective is to identify defects, vulnerabilities, bugs, and code quality issues in the git diff provided below.
+	return fmt.Sprintf(`You are an automated code defect detection system performing static analysis on code changes.
+Your SOLE objective is to identify defects, vulnerabilities, bugs, and code quality issues.
 
 %s
 
 ═══════════════════════════════════════════════════════════════════════════════
-PRIMARY ANALYSIS TARGET: GIT DIFF (Changes Under Review)
+PRIMARY ANALYSIS TARGET: Changed Code Files
 ═══════════════════════════════════════════════════════════════════════════════
-%s
+Below are the complete files that were modified, with inline annotations showing 
+exactly what changed. Focus your analysis on the CHANGED SECTIONS marked in comments.
 
-═══════════════════════════════════════════════════════════════════════════════
-SUPPORTING CONTEXT: Complete Changed Files (For Reference)
-═══════════════════════════════════════════════════════════════════════════════
+The complete file content is provided to help you understand:
+- The context in which changes were made
+- How changes interact with existing code
+- Whether changes break existing functionality
+- Type signatures, function definitions, and dependencies
+
 %s
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -268,68 +411,104 @@ ACTIVE DETECTION LAYERS
 MANDATORY ANALYSIS RULES - STRICT COMPLIANCE REQUIRED
 ═══════════════════════════════════════════════════════════════════════════════
 
-RULE 1 - PRIMARY FOCUS ON DIFF:
-  ✓ Analyze ONLY the changed lines in the git diff (lines with + or - prefixes)
-  ✓ Each comment MUST reference a specific line number from a changed file
-  ✓ DO NOT comment on unchanged code unless Rule 2 applies
-  ✗ NEVER comment on code that is not part of the diff
+RULE 1 - FOCUS ON ACTUAL CODE CHANGES:
+  ✓ Analyze ONLY the code within "Change Block" sections (marked in comments above)
+  ✓ Each comment MUST reference a specific line number from the changed code
+  ✓ Use the complete file content to understand context, but flag issues only in changes
+  ✗ NEVER comment on unchanged code unless Rule 2 applies
 
-RULE 2 - CRITICAL ISSUES IN CONTEXT FILES:
+RULE 2 - CRITICAL ISSUES IN CONTEXT:
   ✓ IF you find a CRITICAL security vulnerability or severe bug in dependency/context files
   ✓ AND it DIRECTLY impacts or is called by the changed code
   ✓ THEN report it with: file=<dependency_file>, line=0, message="[CONTEXT] <problem>"
   ✓ Use ONLY for severity: critical or warning
-  ✗ DO NOT use for general code suggestions or info-level issues
+  ✗ DO NOT use for general suggestions or info-level issues
 
-RULE 3 - ZERO FALSE POSITIVES:
+RULE 3 - DISTINGUISH INTENT FROM DEFECTS:
+  ✓ Read the PR Context to understand what the developer intended to do
+  ✓ If code has "debug", "temp", or "test" comments, recognize these as intentional
+  ✓ BUT still flag genuine security/correctness issues in that code
+  
+  Examples:
+  • Code: "log.Debug(response)" + PR says "added debug logging"
+    → Do NOT flag as security issue (it's intentional debugging)
+  
+  • Code: "log.Info(user.Password)" + PR says "improved logging"
+    → DO flag as critical security issue (exposing sensitive data is always wrong)
+  
+  • Code: "// TODO: add auth" + PR says "temporary endpoint for testing"
+    → DO flag missing authentication (being temporary doesn't make it safe)
+  
+  • Code: "time.Sleep(5 * time.Second)" + PR says "debugging race condition"
+    → Do NOT flag (it's intentional debug code, not a production bug)
+
+RULE 4 - DOCUMENTATION FILES EXCLUSION:
+  ✗ DO NOT review documentation files (README, CHANGELOG, .md files, etc.)
+  ✗ DO NOT review configuration files (package.json, go.mod, .gitignore, etc.)
+  ✓ These files have been pre-filtered and should not appear in the changed files
+  ✓ Focus only on actual code logic that can have defects
+
+RULE 5 - ZERO FALSE POSITIVES:
   ✗ DO NOT comment on code that is correct, functional, or follows best practices
-  ✗ DO NOT provide praise, confirmations, or acknowledgments ("Good implementation", "This is correct")
-  ✗ DO NOT comment on style preferences unless they violate language standards or cause bugs
-  ✗ DO NOT provide educational content or explanations
+  ✗ DO NOT provide praise, confirmations, or acknowledgments
+  ✗ DO NOT comment on style preferences unless they cause bugs or violate language standards
+  ✗ DO NOT provide educational content or alternative implementations
   ✗ DO NOT comment if you cannot identify a concrete, measurable defect
   ✓ Silence on correct code is EXPECTED and DESIRED
 
-RULE 4 - COMMENT STRUCTURE (Strict Format):
+RULE 6 - COMMENT STRUCTURE (Strict Format):
   Format: "<Problem>. <Fix>."
   
   ✓ CORRECT Examples:
     - "SQL injection via unsanitized input. Use parameterized queries."
-    - "Nil pointer dereference if user is nil. Add nil check before accessing user.ID."
-    - "Race condition on shared map access. Use mutex or sync.Map."
-    - "Memory leak from unclosed file handle. Defer file.Close() after error check."
+    - "Nil pointer dereference if user is nil. Add nil check before user.ID access."
+    - "Race condition on shared map access. Protect with mutex or use sync.Map."
+    - "Memory leak from unclosed file handle. Add defer file.Close() after error check."
+    - "Password logged in plain text. Remove sensitive data from logs or redact it."
   
   ✗ INCORRECT Examples:
-    - "This is a good approach" (praise - forbidden)
-    - "The code handles errors properly" (confirmation - forbidden)
-    - "Consider using a different pattern here" (vague - not actionable)
-    - "This might cause issues in some edge cases" (unspecific - not actionable)
+    - "This is good code" (praise - forbidden)
+    - "Logging full response might be risky" (vague - not specific enough)
+    - "Consider using a different pattern" (suggestion without concrete problem)
+    - "This could be optimized" (no measurable defect identified)
   
   Maximum: 2 concise sentences per comment
   
-RULE 5 - SEVERITY CLASSIFICATION (Precise Definitions):
-  critical: Security vulnerabilities (injection, XSS, auth bypass), data corruption, guaranteed crashes, 
-           breaking API changes, exposed secrets/credentials
+RULE 7 - SEVERITY CLASSIFICATION (Precise Definitions):
+  critical: Security vulnerabilities (SQL injection, XSS, auth bypass, exposed credentials/tokens),
+            data corruption, guaranteed crashes/panics, breaking API changes that cause failures
   
-  warning:  Logic errors, potential nil panics, resource leaks, race conditions, incorrect error handling,
-           deprecated APIs, improper error propagation, off-by-one errors
+  warning:  Logic errors, potential nil panics, resource leaks (unclosed files/connections),
+            race conditions, incorrect error handling, improper error propagation, off-by-one errors,
+            unsafe type assertions, missing important validations
   
-  info:     Minor inefficiencies, missing non-critical error checks, suboptimal patterns that don't affect 
-           correctness, redundant code
+  info:     Minor inefficiencies, missing non-critical error checks, suboptimal patterns that
+            don't affect correctness, redundant code, missing comments on complex logic
 
-RULE 6 - OUTPUT FORMAT (Strict JSON Schema):
+RULE 8 - CONTEXT SENSITIVITY:
+  When analyzing issues, consider:
+  
+  ✓ Is this debug/test code explicitly mentioned in PR context?
+    → If yes, be more lenient with logging, sleeps, hardcoded values
+    → BUT still flag actual security issues (exposed secrets, missing auth, etc.)
+  
+  ✓ Is this a temporary workaround mentioned in commits?
+    → Flag the underlying issue but acknowledge temporary nature
+    → Example: "Missing input validation. Add before production deployment."
+  
+  ✓ Is the "issue" actually the intended behavior?
+    → Check PR title/description first before flagging
+    → Example: PR says "added verbose logging for debugging" → don't flag verbose logs
+  
+  ✗ Never use PR context as excuse to ignore genuine defects
+    → Intentional doesn't mean correct
+    → Debug code can still have security flaws worth fixing
+
+RULE 9 - OUTPUT FORMAT (Strict JSON Schema):
   ✓ MUST be valid JSON with no markdown formatting
   ✓ Summary format: "Found X critical, Y warning, Z info issue(s)" (use exact counts)
   ✓ If no issues: {"summary": "No issues detected", "comments": []}
   ✗ NEVER include markdown code fences, extra text, or explanations
-
-RULE 7 - CONTEXT USAGE GUIDELINES:
-  - PR title/description/commits → Understand developer intent (what they tried to do)
-  - Changed files (full content) → Understand code flow, dependencies, and usage patterns
-  - Dependency files → Verify interface contracts, type definitions, function signatures
-  - Repository structure → Validate import paths, architecture decisions, module organization
-  
-  Remember: Context helps you understand the code, but your review must identify actual problems
-  in the diff, not validate whether the implementation matches the intent.
 
 ═══════════════════════════════════════════════════════════════════════════════
 OUTPUT JSON SCHEMA (No markdown, no extra text)
@@ -348,38 +527,65 @@ OUTPUT JSON SCHEMA (No markdown, no extra text)
 }
 
 ═══════════════════════════════════════════════════════════════════════════════
-FINAL REMINDER
+ANALYSIS STRATEGY
 ═══════════════════════════════════════════════════════════════════════════════
-You are a DEFECT DETECTOR, not a code reviewer or mentor.
-- Report ONLY actual problems with concrete fixes
-- NO praise, NO confirmations, NO educational content
+
+1. Read PR Context first to understand developer intent
+2. Identify all Change Blocks in the files
+3. For each change:
+   a. Check if it's intentional debug/test code from PR context
+   b. Analyze for security vulnerabilities (always flag these)
+   c. Check for logic errors and bugs
+   d. Verify error handling and edge cases
+   e. Look for resource leaks and race conditions
+4. Use complete file content to verify:
+   - Type compatibility
+   - Function signatures
+   - Imported dependencies
+   - Surrounding context
+5. Cross-reference with dependency files for interface validation
+6. Generate comments only for genuine defects
+
+REMEMBER: You are a DEFECT DETECTOR with context awareness.
+- Understand developer intent, but review the actual code
+- Flag real problems, not intentional debugging code
+- Use severity appropriately based on actual risk
 - Silence on correct code is correct behavior
-- Focus on the DIFF, reference context only when necessary
 
 BEGIN ANALYSIS NOW.
-`, prContextSection, diff, changedContent, depsContent, repoStructure, layers)
+`, prContextSection, changedContent, depsContent, repoStructure, layers)
 }
 
 // AnalyzeDependencyNeeds asks the LLM which other files are needed for context.
 func AnalyzeDependencyNeeds(ctx context.Context, client *http.Client, diff string, changedFiles map[string]string, repoStructure string, prContext models.PRContext, apiKey string) ([]string, error) {
-	// Construct Prompt
+	// Filter out documentation files from changed files list
+	reviewableFiles := filterReviewableFiles(changedFiles)
+	
 	var fileList []string
-	for path := range changedFiles {
+	for path := range reviewableFiles {
 		fileList = append(fileList, path)
+	}
+
+	// If no code files changed, no dependencies needed
+	if len(fileList) == 0 {
+		return []string{}, nil
 	}
 
 	prompt := fmt.Sprintf(`You are a dependency analyzer for automated code review systems.
 Your task is to identify which additional repository files are REQUIRED to accurately validate the changes in the provided diff.
 
 ═══════════════════════════════════════════════════════════════════════════════
-INPUT: GIT DIFF
+INPUT: GIT DIFF (Code Changes Only)
 ═══════════════════════════════════════════════════════════════════════════════
 %s
 
 ═══════════════════════════════════════════════════════════════════════════════
-ALREADY AVAILABLE: Changed Files
+ALREADY AVAILABLE: Changed Code Files
 ═══════════════════════════════════════════════════════════════════════════════
 %v
+
+Note: Documentation files (.md, README, etc.) and config files have been filtered out.
+Only actual code files are being reviewed.
 
 ═══════════════════════════════════════════════════════════════════════════════
 AVAILABLE: Repository Structure
@@ -390,30 +596,44 @@ AVAILABLE: Repository Structure
 ANALYSIS TASK
 ═══════════════════════════════════════════════════════════════════════════════
 
-Analyze the diff and identify files that are CRITICAL for validating the changes.
+Analyze the diff and identify CODE files that are CRITICAL for validating the changes.
 
 INCLUDE files that provide:
-✓ Type definitions, struct definitions, or interfaces used in the diff
-✓ Function/method signatures that are called by the changed code
-✓ Constants, enums, or configuration referenced in the changes
-✓ Parent classes, base implementations, or mixins that the changed code extends
-✓ Database schema or model definitions if the diff includes queries
-✓ API endpoint definitions if the diff implements handlers
-✓ Middleware or interceptors that process the changed code's execution flow
-✓ Critical utility functions that the changed code depends on
+✓ Type definitions, struct definitions, or interfaces used in the changed code
+✓ Function/method signatures that are called by the changes
+✓ Constants, enums, or configuration referenced in the code
+✓ Parent classes, base implementations, or mixins that changed code extends
+✓ Database models or schema if the diff includes queries/database operations
+✓ API route definitions if the diff implements handlers
+✓ Middleware, interceptors, or decorators that process the changed code
+✓ Core utility functions with complex logic that changed code depends on
+✓ Shared state, singletons, or global variables accessed by the changes
 
 EXCLUDE files that are:
-✗ Standard library imports (e.g., "fmt", "encoding/json", "react")
-✗ External dependencies from node_modules, vendor, or package managers
-✗ Test files unless the diff modifies production code called by those tests
-✗ Documentation, README, or configuration files (unless diff validates config)
+✗ Documentation files (README.md, CHANGELOG.md, *.txt, *.rst, docs/*)
+✗ Configuration files (package.json, go.mod, .gitignore, docker-compose.yml, *.config.js)
+✗ Standard library imports (e.g., "fmt", "os", "react", "lodash")
+✗ External dependencies from node_modules, vendor, site-packages
+✗ Test files UNLESS the diff modifies production code that those tests directly validate
+✗ Build scripts, CI/CD configs (Makefile, .github/, .gitlab-ci.yml)
+✗ Static assets (images, fonts, CSS-only files) unless they affect code logic
 ✗ Files not present in the "Repository Structure" above
 ✗ Changed files already listed in "ALREADY AVAILABLE" section
 
-PRIORITIZATION (request max 10 files, highest priority first):
-1. Direct dependencies: files imported or referenced by changed code
-2. Type definitions: interfaces, structs, classes used in the diff
-3. Architectural dependencies: middleware, base classes, core utilities
+PRIORITIZATION (request max 12 files, highest priority first):
+1. **Direct imports/dependencies** (15 files imported/called by changed code)
+2. **Type definitions** (10 - interfaces, structs, classes used in changes)
+3. **Parent/base classes** (8 - inheritance hierarchy for changed classes)
+4. **Shared utilities** (6 - helper functions used by changes)
+5. **API/Route definitions** (4 - if changes implement endpoints)
+6. **Database models** (3 - if changes query/modify data)
+7. **Middleware** (2 - if changes are processed by middleware)
+
+SMART FILTERING:
+- If a changed file is self-contained (no external calls), return empty array
+- If imports are simple (just stdlib), no dependencies needed
+- If file only has isolated logic, skip dependencies
+- Prefer fewer, more relevant files over comprehensive coverage
 
 ═══════════════════════════════════════════════════════════════════════════════
 OUTPUT REQUIREMENTS
@@ -426,25 +646,19 @@ Return ONLY valid JSON matching this schema:
 
 Rules:
 - Return empty array if no additional files are needed: {"files": []}
-- Maximum 10 files (prioritize most critical)
+- Maximum 12 files (prioritize most critical for code validation)
+- ONLY include actual code files (no docs, no configs)
 - Paths must exactly match those in "Repository Structure"
 - No markdown formatting, no explanations, only JSON
 
 BEGIN ANALYSIS NOW.
 `, diff, fileList, repoStructure)
 
-	// Optionally add PR context if available
-	if prContext.Title != "" {
-		prompt += fmt.Sprintf("\n\nPR Context (for understanding intent):\nTitle: %s\nDescription: %s", prContext.Title, prContext.Body)
-	}
-
 	fmt.Println("\n" + strings.Repeat("=", 80))
 	fmt.Println("🔭 [SCOUT PASS] - PROMPT CONTEXT")
 	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("Diff Size: %d bytes\n", len(diff))
-	fmt.Println("\n--- FULL PROMPT ---")
-	fmt.Println(prompt)
-	fmt.Println(strings.Repeat("=", 80) + "\n")
+	fmt.Printf("Reviewable Code Files: %d\n", len(fileList))
 
 	// Prepare Request
 	reqBody := map[string]interface{}{
@@ -514,7 +728,7 @@ BEGIN ANALYSIS NOW.
 	fmt.Println(responseText)
 	fmt.Println(strings.Repeat("*", 80) + "\n")
 
-	// Extraction logic to handle markdown backticks if LLM provides them
+	// Extraction logic to handle markdown backticks
 	jsonStr := responseText
 	if idx := strings.Index(jsonStr, "```json"); idx != -1 {
 		jsonStr = jsonStr[idx+7:]
@@ -537,9 +751,20 @@ BEGIN ANALYSIS NOW.
 		return nil, fmt.Errorf("failed to parse scout JSON: %v", err)
 	}
 
+	// Filter out any documentation files that might have slipped through
+	filteredFiles := []string{}
+	for _, file := range result.Files {
+		if !isDocumentationFile(file) {
+			filteredFiles = append(filteredFiles, file)
+		}
+	}
+
 	fmt.Println("✅ [SCOUT PASS] - IDENTIFIED DEPENDENCIES")
-	fmt.Printf("Files: %v\n", result.Files)
+	fmt.Printf("Files: %v\n", filteredFiles)
+	if len(filteredFiles) != len(result.Files) {
+		fmt.Printf("Filtered out %d doc/config files\n", len(result.Files)-len(filteredFiles))
+	}
 	fmt.Println(strings.Repeat("=", 80) + "\n")
 
-	return result.Files, nil
+	return filteredFiles, nil
 }
