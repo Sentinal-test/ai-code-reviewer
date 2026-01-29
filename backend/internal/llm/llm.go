@@ -17,7 +17,7 @@ import (
 
 const (
 	// FIX #2: Use valid Gemini model name
-	geminiModel = "gemini-1.5-flash" // Changed from "gemini-3-flash-preview"
+	geminiModel = "gemini-2.5-flash" // Changed from "gemini-3-flash-preview"
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
 )
 
