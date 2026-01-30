@@ -8,15 +8,15 @@ type User struct {
 }
 
 type RepoSettings struct {
-	ID                  int
-	RepoID              string
-	UserID              int
-	IsActive            bool
-	SecurityEnabled     bool
-	BugEnabled          bool
-	LintEnabled         bool
-	PerformanceEnabled  bool
-	ArchitectureEnabled bool
+	ID                  int    `json:"id"`
+	RepoID              string `json:"repo_id"`
+	UserID              int    `json:"user_id"`
+	IsActive            bool   `json:"is_active"`
+	SecurityEnabled     bool   `json:"security_enabled"`
+	BugEnabled          bool   `json:"bug_enabled"`
+	LintEnabled         bool   `json:"lint_enabled"`
+	PerformanceEnabled  bool   `json:"performance_enabled"`
+	ArchitectureEnabled bool   `json:"architecture_enabled"`
 }
 
 type ReviewComment struct {
