@@ -4,18 +4,46 @@ An automated, hyper-critical code defect detection system. It leverages a Go bac
 
 ## 🔄 Application Flow
 
-```mermaid
-graph TD
-    A[Pull Request Event] -->|Webhook| B(Go Backend)
-    B --> C{Scout Pass}
-    C -->|Analyze Diff + Tree| D[Identify Dependencies]
-    D --> E[Fetch File Contents from GitHub]
-    E --> F{Reviewer Pass}
-    F -->|Analyze Context + Diff| G[Detect Defects]
-    G --> H{Post Comments}
-    H -->|Valid Diff Line| I[Inline GitHub Comment]
-    H -->|Invalid/Context Line| J[General PR Comment]
-```
+┌───────────────────────┐
+│   Pull Request Event  │
+└───────────┬───────────┘
+            │ GitHub Webhook
+            ▼
+┌───────────────────────┐
+│     Go Backend        │
+└───────────┬───────────┘
+            ▼
+┌───────────────────────┐
+│     Scout Pass        │
+│  - Analyze Diff       │
+│  - Parse File Tree    │
+└───────────┬───────────┘
+            ▼
+┌───────────────────────┐
+│ Identify Dependencies │
+└───────────┬───────────┘
+            ▼
+┌───────────────────────┐
+│ Fetch Files from GH   │
+└───────────┬───────────┘
+            ▼
+┌───────────────────────┐
+│    Reviewer Pass      │
+│ - Context Analysis    │
+│ - Diff Review         │
+└───────────┬───────────┘
+            ▼
+┌───────────────────────┐
+│   Detect Defects      │
+└───────────┬───────────┘
+            ▼
+┌───────────────────────────────┐
+│        Post Comments           │
+├───────────────┬───────────────┤
+│ Inline Comment│ General Comment│
+│ (Valid Line)  │ (Context Line) │
+└───────────────┴───────────────┘
+
 
 ---
 
