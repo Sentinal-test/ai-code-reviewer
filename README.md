@@ -6,29 +6,41 @@ An automated, hyper-critical code defect detection system. It leverages a Go bac
 
 ```mermaid
 flowchart TD
-    A[Pull Request Event] -->|GitHub Webhook| B(Go Backend)
+    A[Pull Request Event] -->|GitHub Webhook| B[Go Backend]
+
     B --> C{Scout Pass}
+
     subgraph Scout Pass
-    C1[Analyze Diff]
-    C2[Parse File Tree]
+        C1[Analyze Diff]
+        C2[Parse File Tree]
     end
+
     C --> C1
     C --> C2
+
     C1 --> D[Identify Dependencies]
     C2 --> D
-    D --> E[Fetch Files from GH]
+
+    D --> E[Fetch Files from GitHub]
+
     E --> F{Reviewer Pass}
+
     subgraph Reviewer Pass
-    F1[Context Analysis]
-    F2[Diff Review]
+        F1[Context Analysis]
+        F2[Diff Review]
     end
+
     F --> F1
     F --> F2
+
     F1 --> G[Detect Defects]
     F2 --> G
+
     G --> H[Post Comments]
-    H --> I[Inline Comment\n(Valid Line)]
-    H --> J[General Comment\n(Context Line)]
+
+    H --> I[Inline Comment - Valid Line]
+    H --> J[General Comment - Context Line]
+
 ```
 
 
