@@ -103,7 +103,7 @@ func main() {
 		port = "8080"
 	}
 
-	fmt.Printf("🚀 Server starting on port %s...\n", port)
+	fmt.Printf("Server starting on port %s...\n", port)
 	http.ListenAndServe(":"+port, r)
 }
 
