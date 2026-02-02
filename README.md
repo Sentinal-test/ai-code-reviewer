@@ -4,45 +4,33 @@ An automated, hyper-critical code defect detection system. It leverages a Go bac
 
 ## 🔄 Application Flow
 
-┌───────────────────────┐
-│   Pull Request Event  │
-└───────────┬───────────┘
-            │ GitHub Webhook
-            ▼
-┌───────────────────────┐
-│     Go Backend        │
-└───────────┬───────────┘
-            ▼
-┌───────────────────────┐
-│     Scout Pass        │
-│  - Analyze Diff       │
-│  - Parse File Tree    │
-└───────────┬───────────┘
-            ▼
-┌───────────────────────┐
-│ Identify Dependencies │
-└───────────┬───────────┘
-            ▼
-┌───────────────────────┐
-│ Fetch Files from GH   │
-└───────────┬───────────┘
-            ▼
-┌───────────────────────┐
-│    Reviewer Pass      │
-│ - Context Analysis    │
-│ - Diff Review         │
-└───────────┬───────────┘
-            ▼
-┌───────────────────────┐
-│   Detect Defects      │
-└───────────┬───────────┘
-            ▼
-┌───────────────────────────────┐
-│        Post Comments           │
-├───────────────┬───────────────┤
-│ Inline Comment│ General Comment│
-│ (Valid Line)  │ (Context Line) │
-└───────────────┴───────────────┘
+```mermaid
+flowchart TD
+    A[Pull Request Event] -->|GitHub Webhook| B(Go Backend)
+    B --> C{Scout Pass}
+    subgraph Scout Pass
+    C1[Analyze Diff]
+    C2[Parse File Tree]
+    end
+    C --> C1
+    C --> C2
+    C1 --> D[Identify Dependencies]
+    C2 --> D
+    D --> E[Fetch Files from GH]
+    E --> F{Reviewer Pass}
+    subgraph Reviewer Pass
+    F1[Context Analysis]
+    F2[Diff Review]
+    end
+    F --> F1
+    F --> F2
+    F1 --> G[Detect Defects]
+    F2 --> G
+    G --> H[Post Comments]
+    H --> I[Inline Comment\n(Valid Line)]
+    H --> J[General Comment\n(Context Line)]
+```
+
 
 
 ---
