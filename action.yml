@@ -46,7 +46,7 @@ runs:
         
         echo "Building AI Reviewer..."
         cd backend
-        go build -v -o ../ai-reviewer cmd/cli/main.go
+        go build -v -o ../ai-reviewer ./cmd/cli
         cd ..
         
         echo "Running AI Reviewer..."
