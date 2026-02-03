@@ -220,6 +220,23 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		fmt.Printf("⚠️ Failed to create check run: %v\n", err)
 	}
 
+	// 2.6 Conflict Detection: Check if GitHub Action is configured
+	// If the user has setup the GitHub Action, we should NOT run the SaaS review to avoid duplicates.
+	// We check for the existence of the workflow file.
+	_, errAction := internalGH.GetFileContent(ctx, client, repo.GetOwner().GetLogin(), repo.GetName(), ".github/workflows/ai-review.yml", commitSHA)
+	if errAction == nil {
+		// File exists!
+		fmt.Printf("🛑 Action Mode Detected for PR #%d. Skipping SaaS review.\n", pr.GetNumber())
+
+		summary := "Review skipped because **GitHub Action execution mode** is detected (`.github/workflows/ai-review.yml`).\n\nThe AI Reviewer will run via your GitHub Actions workflow instead."
+		if checkRunID != 0 {
+			// Mark as "Neutral" or "Skipped" (using "neutral" conclusion)
+			// Note: GitHub Check Runs allow: success, failure, neutral, cancelled, skipped, timed_out, action_required
+			internalGH.UpdateCheckRun(ctx, client, repo.GetOwner().GetLogin(), repo.GetName(), checkRunID, "skipped", summary)
+		}
+		return
+	}
+
 	// 3. Fetch PR Commits for context
 	fmt.Printf("📜 Fetching commits for PR #%d...\n", pr.GetNumber())
 	commits, _, err := client.PullRequests.ListCommits(ctx, repo.GetOwner().GetLogin(), repo.GetName(), pr.GetNumber(), &github.ListOptions{PerPage: 20})

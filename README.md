@@ -108,4 +108,7 @@ flowchart TD
 ## 🛡️ Key Documentation
 - [Project Overview](./docs/PROJECT_OVERVIEW.md)
 - [Architectural Decision Records](./docs/ARCHITECTURAL_DECISION_RECORDS.md)
+- [Context Window Management](./docs/CONTEXT_WINDOW_MANAGEMENT.md)
+- [Cost Analysis](./docs/COST_ANALYSIS.md)
 - [Advanced Context Strategy](./docs/advanced_context_strategy.md)
+

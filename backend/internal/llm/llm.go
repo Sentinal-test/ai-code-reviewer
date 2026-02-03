@@ -284,7 +284,7 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	// Context Window Management
 	// Priority: Complete Files with Diff Annotations > Dependencies > Repo Structure
 	// Target Max Chars: ~400,000 (approx 100k tokens safety)
-	const MaxContextChars = 400000
+	const MaxContextChars = 1000000
 
 	// Helper to format files with inline diff annotations
 	formatFilesWithDiff := func(files map[string]string, diffMap map[string][]string) string {
