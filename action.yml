@@ -16,6 +16,9 @@ inputs:
   head_ref:
     description: 'Head reference for diff'
     default: 'HEAD'
+  allowed_domain:
+    description: 'Restrict reviews to authors with this email domain (e.g. appointy.com)'
+    required: false
 
 runs:
   using: "composite"
@@ -23,7 +26,8 @@ runs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.22'
+        go-version: '1.25' # Matching go.mod
+        cache-dependency-path: backend/go.sum
 
     - name: Run AI Reviewer
       shell: bash
@@ -31,6 +35,7 @@ runs:
         GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         PR_NUMBER: ${{ inputs.pr_number }}
+        ALLOWED_DOMAIN: ${{ inputs.allowed_domain }}
         # Pass other env vars that the CLI expects
       run: |
         # We assume the action is checked out or the tool is available. 
@@ -45,4 +50,4 @@ runs:
         cd ..
         
         echo "Running AI Reviewer..."
-        ./ai-reviewer --base "${{ inputs.base_ref }}" --head "${{ inputs.head_ref }}"
+        ./ai-reviewer --base "${{ inputs.base_ref }}" --head "${{ inputs.head_ref }}" --allowed-domain "${{ env.ALLOWED_DOMAIN }}"
