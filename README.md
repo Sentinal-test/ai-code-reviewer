@@ -89,7 +89,6 @@ jobs:
           fetch-depth: 0 # Important for diff analysis
 
       - name: AI Code Reviewer
-        # 👇 Replace YOUR_USERNAME with the actual repo path
         uses: tegveer-work/ai-code-reviewer@main 
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
