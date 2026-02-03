@@ -66,7 +66,13 @@ Go to your project repository's **Settings > Secrets and variables > Actions** a
 - `GITHUB_TOKEN`: This is usually built-in, no action needed unless you use a custom PAT.
 
 ### 2. Copy & Paste Workflow
-Create `.github/workflows/ai-review.yml` in your project and paste the following:
+Create `.github/workflows/ai-review.yml` in your project. 
+
+**Note for Teammates**: Because this repository is private and owned by a personal account, you cannot use the `uses:` command directly. You must first "check out" the action using a **Personal Access Token (PAT)**.
+
+1.  Create a [Personal Access Token (classic)](https://github.com/settings/tokens/new) with `repo` scope.
+2.  Add it as a secret named `ACTION_ACCESS_TOKEN` in **your** repository.
+3.  Use the following YAML:
 
 ```yaml
 name: AI Code Review
@@ -83,18 +89,25 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout Your Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Important for diff analysis
+          fetch-depth: 0
 
-      - name: AI Code Reviewer
-        # 👇 Replace YOUR_USERNAME with the actual repo path
-        uses: tegveer-work/ai-code-reviewer@main 
+      - name: Checkout AI Reviewer Action
+        uses: actions/checkout@v4
+        with:
+          repository: tegveer-work/ai-code-reviewer # YOUR repo
+          token: ${{ secrets.ACTION_ACCESS_TOKEN }} # The PAT you created
+          path: .github/actions/ai-reviewer
+          ref: main
+
+      - name: Run AI Reviewer
+        uses: ./.github/actions/ai-reviewer
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          allowed_domain: "appointy.com" 
+          allowed_domain: "appointy.com"
 ```
 
 ---
