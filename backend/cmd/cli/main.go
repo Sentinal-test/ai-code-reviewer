@@ -64,15 +64,39 @@ func main() {
 
 	repoStructure, _ := action.GetRepoStructure()
 
-	// Mock dependencies for now, or implement deeper analysis if needed
-	dependencies := make(map[string]string)
-
 	// 3. Prepare Context
 	// In a real action, we might read the PullRequest Event JSON to get Title/Body.
 	// For now, we use placeholders or minimal info.
 	prContext := models.PRContext{
 		Title: "Automated PR Review",
 		Body:  "Running via GitHub Actions CLI",
+	}
+
+	// 4.7 Scout Pass: Analyze Dependencies
+	dependencies := make(map[string]string)
+	fmt.Printf("🕵️‍♀️ Scout Pass: Analyzing dependency needs...\n")
+
+	// Create a client for the Scout Pass
+	scoutClient := &http.Client{}
+
+	depPaths, err := llm.AnalyzeDependencyNeeds(context.Background(), scoutClient, diff, changedFiles, repoStructure, prContext, apiKey)
+	if err != nil {
+		fmt.Printf("⚠️ Scout Pass failed: %v\n", err)
+	} else {
+		fmt.Printf("🔍 Scout identified %d dependencies: %v\n", len(depPaths), depPaths)
+		for _, path := range depPaths {
+			// Skip if already in changedFiles
+			if _, exists := changedFiles[path]; exists {
+				continue
+			}
+			fmt.Printf("  📥 Fetching dependency: %s\n", path)
+			content, err := action.GetFileContent(path)
+			if err != nil {
+				fmt.Printf("  ⚠️ Failed to fetch dependency %s: %v\n", path, err)
+			} else {
+				dependencies[path] = content
+			}
+		}
 	}
 
 	// Settings - Default to "Enable All" for Action mode, or parse inputs
