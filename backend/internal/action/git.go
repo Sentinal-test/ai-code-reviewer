@@ -17,8 +17,9 @@ func ensureHistory(base, head string) {
 	// 2. If still shallow, try to unshallow (ignoring errors as it fails if already full)
 	exec.Command("git", "fetch", "--unshallow").Run()
 
-	// 3. Fallback: Fetch more depth if mostly shallow
-	exec.Command("git", "fetch", "--depth=100", "origin").Run()
+	// 3. Fallback: Fetch everything
+	exec.Command("git", "fetch", "--all").Run()
+	exec.Command("git", "fetch", "origin").Run()
 }
 
 // GetDiff returns the git diff between two references.
@@ -43,16 +44,16 @@ func GetDiff(base, head string) (string, error) {
 			return string(outRetry), nil
 		}
 
-		// Final Fallback: Direct diff (two dots)
-		// This is risky as it includes "reverse changes" if base is ahead, but better than failure.
-		fmt.Printf("⚠️ Symmetric diff failed even after fetch. Falling back to direct diff (base..head).\n")
-		cmdFallback := exec.Command("git", "diff", fmt.Sprintf("%s..%s", base, head)) // or just base head
+		// Final Fallback: Direct diff (space separated)
+		// This compares the two tips directly, ignoring the merge base.
+		fmt.Printf("⚠️ Symmetric diff failed even after fetch. Falling back to direct diff (%s %s).\n", base, head)
+		cmdFallback := exec.Command("git", "diff", base, head)
 		outFallback, errFallback := cmdFallback.CombinedOutput()
 		if errFallback == nil {
 			return string(outFallback), nil
 		}
 
-		return "", fmt.Errorf("git diff failed after retry: %s: %w", string(outRetry), errRetry)
+		return "", fmt.Errorf("git diff fallback failed: %s: %w (original error: %s)", string(outFallback), errFallback, string(outRetry))
 	}
 
 	return "", fmt.Errorf("git diff failed: %s: %w", string(out), err)
@@ -71,10 +72,10 @@ func GetChangedFiles(base, head string) ([]string, error) {
 		outRetry, errRetry := cmdRetry.CombinedOutput()
 		if errRetry != nil {
 			// Fallback to direct diff
-			cmdFallback := exec.Command("git", "diff", "--name-only", fmt.Sprintf("%s..%s", base, head))
+			cmdFallback := exec.Command("git", "diff", "--name-only", base, head)
 			outFallback, errFallback := cmdFallback.CombinedOutput()
 			if errFallback != nil {
-				return nil, fmt.Errorf("git diff --name-only failed: %s: %w", string(outRetry), errRetry)
+				return nil, fmt.Errorf("git diff --name-only fallback failed: %s: %w", string(outFallback), errFallback)
 			}
 			outRetry = outFallback
 		}
