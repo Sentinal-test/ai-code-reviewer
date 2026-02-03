@@ -56,63 +56,7 @@ flowchart TD
 
 ---
 
-## 🚀 GitHub Actions Setup (Team Guide)
-
-Since this repository is private, teammates added as collaborators can use this AI Reviewer directly in their own projects.
-
-### 1. Add Secrets
-Go to your project repository's **Settings > Secrets and variables > Actions** and add:
-- `GEMINI_API_KEY`: Your Google Gemini API Key.
-- `GITHUB_TOKEN`: This is usually built-in, no action needed unless you use a custom PAT.
-
-### 2. Copy & Paste Workflow
-Create `.github/workflows/ai-review.yml` in your project. 
-
-**Note for Teammates**: Because this repository is private and owned by a personal account, you cannot use the `uses:` command directly. You must first "check out" the action using a **Personal Access Token (PAT)**.
-
-1.  Create a [Personal Access Token (classic)](https://github.com/settings/tokens/new) with `repo` scope.
-2.  Add it as a secret named `ACTION_ACCESS_TOKEN` in **your** repository.
-3.  Use the following YAML:
-
-```yaml
-name: AI Code Review
-
-on:
-  pull_request:
-    types: [opened, synchronize]
-
-permissions:
-  contents: read
-  pull-requests: write
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Your Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Checkout AI Reviewer Action
-        uses: actions/checkout@v4
-        with:
-          repository: tegveer-work/ai-code-reviewer # YOUR repo
-          token: ${{ secrets.ACTION_ACCESS_TOKEN }} # The PAT you created
-          path: .github/actions/ai-reviewer
-          ref: main
-
-      - name: Run AI Reviewer
-        uses: ./.github/actions/ai-reviewer
-        with:
-          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          allowed_domain: "appointy.com"
-```
-
----
-
-## 💻 Local Development Setup
+## 🚀 Local Development Setup
 
 ### 1. GitHub App Setup
 1.  Go to **GitHub Settings > Developer Settings > GitHub Apps > New GitHub App**.

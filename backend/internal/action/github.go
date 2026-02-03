@@ -70,23 +70,3 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 
 	return nil
 }
-
-// GetPullRequestAuthor fetches the login and email of the PR author.
-func (g *GitHubClient) GetPullRequestAuthor(ctx context.Context, prNumber int) (string, string, error) {
-	pr, _, err := g.client.PullRequests.Get(ctx, g.owner, g.repo, prNumber)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to fetch PR: %w", err)
-	}
-
-	user := pr.GetUser()
-	login := user.GetLogin()
-
-	// Fetch full user profile to get email if possible
-	fullUser, _, err := g.client.Users.Get(ctx, login)
-	if err != nil {
-		// Fallback to minimal info if profile fetch fails
-		return login, user.GetEmail(), nil
-	}
-
-	return login, fullUser.GetEmail(), nil
-}
