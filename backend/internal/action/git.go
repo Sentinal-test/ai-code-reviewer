@@ -6,15 +6,56 @@ import (
 	"strings"
 )
 
+// ensureHistory attempts to fetch enough history for valid diffs if the first attempt failed.
+func ensureHistory(base, head string) {
+	fmt.Printf("🔄 Attempting to fetch missing history for %s...%s\n", base, head)
+
+	// 1. Try fetching just the missing commits (if remote supports it)
+	exec.Command("git", "fetch", "origin", base).Run()
+	exec.Command("git", "fetch", "origin", head).Run()
+
+	// 2. If still shallow, try to unshallow (ignoring errors as it fails if already full)
+	exec.Command("git", "fetch", "--unshallow").Run()
+
+	// 3. Fallback: Fetch more depth if mostly shallow
+	exec.Command("git", "fetch", "--depth=100", "origin").Run()
+}
+
 // GetDiff returns the git diff between two references.
 func GetDiff(base, head string) (string, error) {
 	// git diff base...head
 	cmd := exec.Command("git", "diff", fmt.Sprintf("%s...%s", base, head))
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git diff failed: %s: %w", string(out), err)
+	if err == nil {
+		return string(out), nil
 	}
-	return string(out), nil
+
+	// If failed, try to fetch history and retry
+	errStr := string(out)
+	if strings.Contains(errStr, "unknown revision") || strings.Contains(errStr, "Invalid symmetric difference") {
+		ensureHistory(base, head)
+
+		// Retry
+		cmdRetry := exec.Command("git", "diff", fmt.Sprintf("%s...%s", base, head))
+		outRetry, errRetry := cmdRetry.CombinedOutput()
+		if errRetry == nil {
+			fmt.Printf("✅ Recovered from diff error after fetching history.\n")
+			return string(outRetry), nil
+		}
+
+		// Final Fallback: Direct diff (two dots)
+		// This is risky as it includes "reverse changes" if base is ahead, but better than failure.
+		fmt.Printf("⚠️ Symmetric diff failed even after fetch. Falling back to direct diff (base..head).\n")
+		cmdFallback := exec.Command("git", "diff", fmt.Sprintf("%s..%s", base, head)) // or just base head
+		outFallback, errFallback := cmdFallback.CombinedOutput()
+		if errFallback == nil {
+			return string(outFallback), nil
+		}
+
+		return "", fmt.Errorf("git diff failed after retry: %s: %w", string(outRetry), errRetry)
+	}
+
+	return "", fmt.Errorf("git diff failed: %s: %w", string(out), err)
 }
 
 // GetChangedFiles returns a list of files that have changed between base and head.
@@ -23,7 +64,21 @@ func GetChangedFiles(base, head string) ([]string, error) {
 	cmd := exec.Command("git", "diff", "--name-only", fmt.Sprintf("%s...%s", base, head))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("git diff --name-only failed: %s: %w", string(out), err)
+		// Try to fix history same as GetDiff
+		ensureHistory(base, head)
+
+		cmdRetry := exec.Command("git", "diff", "--name-only", fmt.Sprintf("%s...%s", base, head))
+		outRetry, errRetry := cmdRetry.CombinedOutput()
+		if errRetry != nil {
+			// Fallback to direct diff
+			cmdFallback := exec.Command("git", "diff", "--name-only", fmt.Sprintf("%s..%s", base, head))
+			outFallback, errFallback := cmdFallback.CombinedOutput()
+			if errFallback != nil {
+				return nil, fmt.Errorf("git diff --name-only failed: %s: %w", string(outRetry), errRetry)
+			}
+			outRetry = outFallback
+		}
+		out = outRetry
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
