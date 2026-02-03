@@ -24,7 +24,6 @@ runs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25' # Matching go.mod
-        cache-dependency-path: backend/go.sum
 
     - name: Run AI Reviewer
       shell: bash
@@ -40,10 +39,17 @@ runs:
         # Since the requirements say "The reviewer logic should be executable as: a CLI binary... inside the GitHub Actions runner",
         # and "Code never leaves...", compiling from source in the runner is safe and easy.
         
+      run: |
         echo "Building AI Reviewer..."
-        cd backend
+        # We need to build the tool from the ACTION'S source code, not the user's repo.
+        cd "${{ github.action_path }}/backend"
+        
+        # Build the binary and output it to the action root
         go build -v -o ../ai-reviewer cmd/cli/main.go
-        cd ..
         
         echo "Running AI Reviewer..."
-        ./ai-reviewer --base "${{ inputs.base_ref }}" --head "${{ inputs.head_ref }}"
+        # We go back to the workspace (implicitly or explicitly) to run git commands in the user's repo
+        cd "${{ github.workspace }}"
+        
+        # Execute the binary we just built
+        "${{ github.action_path }}/ai-reviewer" --base "${{ inputs.base_ref }}" --head "${{ inputs.head_ref }}"
