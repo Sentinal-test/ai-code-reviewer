@@ -24,11 +24,46 @@ func main() {
 	baseRef := flag.String("base", "main", "Base ref to diff against")
 	headRef := flag.String("head", "HEAD", "Head ref to diff")
 	dryRun := flag.Bool("dry-run", false, "Print results to stdout instead of commenting")
+	allowedDomain := flag.String("allowed-domain", "", "Restrict reviews to PR authors with this email domain (e.g. appointy.com)")
 	flag.Parse()
 
 	if apiKey == "" {
 		fmt.Println("❌ Error: GEMINI_API_KEY is required")
 		os.Exit(1)
+	}
+
+	// 2. Prepare GitHub Client if needed for metadata checks
+	var ghClient *action.GitHubClient
+	ctx := context.Background()
+
+	if (githubToken != "" && repoName != "" && prNumber != "") || *allowedDomain != "" {
+		parts := strings.Split(repoName, "/")
+		if len(parts) == 2 {
+			ghClient = action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
+		}
+	}
+
+	// 2.1 Domain Restriction Check
+	if *allowedDomain != "" && ghClient != nil {
+		var prNum int
+		fmt.Sscanf(prNumber, "%d", &prNum)
+
+		fmt.Printf("🔒 Checking authorization for PR #%d AUTHOR...\n", prNum)
+		login, email, err := ghClient.GetPullRequestAuthor(ctx, prNum)
+		if err != nil {
+			fmt.Printf("⚠️ Warning: Could not verify PR author: %v. Proceeding with caution.\n", err)
+		} else {
+			fmt.Printf("👤 PR Author: %s (Email: %s)\n", login, email)
+			if email == "" {
+				fmt.Printf("🛑 Authorization Failed: Could not find email for user %s. Private emails might be hidden.\n", login)
+				os.Exit(0) // Exit gracefully so the CI doesn't fail, but skip review
+			}
+			if !strings.HasSuffix(strings.ToLower(email), "@"+strings.ToLower(*allowedDomain)) {
+				fmt.Printf("🛑 Authorization Failed: User %s with email %s is not from domain %s. Skipping review.\n", login, email, *allowedDomain)
+				os.Exit(0)
+			}
+			fmt.Printf("✅ Authorization Success: User is from %s\n", *allowedDomain)
+		}
 	}
 
 	// 2. Local Git Operations (Security-First: Code stays here)
@@ -64,15 +99,39 @@ func main() {
 
 	repoStructure, _ := action.GetRepoStructure()
 
-	// Mock dependencies for now, or implement deeper analysis if needed
-	dependencies := make(map[string]string)
-
 	// 3. Prepare Context
 	// In a real action, we might read the PullRequest Event JSON to get Title/Body.
 	// For now, we use placeholders or minimal info.
 	prContext := models.PRContext{
 		Title: "Automated PR Review",
 		Body:  "Running via GitHub Actions CLI",
+	}
+
+	// 4.7 Scout Pass: Analyze Dependencies
+	dependencies := make(map[string]string)
+	fmt.Printf("🕵️‍♀️ Scout Pass: Analyzing dependency needs...\n")
+
+	// Create a client for the Scout Pass
+	scoutClient := &http.Client{}
+
+	depPaths, err := llm.AnalyzeDependencyNeeds(context.Background(), scoutClient, diff, changedFiles, repoStructure, prContext, apiKey)
+	if err != nil {
+		fmt.Printf("⚠️ Scout Pass failed: %v\n", err)
+	} else {
+		fmt.Printf("🔍 Scout identified %d dependencies: %v\n", len(depPaths), depPaths)
+		for _, path := range depPaths {
+			// Skip if already in changedFiles
+			if _, exists := changedFiles[path]; exists {
+				continue
+			}
+			fmt.Printf("  📥 Fetching dependency: %s\n", path)
+			content, err := action.GetFileContent(path)
+			if err != nil {
+				fmt.Printf("  ⚠️ Failed to fetch dependency %s: %v\n", path, err)
+			} else {
+				dependencies[path] = content
+			}
+		}
 	}
 
 	// Settings - Default to "Enable All" for Action mode, or parse inputs
@@ -87,7 +146,7 @@ func main() {
 	// 4. Run Review
 	fmt.Println("🤖 Starting AI Review...")
 	// Action mode execution
-	ctx := context.Background()
+	// Re-using ctx from above
 	client := &http.Client{} // Standard client
 
 	result, err := llm.RunReview(ctx, client, diff, changedFiles, dependencies, settings, repoStructure, apiKey, prContext)
@@ -124,7 +183,10 @@ func main() {
 		var prNum int
 		fmt.Sscanf(prNumber, "%d", &prNum)
 
-		ghClient := action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
+		// Re-using ghClient if available, otherwise create it
+		if ghClient == nil {
+			ghClient = action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
+		}
 		if err := ghClient.PostReview(ctx, prNum, result, commitSHA); err != nil {
 			fmt.Printf("❌ Failed to post review: %v\n", err)
 			os.Exit(1)
