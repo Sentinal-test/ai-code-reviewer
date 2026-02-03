@@ -107,7 +107,6 @@ jobs:
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          allowed_domain: "appointy.com"
 ```
 
 ---

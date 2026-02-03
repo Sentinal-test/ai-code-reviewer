@@ -16,9 +16,6 @@ inputs:
   head_ref:
     description: 'Head reference for diff'
     default: 'HEAD'
-  allowed_domain:
-    description: 'Restrict reviews to authors with this email domain (e.g. appointy.com)'
-    required: false
 
 runs:
   using: "composite"
@@ -35,7 +32,7 @@ runs:
         GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         PR_NUMBER: ${{ inputs.pr_number }}
-        ALLOWED_DOMAIN: ${{ inputs.allowed_domain }}
+        ALLOWED_DOMAIN: ""
         # Pass other env vars that the CLI expects
       run: |
         echo "Building AI Reviewer..."
@@ -44,4 +41,4 @@ runs:
         
         echo "Running AI Reviewer..."
         # We run the binary from the action path
-        ${{ github.action_path }}/ai-reviewer --base "${{ inputs.base_ref }}" --head "${{ inputs.head_ref }}" --allowed-domain "${{ env.ALLOWED_DOMAIN }}"
+        ${{ github.action_path }}/ai-reviewer --base "${{ inputs.base_ref }}" --head "${{ inputs.head_ref }}"

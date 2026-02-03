@@ -25,7 +25,6 @@ func main() {
 	baseRef := flag.String("base", "main", "Base ref to diff against")
 	headRef := flag.String("head", "HEAD", "Head ref to diff")
 	dryRun := flag.Bool("dry-run", false, "Print results to stdout instead of commenting")
-	allowedDomain := flag.String("allowed-domain", "", "Restrict reviews to PR authors with this email domain (e.g. appointy.com)")
 	flag.Parse()
 
 	// Try to detect PR number from GitHub Event JSON if not provided
@@ -62,41 +61,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 2. Prepare GitHub Client if needed for metadata checks
+	// 2. Prepare GitHub Client if needed
 	var ghClient *action.GitHubClient
 	ctx := context.Background()
 
-	if (githubToken != "" && repoName != "" && prNumber != "") || *allowedDomain != "" {
+	if githubToken != "" && repoName != "" && prNumber != "" {
 		parts := strings.Split(repoName, "/")
 		if len(parts) == 2 {
 			ghClient = action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
-		}
-	}
-
-	// 2.1 Domain Restriction Check
-	if *allowedDomain != "" {
-		if prNumber == "" || prNumber == "0" {
-			fmt.Printf("⚠️ Warning: allowed-domain check requested but PR number is missing. Skipping auth check.\n")
-		} else if ghClient != nil {
-			var prNum int
-			fmt.Sscanf(prNumber, "%d", &prNum)
-
-			fmt.Printf("🔒 Checking authorization for PR #%d AUTHOR...\n", prNum)
-			login, email, err := ghClient.GetPullRequestAuthor(ctx, prNum)
-			if err != nil {
-				fmt.Printf("⚠️ Warning: Could not verify PR author: %v. Proceeding with caution.\n", err)
-			} else {
-				fmt.Printf("👤 PR Author: %s (Email: %s)\n", login, email)
-				if email == "" {
-					fmt.Printf("🛑 Authorization Failed: Could not find email for user %s. Private emails might be hidden.\n", login)
-					os.Exit(0) // Exit gracefully so the CI doesn't fail, but skip review
-				}
-				if !strings.HasSuffix(strings.ToLower(email), "@"+strings.ToLower(*allowedDomain)) {
-					fmt.Printf("🛑 Authorization Failed: User %s with email %s is not from domain %s. Skipping review.\n", login, email, *allowedDomain)
-					os.Exit(0)
-				}
-				fmt.Printf("✅ Authorization Success: User is from %s\n", *allowedDomain)
-			}
 		}
 	}
 
