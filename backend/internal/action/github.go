@@ -83,10 +83,19 @@ func (g *GitHubClient) GetPullRequestAuthor(ctx context.Context, prNumber int) (
 
 	// Fetch full user profile to get email if possible
 	fullUser, _, err := g.client.Users.Get(ctx, login)
-	if err != nil {
-		// Fallback to minimal info if profile fetch fails
-		return login, user.GetEmail(), nil
+	email := ""
+	if err == nil {
+		email = fullUser.GetEmail()
 	}
 
-	return login, fullUser.GetEmail(), nil
+	// Fallback: If profile email is private, check the email in the PR commits
+	if email == "" {
+		commits, _, err := g.client.PullRequests.ListCommits(ctx, g.owner, g.repo, prNumber, &github.ListOptions{PerPage: 5})
+		if err == nil && len(commits) > 0 {
+			// Get email from the first commit in the PR
+			email = commits[0].GetCommit().GetAuthor().GetEmail()
+		}
+	}
+
+	return login, email, nil
 }
