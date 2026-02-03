@@ -16,8 +16,7 @@ func main() {
 	// 1. Parse Args & Env
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	githubToken := os.Getenv("GITHUB_TOKEN")
-	prNumber := os.Getenv("PR_NUMBER")
-	githubEventPath := os.Getenv("GITHUB_EVENT_PATH")
+	prNumber := os.Getenv("PR_NUMBER")         // PR number usually comes from event payload, but direct env var is simpler for some setups
 	repoName := os.Getenv("GITHUB_REPOSITORY") // owner/repo
 	commitSHA := os.Getenv("GITHUB_SHA")
 
@@ -25,88 +24,45 @@ func main() {
 	baseRef := flag.String("base", "main", "Base ref to diff against")
 	headRef := flag.String("head", "HEAD", "Head ref to diff")
 	dryRun := flag.Bool("dry-run", false, "Print results to stdout instead of commenting")
+	allowedDomain := flag.String("allowed-domain", "", "Restrict reviews to PR authors with this email domain (e.g. appointy.com)")
 	flag.Parse()
-
-	// Try to detect PR number from GitHub Event JSON if not provided
-	if prNumber == "" && githubEventPath != "" {
-		fmt.Printf("🔍 PR_NUMBER not provided, attempting to detect from event payload...\n")
-		data, err := os.ReadFile(githubEventPath)
-		if err == nil {
-			// Very simple hunt for "number": 123
-			// In pull_request events, this is at the top level
-			importStr := string(data)
-			// We look for "number": <digits>
-			// This is a bit hacky but avoids heavy json parsing of unknown event types
-			// In PR event it looks like: "number": 5,
-			if strings.Contains(importStr, "\"pull_request\"") {
-				// PR event
-				// We'll search for "number":
-				parts := strings.Split(importStr, "\"number\":")
-				if len(parts) > 1 {
-					sub := strings.TrimSpace(parts[1])
-					end := strings.IndexFunc(sub, func(r rune) bool {
-						return r < '0' || r > '9'
-					})
-					if end > 0 {
-						prNumber = sub[:end]
-						fmt.Printf("✅ Detected PR #%s from event payload.\n", prNumber)
-					}
-				}
-			}
-		}
-	}
 
 	if apiKey == "" {
 		fmt.Println("❌ Error: GEMINI_API_KEY is required")
 		os.Exit(1)
 	}
 
-	// 2. Prepare GitHub Client if needed
+	// 2. Prepare GitHub Client if needed for metadata checks
 	var ghClient *action.GitHubClient
 	ctx := context.Background()
 
-	if githubToken != "" && repoName != "" && prNumber != "" {
+	if (githubToken != "" && repoName != "" && prNumber != "") || *allowedDomain != "" {
 		parts := strings.Split(repoName, "/")
 		if len(parts) == 2 {
 			ghClient = action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
 		}
 	}
 
-	// 2.2 Base/Head Detection for GitHub Actions
-	if githubEventPath != "" {
-		data, err := os.ReadFile(githubEventPath)
-		if err == nil {
-			importStr := string(data)
-			if strings.Contains(importStr, "\"pull_request\"") {
-				// Base SHA detection
-				if *baseRef == "main" || *baseRef == "origin/main" {
-					parts := strings.Split(importStr, "\"base\":")
-					if len(parts) > 1 {
-						shaParts := strings.Split(parts[1], "\"sha\":")
-						if len(shaParts) > 1 {
-							val := strings.Trim(strings.Split(shaParts[1], ",")[0], " \"\n\r\t")
-							if len(val) > 7 {
-								*baseRef = val
-								fmt.Printf("🎯 Auto-detected PR Base SHA: %s\n", *baseRef)
-							}
-						}
-					}
-				}
-				// Head SHA detection
-				if *headRef == "HEAD" {
-					parts := strings.Split(importStr, "\"head\":")
-					if len(parts) > 1 {
-						shaParts := strings.Split(parts[1], "\"sha\":")
-						if len(shaParts) > 1 {
-							val := strings.Trim(strings.Split(shaParts[1], ",")[0], " \"\n\r\t")
-							if len(val) > 7 {
-								*headRef = val
-								fmt.Printf("🎯 Auto-detected PR Head SHA: %s\n", *headRef)
-							}
-						}
-					}
-				}
+	// 2.1 Domain Restriction Check
+	if *allowedDomain != "" && ghClient != nil {
+		var prNum int
+		fmt.Sscanf(prNumber, "%d", &prNum)
+
+		fmt.Printf("🔒 Checking authorization for PR #%d AUTHOR...\n", prNum)
+		login, email, err := ghClient.GetPullRequestAuthor(ctx, prNum)
+		if err != nil {
+			fmt.Printf("⚠️ Warning: Could not verify PR author: %v. Proceeding with caution.\n", err)
+		} else {
+			fmt.Printf("👤 PR Author: %s (Email: %s)\n", login, email)
+			if email == "" {
+				fmt.Printf("🛑 Authorization Failed: Could not find email for user %s. Private emails might be hidden.\n", login)
+				os.Exit(0) // Exit gracefully so the CI doesn't fail, but skip review
 			}
+			if !strings.HasSuffix(strings.ToLower(email), "@"+strings.ToLower(*allowedDomain)) {
+				fmt.Printf("🛑 Authorization Failed: User %s with email %s is not from domain %s. Skipping review.\n", login, email, *allowedDomain)
+				os.Exit(0)
+			}
+			fmt.Printf("✅ Authorization Success: User is from %s\n", *allowedDomain)
 		}
 	}
 
@@ -119,7 +75,7 @@ func main() {
 	}
 
 	if len(diff) == 0 {
-		fmt.Println("✅ No changes detected. (Try running on a Pull Request event)")
+		fmt.Println("✅ No changes detected.")
 		return
 	}
 
