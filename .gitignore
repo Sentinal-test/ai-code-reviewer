@@ -19,7 +19,8 @@ node_modules/
 .vscode/
 .idea/
 
-# Backend specific (if not handled by backend/.gitignore)
+# Binaries
+ai-reviewer
 backend/backend
 backend/server
 backend/*.db

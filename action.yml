@@ -10,12 +10,16 @@ inputs:
   pr_number:
     description: 'Pull Request Number'
     required: false
+    default: ${{ github.event.pull_request.number }}
   base_ref:
     description: 'Base reference for diff'
     default: 'origin/main'
   head_ref:
     description: 'Head reference for diff'
     default: 'HEAD'
+  allowed_domain:
+    description: 'Optional: Organization domain'
+    required: false
 
 runs:
   using: "composite"
@@ -23,7 +27,8 @@ runs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.22' # Matching go.mod
+        go-version: '1.24' # Matching go.mod
+        cache-dependency-path: ${{ github.action_path }}/backend/go.sum
 
     - name: Run AI Reviewer
       shell: bash
@@ -31,18 +36,19 @@ runs:
         GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         PR_NUMBER: ${{ inputs.pr_number }}
-        # Pass other env vars that the CLI expects
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_SHA: ${{ github.sha }}
       run: |
         echo "Building AI Reviewer..."
-        # We need to build the tool from the ACTION'S source code, not the user's repo.
+        # We need to build the tool from the ACTION'S source code
         cd "${{ github.action_path }}/backend"
         
-        # Build the binary and output it to the action root
+        # Build the binary
         go build -v -o ../ai-reviewer cmd/cli/main.go
         
         echo "Running AI Reviewer..."
-        # We go back to the workspace (implicitly or explicitly) to run git commands in the user's repo
+        # Return to workspace to run git commands
         cd "${{ github.workspace }}"
         
-        # Execute the binary we just built
+        # Execute the binary
         "${{ github.action_path }}/ai-reviewer" --base "${{ inputs.base_ref }}" --head "${{ inputs.head_ref }}"
