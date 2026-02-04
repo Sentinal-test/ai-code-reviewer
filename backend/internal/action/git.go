@@ -2,6 +2,7 @@ package action
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -39,21 +40,12 @@ func GetChangedFiles(base, head string) ([]string, error) {
 // GetFileContent reads a file from the local filesystem.
 // In Action mode, the repo is checked out, so we just read the file.
 func GetFileContent(path string) (string, error) {
-	// We could use os.ReadFile, but using git show head:path ensures we see what's in the commit
-	// However, for simplicity and since we checked out the code, os.ReadFile is fine.
-	// Actually, strictly following "checked out locally", using `cat` or `git show` is safer if the checkout is partial?
-	// `actions/checkout` usually checks out the HEAD commit.
-	// But let's stick to Local Filesystem as per requirements: "Read files directly from the local filesystem"
-
-	// Implementation note: The user requirement says "Read files directly from the local filesystem"
-	// So we will use a simple file read, assuming the runner worked correctly.
-
-	cmd := exec.Command("cat", path)
-	out, err := cmd.CombinedOutput()
+	// Using os.ReadFile avoids command injection vulnerabilities
+	content, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to read file %s: %s: %w", path, string(out), err)
+		return "", fmt.Errorf("failed to read file %s: %w", path, err)
 	}
-	return string(out), nil
+	return string(content), nil
 }
 
 // GetRepoStructure generates a simple tree-like structure of the repo to give context to the LLM.
