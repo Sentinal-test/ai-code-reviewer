@@ -31,20 +31,84 @@ func NewGitHubClient(ctx context.Context, token, owner, repo string) *GitHubClie
 
 // PostReviewComment posts the review comments to the PR.
 // It tries to group them into a single review if possible, or posts individual comments.
+// PostReview posts the review comments to the PR.
+// It matches the robustness of the SaaS backend by implementing a fallback strategy.
 func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string) error {
 	if result == nil {
 		return nil
 	}
 
-	var comments []*github.DraftReviewComment
-	for _, c := range result.Comments {
-		// GitHub require position or line. "line" is for the new file.
-		// We need to be careful with "line" vs "position" in older APIs, but v60 `DraftReviewComment` uses `Line`.
-		// Note: `Line` must be inside the diff. If the line is unchanged, it might fail to comment.
-		// For this implementation, we will try to post to the `Line`.
+	// 1. Try Batched Review (Best for UI/Noise)
+	err := g.postBatchedReview(ctx, prNumber, result, commitSHA)
+	if err == nil {
+		return nil
+	}
 
+	// 2. Identify 422 Errors (Invalid Lines)
+	// If the error is not 422, it might be a connectivity issue, but we can still try the fallback loop
+	// just in case it helps (e.g. partial success).
+	// The specific error from GitHub for invalid lines usually contains "422" or "Validation Failed".
+	isValidationErr := strings.Contains(err.Error(), "422") || strings.Contains(err.Error(), "Validation Failed")
+
+	if !isValidationErr {
+		// If it's a critical API error (auth, rate limit), failing hard might be better,
+		// but let's log and try fallback as a best-effort recovery.
+		fmt.Printf("⚠️ Batched review failed with non-validation error: %v. Attempting fallback...\n", err)
+	} else {
+		fmt.Printf("⚠️ Batched review failed with validation error (likely invalid lines): %v. Switching to robust individual posting.\n", err)
+	}
+
+	// 3. Fallback: Individual Posting (Matching SaaS Logic)
+	// If batched fails, we post comments one by one. If an individual comment fails (e.g. invalid line),
+	// we fall back to a General PR Comment for that specific item.
+
+	successCount := 0
+	for _, c := range result.Comments {
 		msg := fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
 
+		comment := &github.PullRequestComment{
+			Body:     github.String(msg),
+			Path:     github.String(c.File),
+			Line:     github.Int(c.Line),
+			Side:     github.String("RIGHT"), // Default to RIGHT side
+			CommitID: github.String(commitSHA),
+		}
+
+		err := g.postComment(ctx, prNumber, comment)
+		if err != nil {
+			// If individual comment fails (likely 422 again), post as General Comment
+			if strings.Contains(err.Error(), "422") || strings.Contains(err.Error(), "Validation Failed") {
+				fmt.Printf("  ⚠️ Failed to post inline comment on %s:L%d. Retrying as General Comment..\n", c.File, c.Line)
+
+				fallbackMsg := fmt.Sprintf("⚠️ **Could not post inline on %s:L%d** (Line mismatch in diff)\n\n%s", c.File, c.Line, msg)
+				genErr := g.postGeneralComment(ctx, prNumber, fallbackMsg)
+				if genErr != nil {
+					fmt.Printf("  ❌ Failed to post general comment fallback: %v\n", genErr)
+				} else {
+					successCount++
+				}
+			} else {
+				fmt.Printf("  ❌ Failed to post comment on %s:L%d: %v\n", c.File, c.Line, err)
+			}
+		} else {
+			successCount++
+		}
+	}
+
+	// Post the summary as a separate general comment since we are in fallback mode
+	if result.Summary != "" {
+		summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s", result.Summary)
+		g.postGeneralComment(ctx, prNumber, summaryMsg)
+	}
+
+	fmt.Printf("✅ Fallback Review Complete | Posted %d/%d comments successfully\n", successCount, len(result.Comments))
+	return nil
+}
+
+func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string) error {
+	var comments []*github.DraftReviewComment
+	for _, c := range result.Comments {
+		msg := fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
 		comments = append(comments, &github.DraftReviewComment{
 			Path: github.String(c.File),
 			Line: github.Int(c.Line),
@@ -58,15 +122,24 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 
 	reviewRequest := &github.PullRequestReviewRequest{
 		CommitID: github.String(commitSHA),
-		Event:    github.String("COMMENT"), // Or APPROVE/REQUEST_CHANGES based on severity? Sticking to COMMENT for now.
+		Event:    github.String("COMMENT"),
 		Body:     github.String("### AI Code Review Summary\n\n" + result.Summary),
 		Comments: comments,
 	}
 
 	_, _, err := g.client.PullRequests.CreateReview(ctx, g.owner, g.repo, prNumber, reviewRequest)
-	if err != nil {
-		return fmt.Errorf("failed to create PR review: %w", err)
-	}
+	return err
+}
 
-	return nil
+func (g *GitHubClient) postComment(ctx context.Context, prNumber int, comment *github.PullRequestComment) error {
+	_, _, err := g.client.PullRequests.CreateComment(ctx, g.owner, g.repo, prNumber, comment)
+	return err
+}
+
+func (g *GitHubClient) postGeneralComment(ctx context.Context, prNumber int, body string) error {
+	comment := &github.IssueComment{
+		Body: github.String(body),
+	}
+	_, _, err := g.client.Issues.CreateComment(ctx, g.owner, g.repo, prNumber, comment)
+	return err
 }

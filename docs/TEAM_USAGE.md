@@ -13,36 +13,53 @@ To use this action, your repository must have a Google Gemini API Key available.
     *   Name: `GEMINI_API_KEY`
     *   Value: `AIza...` (your key)
 
-## 📦 2. Usage (Copy-Paste)
+## 📦 2. Usage (Choose your method)
 
-Create a new file in your repository at `.github/workflows/ai-review.yml`.
+Because your Action repository is **Private**, you have two ways to share it with your team.
 
-Copy and paste the following content. **Make sure to update the `uses` version tag**.
+### Option A: The "Private Repo" Method (Recommended for your Team)
+Use this if you want to keep your code private. Teammates must use a **Personal Access Token (PAT)** to "download" the action into their workflow.
 
+**Teammate Workflow:**
 ```yaml
 name: AI Code Review
-
 on:
   pull_request:
     types: [opened, synchronize]
-
-permissions:
-  contents: read
-  pull-requests: write # Required to post comments
 
 jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout Your Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # IMPORTANT: Required to correct diffs
+          fetch-depth: 0
 
+      - name: Checkout AI Reviewer Action
+        uses: actions/checkout@v4
+        with:
+          repository: tegveer-work/ai-code-reviewer
+          token: ${{ secrets.ACTION_ACCESS_TOKEN }} # Their PAT with 'repo' scope
+          path: .github/actions/ai-reviewer
+          ref: main
+
+      - name: Run AI Reviewer
+        uses: ./.github/actions/ai-reviewer
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+---
+
+### Option B: The "Standard" Method (If you make the repo PUBLIC)
+If you make your repo public, anyone can use it with a single line. This is much cleaner.
+
+**Teammate Workflow:**
+```yaml
       - name: AI Code Reviewer
-        # 👇 UPDATE THIS LINE:
-        # uses: your-username/ai-code-reviewer@v1
-        uses: tegveer-work/ai-code-reviewer@v1 
+        uses: tegveer-work/ai-code-reviewer@main 
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -50,13 +67,10 @@ jobs:
 
 ## ❓ FAQ
 
-### "Action not found" error?
-Ensure you are using the correct repository name in the `uses:` line. It should be `your-username/repo-name@tag`.
+### Which one should I use?
+*   **Use Option A** if you want to keep your AI Reviewer code hidden from the world.
+*   **Use Option B** if you want the easiest setup and don't mind the code being public.
 
 ### "Dependencies file not found" error?
-This has been fixed in `v1`. Ensure you are pointing to the latest version of the action where the `go.sum` path logic was corrected.
+Ensure you are using the latest version of the action. The `action.yml` has been updated to handle paths correctly regardless of which option you choose!
 
-### "Repository not found" (Private Repos)?
-If the Action repository is **Private**, other repositories cannot access it by default.
-*   **Solution**: Make the Action repository **Public**.
-*   **Alternative for Enterprise**: If within the same Organization, check "Allow access to components in this organization".
