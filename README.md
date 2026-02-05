@@ -105,10 +105,74 @@ flowchart TD
 
 ---
 
+---
+
+## 🤖 GitHub Actions Integration
+
+You can run the AI Code Reviewer entirely within your repository using GitHub Actions. This is the **Security-First** mode where your code never leaves the GitHub runner except for LLM API calls.
+
+### 🔑 1. Configure Secrets
+Add the following secrets to your repository (**Settings > Secrets and variables > Actions**):
+
+1.  **`GEMINI_API_KEY`**: Your Google AI Studio key. [Get one here](https://aistudio.google.com/app/apikey).
+2.  **`ACTION_ACCESS_TOKEN`** (Required for PRIVATE repositories): A Personal Access Token (PAT) with `repo` scope. This allows the action to "download" itself into your repo.
+
+### 📦 2. Choose Your Setup
+
+#### Option A: Private Action (Recommended for Teams)
+Use this if you want to keep the AI Reviewer code private.
+
+Create `.github/workflows/ai-review.yml`:
+```yaml
+name: AI Code Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # Required to post comments
+    steps:
+      - name: Checkout Your Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout AI Reviewer Action
+        uses: actions/checkout@v4
+        with:
+          repository: tegveer-work/ai-code-reviewer # Update to your repo name
+          token: ${{ secrets.ACTION_ACCESS_TOKEN }} 
+          path: .github/actions/ai-reviewer
+          ref: main
+
+      - name: Run AI Reviewer
+        uses: ./.github/actions/ai-reviewer
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+#### Option B: Public Action (Easiest)
+If you make the AI Reviewer repository **Public**, anyone can use it with a single line:
+
+```yaml
+      - name: AI Code Reviewer
+        uses: tegveer-work/ai-code-reviewer@main 
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+---
+
 ## 🛡️ Key Documentation
+- [Team Usage Guide](./docs/TEAM_USAGE.md) - Deep dive for teammates.
 - [Project Overview](./docs/PROJECT_OVERVIEW.md)
 - [Architectural Decision Records](./docs/ARCHITECTURAL_DECISION_RECORDS.md)
 - [Context Window Management](./docs/CONTEXT_WINDOW_MANAGEMENT.md)
-- [Cost Analysis](./docs/COST_ANALYSIS.md)
-- [Advanced Context Strategy](./docs/advanced_context_strategy.md)
+- [Accuracy Improvement Plan](./docs/ACCURACY_IMPROVEMENT_PLAN.md)
 
