@@ -1,0 +1,23 @@
+--- datasets/python/logic/mutable-default/buggy/cache_manager.py	2026-02-05 13:48:02
++++ datasets/python/logic/mutable-default/fixed/cache_manager.py	2026-02-05 13:48:09
+@@ -1,14 +1,15 @@
+-from typing import List, Dict, Any
++from typing import List, Dict, Any, Optional
+ import time
+ 
+ class CacheManager:
+     def __init__(self):
+         self.hits = 0
+ 
+-    # BUG: Mutable Default Argument
+-    # The 'cache' dict is created once at definition time, not every call.
+-    # This means 'cache' is shared across all calls that use the default.
+-    def get_data(self, key: str, cache: Dict[str, Any] = {}) -> Any:
++    # FIXED: Use None as default value and initialize inside function
++    def get_data(self, key: str, cache: Optional[Dict[str, Any]] = None) -> Any:
++        if cache is None:
++            cache = {}
++            
+         if key in cache:
+             self.hits += 1
+             return cache[key]

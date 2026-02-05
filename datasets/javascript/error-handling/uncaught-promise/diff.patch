@@ -1,0 +1,26 @@
+--- datasets/javascript/error-handling/uncaught-promise/buggy/JobQueue.js	2026-02-05 13:43:36
++++ datasets/javascript/error-handling/uncaught-promise/fixed/JobQueue.js	2026-02-05 13:43:43
+@@ -11,16 +11,18 @@
+     this.process();
+   }
+ 
+-  process() {
++  async process() {
+     if (this.isProcessing) return;
+     this.isProcessing = true;
+ 
+-    // BUG: Uncaught Promise Rejection
+-    // The loop calls async function without await or catch.
+-    // If runJob fails, the error is unhandled and might crash Node.js
++    // FIXED: Properly handle async execution
+     while (this.jobs.length > 0) {
+       const job = this.jobs.shift();
+-      this.runJob(job);
++      try {
++        await this.runJob(job);
++      } catch (err) {
++        console.error(`Failed to run job ${job.id}:`, err);
++      }
+     }
+     
+     this.isProcessing = false;

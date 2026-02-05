@@ -1,0 +1,36 @@
+{
+    "id": "GO-LINT-001",
+    "language": "go",
+    "category": "lint",
+    "pr_context": {
+        "title": "Add user data service",
+        "body": "Implemented user data access layer.",
+        "commits": [
+            "feat: add user service"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "naming-convention",
+            "severity": "info",
+            "file": "service.go",
+            "line": 5,
+            "description": "Struct uses snake_case instead of Go's CamelCase convention."
+        },
+        {
+            "type": "naming-convention",
+            "severity": "info",
+            "file": "service.go",
+            "line": 11,
+            "description": "Function uses snake_case instead of CamelCase."
+        },
+        {
+            "type": "global-variable",
+            "severity": "info",
+            "file": "service.go",
+            "line": 22,
+            "description": "Global mutable variable creates hidden dependencies."
+        }
+    ],
+    "expected_comments": 3
+}

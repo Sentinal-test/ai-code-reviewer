@@ -1,0 +1,22 @@
+{
+    "id": "PY-RES-LEAK-001",
+    "language": "python",
+    "category": "bug",
+    "pr_context": {
+        "title": "Add logging",
+        "body": "Added LogWriter class for audit trails.",
+        "commits": [
+            "feat: add log writer"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "resource-leak",
+            "severity": "warning",
+            "file": "log_writer.py",
+            "line": 13,
+            "description": "File resource leak detected. Use 'with open(...) as f:' context manager."
+        }
+    ],
+    "expected_comments": 1
+}

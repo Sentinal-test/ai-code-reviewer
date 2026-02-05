@@ -1,0 +1,22 @@
+{
+    "id": "PY-LOGIC-MUTABLE-001",
+    "language": "python",
+    "category": "bug",
+    "pr_context": {
+        "title": "Add caching utility",
+        "body": "Implemented CacheManager with optional cache injection.",
+        "commits": [
+            "feat: add cache manager"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "mutable-default-argument",
+            "severity": "warning",
+            "file": "cache_manager.py",
+            "line": 10,
+            "description": "Mutable default argument detected. Use None and initialize inside the function."
+        }
+    ],
+    "expected_comments": 1
+}

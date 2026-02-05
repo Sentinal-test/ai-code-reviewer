@@ -1,0 +1,17 @@
+--- datasets/python/logic/closure-binding/buggy/callback_factory.py	2026-02-05 13:50:20
++++ datasets/python/logic/closure-binding/fixed/callback_factory.py	2026-02-05 13:50:27
+@@ -10,12 +10,9 @@
+         """
+         multipliers = []
+         
+-        # BUG: Late Binding Closures
+-        # In Python, the loop variable 'i' is captured by reference, not value.
+-        # By the time these lambdas execute, 'i' will be equal to the last value (9).
+-        # So all functions will multiply by 9.
++        # FIXED: Use default argument to capture value immediately
+         for i in range(10):
+-            multipliers.append(lambda x: x * i * factor)
++            multipliers.append(lambda x, idx=i: x * idx * factor)
+             
+         return multipliers
+ 

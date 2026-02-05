@@ -1,0 +1,10 @@
+--- datasets/go/dependency/type-info/buggy/service.go	2026-02-05 13:17:54
++++ datasets/go/dependency/type-info/fixed/service.go	2026-02-05 13:17:55
+@@ -3,6 +3,5 @@
+ import "code-review/models"
+ 
+ func (s *UserService) NotifyUser(u *models.User) {
+-	// BUG: u.Email no longer exists in models/user.go
+-	println("Notifying: " + u.Email)
++	println("Notifying: " + u.EmailAddr)
+ }

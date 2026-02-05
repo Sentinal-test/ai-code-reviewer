@@ -1,0 +1,22 @@
+{
+    "id": "GO-PERF-001",
+    "language": "go",
+    "category": "performance",
+    "pr_context": {
+        "title": "Add order listing with customer info",
+        "body": "Returns all orders along with associated customer details.",
+        "commits": [
+            "feat: add GetOrdersWithCustomers"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "n-plus-one",
+            "severity": "warning",
+            "file": "service.go",
+            "line": 31,
+            "description": "Database query executed inside loop causes N+1 performance issue."
+        }
+    ],
+    "expected_comments": 1
+}

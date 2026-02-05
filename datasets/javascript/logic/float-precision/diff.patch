@@ -1,0 +1,33 @@
+--- datasets/javascript/logic/float-precision/buggy/Cart.js	2026-02-05 13:42:48
++++ datasets/javascript/logic/float-precision/fixed/Cart.js	2026-02-05 13:42:57
+@@ -9,22 +9,22 @@
+   }
+ 
+   calculateTotal() {
+-    let subtotal = 0;
++    // Better: work with cents (integers)
++    let subtotalCents = 0;
+     for (const item of this.items) {
+-      subtotal += item.price * item.qty;
++      subtotalCents += (item.price * 100) * item.qty;
+     }
+     
+-    const tax = subtotal * this.taxRate;
+-    return subtotal + tax;
++    const taxCents = Math.round(subtotalCents * this.taxRate);
++    return (subtotalCents + taxCents) / 100;
+   }
+ 
+   isEligibleForFreeShipping() {
+     const total = this.calculateTotal();
+     
+-    // BUG: Floating point precision issue
+-    // e.g. 19.99 + (19.99 * 0.0825) might result in 21.639175
+-    // Comparing floats directly is dangerous
+-    if (total === 50.00) {
++    // FIXED: Use an epsilon for comparison or >= logic
++    const EPSILON = 0.001;
++    if (Math.abs(total - 50.00) < EPSILON) {
+       return true;
+     }
+     return total > 50.00;

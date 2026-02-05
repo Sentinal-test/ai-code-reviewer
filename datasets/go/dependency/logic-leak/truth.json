@@ -1,0 +1,25 @@
+{
+    "id": "GO-DEP-002",
+    "language": "go",
+    "category": "dependency",
+    "pr_context": {
+        "title": "Add token verification",
+        "body": "Verifies tokens before processing requests.",
+        "commits": [
+            "feat: token verification"
+        ]
+    },
+    "expected_dependencies": [
+        "auth/validator.go"
+    ],
+    "bugs": [
+        {
+            "type": "error-handling",
+            "severity": "warning",
+            "file": "service.go",
+            "line": 9,
+            "description": "Fails to specifically handle ErrTokenExpired from auth dependency."
+        }
+    ],
+    "expected_comments": 1
+}

@@ -1,0 +1,21 @@
+--- datasets/java/logic/string-equality/buggy/AuthController.java	2026-02-05 15:47:56
++++ datasets/java/logic/string-equality/fixed/AuthController.java	2026-02-05 15:48:02
+@@ -2,15 +2,13 @@
+ 
+ public class AuthController {
+     public boolean checkPermission(String userRole, String requiredRole) {
+-        // BUG: String Equality
+-        // Using == compares object references, not content.
+-        // Will fail if strings are created dynamically.
+-        if (userRole == requiredRole) {
++        // FIXED: Use .equals() for string comparison
++        if (userRole != null && userRole.equals(requiredRole)) {
+             return true;
+         }
+         
+         // Super admin bypass
+-        if (userRole == "SUPER_ADMIN") {
++        if ("SUPER_ADMIN".equals(userRole)) {
+             return true;
+         }
+         

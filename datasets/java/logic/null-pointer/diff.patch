@@ -1,0 +1,25 @@
+--- datasets/java/logic/null-pointer/buggy/UserService.java	2026-02-05 15:46:18
++++ datasets/java/logic/null-pointer/fixed/UserService.java	2026-02-05 15:46:44
+@@ -2,6 +2,7 @@
+ 
+ import com.example.model.User;
+ import com.example.repo.UserRepository;
++import java.util.Optional;
+ 
+ public class UserService {
+     private final UserRepository userRepo;
+@@ -13,9 +14,11 @@
+     public String getUserDisplayName(String userId) {
+         User user = userRepo.findById(userId);
+         
+-        // BUG: Null Pointer Exception
+-        // userRepo.findById might return null if user not found.
+-        // Accessing user.getProfile() will throw NPE.
++        // FIXED: Null check
++        if (user == null || user.getProfile() == null) {
++            return "Unknown User";
++        }
++        
+         return user.getProfile().getDisplayName();
+     }
+ 

@@ -1,0 +1,19 @@
+--- datasets/python/performance/list-lookup/buggy/data_filter.py	2026-02-05 13:47:34
++++ datasets/python/performance/list-lookup/fixed/data_filter.py	2026-02-05 13:47:43
+@@ -10,12 +10,12 @@
+         """
+         valid_items = []
+         
++        # FIXED: Convert list to set for O(1) average time complexity lookups
++        blocked_set = set(self.blocked_ids)
++        
+         for item in items:
+             item_id = item.get("id")
+-            # BUG: Performance O(N*M)
+-            # Checking membership in a list is O(N). Inside a loop, this becomes quadratic.
+-            # Should use a set for O(1) lookups.
+-            if item_id not in self.blocked_ids:
++            if item_id not in blocked_set:
+                 valid_items.append(item)
+                 
+         return valid_items

@@ -1,0 +1,13 @@
+--- datasets/go/logic/off-by-one/buggy/loop.go	2026-02-05 13:06:25
++++ datasets/go/logic/off-by-one/fixed/loop.go	2026-02-05 13:06:31
+@@ -3,8 +3,8 @@
+ // CalculateSum sums all integers in the slice.
+ func CalculateSum(values []int) int {
+ 	sum := 0
+-	// Potential panic: index out of range
+-	for i := 0; i <= len(values); i++ {
++	// Fixed: index out of range error
++	for i := 0; i < len(values); i++ {
+ 		sum += values[i]
+ 	}
+ 	return sum

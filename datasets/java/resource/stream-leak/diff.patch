@@ -1,0 +1,24 @@
+--- datasets/java/resource/stream-leak/buggy/FileReader.java	2026-02-05 15:47:13
++++ datasets/java/resource/stream-leak/fixed/FileReader.java	2026-02-05 15:47:20
+@@ -5,15 +5,12 @@
+ 
+ public class FileReader {
+     public byte[] readFile(String path) throws IOException {
+-        // BUG: Resource Leak
+-        // FileInputStream is opened but never closed.
+-        // Even if exception occurs during read, stream remains open.
+-        FileInputStream fis = new FileInputStream(path);
+-        byte[] content = new byte[fis.available()];
+-        fis.read(content);
+-        
+-        // Missing fis.close() or try-with-resources
+-        return content;
++        // FIXED: Use try-with-resources for automatic closing
++        try (FileInputStream fis = new FileInputStream(path)) {
++            byte[] content = new byte[fis.available()];
++            fis.read(content);
++            return content;
++        }
+     }
+ 
+     public void logError(String msg) {

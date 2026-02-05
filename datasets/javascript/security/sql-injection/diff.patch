@@ -1,0 +1,17 @@
+--- datasets/javascript/security/sql-injection/buggy/user-repo.js	2026-02-05 13:40:56
++++ datasets/javascript/security/sql-injection/fixed/user-repo.js	2026-02-05 13:41:04
+@@ -11,11 +11,11 @@
+       throw new Error('Email is required');
+     }
+ 
+-    // BUG: SQL Injection vulnerability
+-    const query = `SELECT * FROM ${this.tableName} WHERE email = "${email}"`;
++    // FIXED: Use parameterized query
++    const query = `SELECT * FROM ${this.tableName} WHERE email = $1`;
+     
+     try {
+-      const result = await db.query(query);
++      const result = await db.query(query, [email]);
+       return result.rows[0];
+     } catch (err) {
+       console.error('Database error:', err);

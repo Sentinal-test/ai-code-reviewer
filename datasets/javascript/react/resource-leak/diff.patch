@@ -1,0 +1,17 @@
+--- datasets/javascript/react/resource-leak/buggy/LiveFeed.jsx	2026-02-05 13:43:55
++++ datasets/javascript/react/resource-leak/fixed/LiveFeed.jsx	2026-02-05 13:44:01
+@@ -14,10 +14,10 @@
+ 
+     ws.connect();
+ 
+-    // BUG: Missing cleanup function
+-    // When component unmounts or feedId changes, the connection remains open.
+-    // This causes memory leaks and multiple subscriptions.
+-
++    // FIXED: Return cleanup function
++    return () => {
++      ws.close();
++    };
+   }, [feedId]);
+ 
+   return (

@@ -1,0 +1,15 @@
+--- datasets/python/framework/async-blocking/buggy/notification_service.py	2026-02-05 13:48:24
++++ datasets/python/framework/async-blocking/fixed/notification_service.py	2026-02-05 13:48:35
+@@ -12,10 +12,8 @@
+         """
+         Sends an email notification.
+         """
+-        # BUG: Blocking code in async function
+-        # time.sleep blocks the entire event loop, freezing all other requests.
+-        # Should use asyncio.sleep() for non-blocking delay.
+-        time.sleep(5) 
++        # FIXED: Use asyncio.sleep to yield control back to the event loop
++        await asyncio.sleep(5) 
+         
+         print(f"Sent email to {email}: {message}")
+         return {"status": "sent"}

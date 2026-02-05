@@ -1,0 +1,33 @@
+--- datasets/javascript/react/direct-dom/buggy/Modal.jsx	2026-02-05 13:44:12
++++ datasets/javascript/react/direct-dom/fixed/Modal.jsx	2026-02-05 13:44:17
+@@ -1,24 +1,17 @@
+-import React, { useEffect, useRef } from 'react';
++import React from 'react';
++import ReactDOM from 'react-dom';
+ 
+ const Modal = ({ isOpen, children }) => {
+   if (!isOpen) return null;
+ 
+-  // BUG: Direct DOM manipulation
+-  // Appending directly to body is side-effecty and bypasses React's virtual DOM.
+-  // It also doesn't clean up properly if the component crashes or unmounts unexpectedly.
+-  const el = document.createElement('div');
+-  el.className = 'modal-portal';
+-  document.body.appendChild(el);
+-  
+-  // This is a naive attempt at a portal without using ReactDOM.createPortal
+-  // or cleaning up correctly.
+-  
+-  return (
++  // FIXED: Use React Portals for rendering outside the parent hierarchy
++  return ReactDOM.createPortal(
+     <div className="modal-overlay">
+       <div className="modal-content">
+         {children}
+       </div>
+-    </div>
++    </div>,
++    document.body // Or a specific root element
+   );
+ };
+ 

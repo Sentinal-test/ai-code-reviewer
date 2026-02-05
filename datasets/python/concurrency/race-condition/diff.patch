@@ -1,0 +1,23 @@
+--- datasets/python/concurrency/race-condition/buggy/request_counter.py	2026-02-05 13:49:59
++++ datasets/python/concurrency/race-condition/fixed/request_counter.py	2026-02-05 13:50:06
+@@ -4,15 +4,16 @@
+ class RequestCounter:
+     def __init__(self):
+         self.count = 0
++        # FIXED: Use a Lock to synchronize access
++        self.lock = threading.Lock()
+ 
+     def process_request(self):
+         # Simulate processing time
+         time.sleep(0.001)
+         
+-        # BUG: Race Condition
+-        # += is not atomic in Python (it's read-modify-write).
+-        # Multiple threads hitting this causes lost updates.
+-        self.count += 1
++        # Thread-safe increment
++        with self.lock:
++            self.count += 1
+         
+         return self.count
+ 

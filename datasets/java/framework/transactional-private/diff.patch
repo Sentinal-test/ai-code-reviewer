@@ -1,0 +1,21 @@
+--- datasets/java/framework/transactional-private/buggy/OrderService.java	2026-02-05 15:48:32
++++ datasets/java/framework/transactional-private/fixed/OrderService.java	2026-02-05 15:48:38
+@@ -6,16 +6,13 @@
+ @Service
+ public class OrderService {
+     
++    // FIXED: Move @Transactional to the public entry point
++    @Transactional
+     public void createOrder(String orderId) {
+         // ... validation logic
+         saveOrderInternal(orderId);
+     }
+ 
+-    // BUG: Transactional on private method
+-    // Spring AOP proxies only intercept public method calls from external beans.
+-    // Calling this from createOrder() (same instance) bypasses the proxy,
+-    // so no transaction is started. Also private methods cannot be proxied generally.
+-    @Transactional
+     private void saveOrderInternal(String orderId) {
+         // ... database logic
+     }

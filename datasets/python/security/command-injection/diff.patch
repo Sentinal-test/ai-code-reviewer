@@ -1,0 +1,29 @@
+--- datasets/python/security/command-injection/buggy/image_processor.py	2026-02-05 13:47:10
++++ datasets/python/security/command-injection/fixed/image_processor.py	2026-02-05 13:47:17
+@@ -1,6 +1,7 @@
+ import os
+ import subprocess
+ from typing import Optional
++import shlex
+ 
+ class ImageProcessor:
+     def __init__(self, upload_dir: str):
+@@ -16,14 +17,12 @@
+         input_path = os.path.join(self.upload_dir, filename)
+         output_path = os.path.join(self.upload_dir, f"resized_{filename}")
+ 
+-        # BUG: Command Injection
+-        # If filename contains shell metacharacters (e.g., "test.jpg; rm -rf /"),
+-        # this will execute arbitrary commands.
+-        cmd = f"convert {input_path} -resize {width}x{height} {output_path}"
++        # FIXED: Pass command as a list of arguments and use shell=False
++        cmd = ["convert", input_path, "-resize", f"{width}x{height}", output_path]
+         
+         try:
+-            # shell=True combined with f-string input is dangerous
+-            subprocess.call(cmd, shell=True)
++            # shell=False is the default, ensuring arguments are passed safely
++            subprocess.call(cmd, shell=False)
+             return True
+         except subprocess.CalledProcessError:
+             return False

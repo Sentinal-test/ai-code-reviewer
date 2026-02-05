@@ -1,0 +1,22 @@
+{
+    "id": "JAVA-COLL-MOD-001",
+    "language": "java",
+    "category": "bug",
+    "pr_context": {
+        "title": "Filter words",
+        "body": "Added filtering logic.",
+        "commits": [
+            "feat: filter bad words"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "concurrent-modification",
+            "severity": "warning",
+            "file": "ListManager.java",
+            "line": 9,
+            "description": "ConcurrentModificationException detected. Use iterator.remove() or collection.removeIf()."
+        }
+    ],
+    "expected_comments": 1
+}

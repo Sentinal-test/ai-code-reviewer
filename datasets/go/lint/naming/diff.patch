@@ -1,0 +1,33 @@
+--- datasets/go/lint/naming/buggy/service.go	2026-02-05 12:42:30
++++ datasets/go/lint/naming/fixed/service.go	2026-02-05 12:42:36
+@@ -2,21 +2,19 @@
+ 
+ import "database/sql"
+ 
+-type user_data struct {
+-	user_id    int
+-	user_name  string
+-	user_email string
++type UserData struct {
++	UserID    int
++	UserName  string
++	UserEmail string
+ }
+ 
+-func get_user_by_id(DB *sql.DB, ID int) *user_data {
+-	var u user_data
+-	DB.QueryRow("SELECT user_id, user_name, user_email FROM users WHERE user_id = ?", ID).Scan(&u.user_id, &u.user_name, &u.user_email)
++func GetUserByID(db *sql.DB, id int) *UserData {
++	var u UserData
++	db.QueryRow("SELECT user_id, user_name, user_email FROM users WHERE user_id = ?", id).Scan(&u.UserID, &u.UserName, &u.UserEmail)
+ 	return &u
+ }
+ 
+-func Update_User(DB *sql.DB, data *user_data) error {
+-	_, err := DB.Exec("UPDATE users SET user_name = ?, user_email = ? WHERE user_id = ?", data.user_name, data.user_email, data.user_id)
++func UpdateUser(db *sql.DB, data *UserData) error {
++	_, err := db.Exec("UPDATE users SET user_name = ?, user_email = ? WHERE user_id = ?", data.UserName, data.UserEmail, data.UserID)
+ 	return err
+ }
+-
+-var GlobalDB *sql.DB

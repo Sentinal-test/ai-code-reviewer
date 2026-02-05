@@ -1,0 +1,47 @@
+--- datasets/java/security/sql-injection/buggy/UserDao.java	2026-02-05 15:45:22
++++ datasets/java/security/sql-injection/fixed/UserDao.java	2026-02-05 15:45:28
+@@ -1,8 +1,8 @@
+ package com.example.dao;
+ 
+ import java.sql.Connection;
++import java.sql.PreparedStatement;
+ import java.sql.ResultSet;
+-import java.sql.Statement;
+ import java.util.ArrayList;
+ import java.util.List;
+ import javax.sql.DataSource;
+@@ -16,22 +16,22 @@
+ 
+     public List<String> searchUsers(String query) throws Exception {
+         List<String> results = new ArrayList<>();
+-        Connection conn = dataSource.getConnection();
+-        Statement stmt = conn.createStatement();
+         
+-        // BUG: SQL Injection
+-        // User input 'query' is concatenated directly into the SQL string.
+-        String sql = "SELECT username FROM users WHERE username LIKE '" + query + "%'";
++        // FIXED: Use PreparedStatement and try-with-resources
++        String sql = "SELECT username FROM users WHERE username LIKE ?";
+         
+-        ResultSet rs = stmt.executeQuery(sql);
+-        while (rs.next()) {
+-            results.add(rs.getString("username"));
++        try (Connection conn = dataSource.getConnection();
++             PreparedStatement pstmt = conn.prepareStatement(sql)) {
++            
++            pstmt.setString(1, query + "%");
++            
++            try (ResultSet rs = pstmt.executeQuery()) {
++                while (rs.next()) {
++                    results.add(rs.getString("username"));
++                }
++            }
+         }
+         
+-        rs.close();
+-        stmt.close();
+-        conn.close();
+-        
+         return results;
+     }
+ 

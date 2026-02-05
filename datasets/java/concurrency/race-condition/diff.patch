@@ -1,0 +1,19 @@
+--- datasets/java/concurrency/race-condition/buggy/CacheService.java	2026-02-05 15:46:56
++++ datasets/java/concurrency/race-condition/fixed/CacheService.java	2026-02-05 15:47:01
+@@ -1,13 +1,11 @@
+ package com.example.service;
+ 
+-import java.util.HashMap;
+ import java.util.Map;
++import java.util.concurrent.ConcurrentHashMap;
+ 
+ public class CacheService {
+-    // BUG: Race Condition
+-    // HashMap is not thread-safe. Concurrent put/get calls can cause infinite loops
+-    // or data corruption (lost updates).
+-    private final Map<String, Object> cache = new HashMap<>();
++    // FIXED: Use ConcurrentHashMap for thread safety
++    private final Map<String, Object> cache = new ConcurrentHashMap<>();
+ 
+     public void put(String key, Object value) {
+         cache.put(key, value);
