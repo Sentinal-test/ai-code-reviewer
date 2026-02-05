@@ -11,8 +11,6 @@ class FinancialAnalyzer:
         """
         self.df['growth'] = 0.0
         
-        # BUG: Iterating over Pandas DataFrame
-        # Iterating rows is extremely slow (anti-pattern) compared to vectorization.
         for index, row in self.df.iterrows():
             if row['previous_value'] > 0:
                 growth = (row['current_value'] - row['previous_value']) / row['previous_value']

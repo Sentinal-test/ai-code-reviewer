@@ -5,7 +5,6 @@ class InventoryService {
     this.table = 'inventory';
   }
 
-  // BUG: Race condition
   // Two concurrent requests can read the same stock value,
   // decrement it, and write it back, resulting in overselling.
   async purchaseItem(itemId, quantity) {
@@ -25,7 +24,6 @@ class InventoryService {
   }
 
   async restockItem(itemId, quantity) {
-    // Similar race condition potential
     const item = await db.query('SELECT stock FROM inventory WHERE id = ?', [itemId]);
     const newStock = item.stock + quantity;
     await db.query('UPDATE inventory SET stock = ? WHERE id = ?', [newStock, itemId]);

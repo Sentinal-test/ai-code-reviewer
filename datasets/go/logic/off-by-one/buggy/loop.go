@@ -3,7 +3,6 @@ package logic
 // CalculateSum sums all integers in the slice.
 func CalculateSum(values []int) int {
 	sum := 0
-	// Potential panic: index out of range
 	for i := 0; i <= len(values); i++ {
 		sum += values[i]
 	}

@@ -11,7 +11,6 @@ class APIClient:
             response = requests.get(f"{self.base_url}/{endpoint}")
             response.raise_for_status()
             return response.json()
-        # FIXED: Catch specific exceptions
         except RequestException as e:
             print(f"Network error occurred: {e}")
             return {}

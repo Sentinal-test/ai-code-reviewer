@@ -10,9 +10,7 @@ class CallbackFactory:
         """
         multipliers = []
         
-        # BUG: Late Binding Closures
         # In Python, the loop variable 'i' is captured by reference, not value.
-        # By the time these lambdas execute, 'i' will be equal to the last value (9).
         # So all functions will multiply by 9.
         for i in range(10):
             multipliers.append(lambda x: x * i * factor)

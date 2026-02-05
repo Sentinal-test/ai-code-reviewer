@@ -14,7 +14,6 @@ const LiveFeed = ({ feedId }) => {
 
     ws.connect();
 
-    // FIXED: Return cleanup function
     return () => {
       ws.close();
     };

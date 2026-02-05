@@ -8,12 +8,9 @@ class LogWriter:
         timestamp = datetime.datetime.now().isoformat()
         entry = f"[{timestamp}] {message}\n"
         
-        # BUG: File Resource Leak
-        # Opening file without 'with' statement or explicit close()
         # In high-throughput apps, this hits the OS file descriptor limit.
         f = open(self.log_path, 'a')
         f.write(entry)
-        # Missing f.close()
 
     def batch_log(self, messages: list):
         try:

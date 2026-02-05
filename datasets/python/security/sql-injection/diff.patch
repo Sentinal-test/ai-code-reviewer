@@ -1,14 +1,12 @@
---- datasets/python/security/sql-injection/buggy/user_manager.py	2026-02-05 13:46:43
-+++ datasets/python/security/sql-injection/fixed/user_manager.py	2026-02-05 13:46:55
-@@ -13,10 +13,9 @@
+--- datasets/python/security/sql-injection/buggy/user_manager.py	2026-02-05 15:59:04
++++ datasets/python/security/sql-injection/fixed/user_manager.py	2026-02-05 15:59:04
+@@ -13,9 +13,8 @@
          cursor = conn.cursor()
          
          try:
--            # BUG: SQL Injection vulnerability
 -            # Directly formatting user input into the query string
 -            query = f"SELECT * FROM users WHERE username = '{username}'"
 -            cursor.execute(query)
-+            # FIXED: Use parameterized queries to prevent SQL injection
 +            query = "SELECT * FROM users WHERE username = ?"
 +            cursor.execute(query, (username,))
              

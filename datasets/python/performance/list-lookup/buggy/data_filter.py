@@ -12,9 +12,6 @@ class DataFilter:
         
         for item in items:
             item_id = item.get("id")
-            # BUG: Performance O(N*M)
-            # Checking membership in a list is O(N). Inside a loop, this becomes quadratic.
-            # Should use a set for O(1) lookups.
             if item_id not in self.blocked_ids:
                 valid_items.append(item)
                 

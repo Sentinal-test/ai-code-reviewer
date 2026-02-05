@@ -4,7 +4,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class CacheService {
-    // FIXED: Use ConcurrentHashMap for thread safety
     private final Map<String, Object> cache = new ConcurrentHashMap<>();
 
     public void put(String key, Object value) {

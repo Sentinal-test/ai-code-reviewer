@@ -10,7 +10,6 @@ class ConfigMerger {
 
   mergeRecursive(target, source) {
     for (const key in source) {
-      // FIXED: Block dangerous keys
       if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
         continue;
       }

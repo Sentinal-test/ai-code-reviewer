@@ -4,7 +4,6 @@ import java.util.List;
 
 public class ReportGenerator {
     public String generateCsv(List<String[]> data) {
-        // FIXED: Use StringBuilder for efficient concatenation
         StringBuilder sb = new StringBuilder();
         
         for (String[] row : data) {

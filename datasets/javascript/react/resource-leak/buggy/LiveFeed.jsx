@@ -14,7 +14,6 @@ const LiveFeed = ({ feedId }) => {
 
     ws.connect();
 
-    // BUG: Missing cleanup function
     // When component unmounts or feedId changes, the connection remains open.
     // This causes memory leaks and multiple subscriptions.
 

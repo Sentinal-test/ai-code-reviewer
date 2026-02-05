@@ -6,7 +6,6 @@ import java.util.List;
 
 public class ListManager {
     public void removeBadWords(List<String> words) {
-        // FIXED: Use Iterator
         Iterator<String> iterator = words.iterator();
         while (iterator.hasNext()) {
             String word = iterator.next();

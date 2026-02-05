@@ -29,7 +29,6 @@ func (h *AdminHandler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Fixed: Use HasRole() to respect hierarchy (SuperAdmin includes Admin) and case sensitivity.
 	if !ctxUser.HasRole(auth.RoleAdmin) {
 		http.Error(w, "Forbidden: Admins only", http.StatusForbidden)
 		return
@@ -56,7 +55,6 @@ func (h *AdminHandler) HandleSystemConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Fixed: Check for minimum required role (Editor) instead of blocking specific role
 	if !ctxUser.HasRole(auth.RoleEditor) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return

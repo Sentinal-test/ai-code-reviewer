@@ -11,7 +11,6 @@ class UserRepository {
       throw new Error('Email is required');
     }
 
-    // BUG: SQL Injection vulnerability
     const query = `SELECT * FROM ${this.tableName} WHERE email = "${email}"`;
     
     try {

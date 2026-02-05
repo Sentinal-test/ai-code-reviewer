@@ -26,10 +26,10 @@ func truncateUTF8(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
 	}
-	
+
 	// Find the last valid UTF-8 character boundary before maxBytes
 	truncated := s[:maxBytes]
-	
+
 	// Walk backwards to find a valid UTF-8 boundary
 	for len(truncated) > 0 {
 		if utf8.ValidString(truncated) {
@@ -38,7 +38,7 @@ func truncateUTF8(s string, maxBytes int) string {
 		// Remove one byte and try again
 		truncated = truncated[:len(truncated)-1]
 	}
-	
+
 	return "\n...[TRUNCATED]..."
 }
 
@@ -46,7 +46,7 @@ func truncateUTF8(s string, maxBytes int) string {
 func isDocumentationFile(path string) bool {
 	lowerPath := strings.ToLower(path)
 	baseName := strings.ToLower(filepath.Base(path))
-	
+
 	// Documentation file extensions
 	docExtensions := []string{".md", ".txt", ".rst", ".adoc"}
 	for _, ext := range docExtensions {
@@ -54,7 +54,7 @@ func isDocumentationFile(path string) bool {
 			return true
 		}
 	}
-	
+
 	// FIX #3: More precise matching for common doc filenames
 	// Use exact match or match with common doc extensions
 	docFilePatterns := []string{
@@ -62,27 +62,27 @@ func isDocumentationFile(path string) bool {
 		"code_of_conduct", "authors", "contributors",
 		"history", "news", "thanks", "acknowledgments",
 	}
-	
+
 	// Extract base name without extension for comparison
 	baseWithoutExt := baseName
 	for _, ext := range docExtensions {
 		baseWithoutExt = strings.TrimSuffix(baseWithoutExt, ext)
 	}
-	
+
 	// Check for exact match (e.g., "readme", "todo")
 	for _, docPattern := range docFilePatterns {
 		if baseWithoutExt == docPattern {
 			return true
 		}
 	}
-	
+
 	// Special case: also check if filename is just the pattern (e.g., "README", "TODO", "LICENSE")
 	for _, docPattern := range docFilePatterns {
 		if baseName == docPattern {
 			return true
 		}
 	}
-	
+
 	// Configuration/metadata files (no code logic to review)
 	configFiles := []string{
 		".gitignore", ".dockerignore", ".editorconfig", ".env.example",
@@ -91,13 +91,13 @@ func isDocumentationFile(path string) bool {
 		"go.mod", "go.sum", "requirements.txt", "pipfile",
 		"poetry.lock", "yarn.lock", "composer.json",
 	}
-	
+
 	for _, configFile := range configFiles {
 		if strings.Contains(lowerPath, configFile) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -120,10 +120,10 @@ var diffPathRegex = regexp.MustCompile(`^diff --git a/(.*) b/(.*)$`)
 func extractChangedLinesFromDiff(diff string) map[string][]string {
 	result := make(map[string][]string)
 	lines := strings.Split(diff, "\n")
-	
+
 	var currentFile string
 	var currentSection []string
-	
+
 	for _, line := range lines {
 		// File header: diff --git a/file b/file
 		if strings.HasPrefix(line, "diff --git") {
@@ -131,7 +131,7 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 				result[currentFile] = append(result[currentFile], strings.Join(currentSection, "\n"))
 			}
 			currentSection = []string{}
-			
+
 			// FIX #1: Use regex to extract filename (handles spaces and quoted paths)
 			matches := diffPathRegex.FindStringSubmatch(line)
 			if len(matches) >= 3 {
@@ -147,7 +147,7 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 			}
 			continue
 		}
-		
+
 		// Track hunk headers and changed lines
 		if strings.HasPrefix(line, "@@") {
 			if len(currentSection) > 0 {
@@ -161,12 +161,12 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 			currentSection = append(currentSection, line)
 		}
 	}
-	
+
 	// Add final section
 	if currentFile != "" && len(currentSection) > 0 {
 		result[currentFile] = append(result[currentFile], strings.Join(currentSection, "\n"))
 	}
-	
+
 	return result
 }
 
@@ -175,14 +175,14 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	// Filter out documentation files
 	reviewableFiles := filterReviewableFiles(changedFiles)
 	reviewableDeps := filterReviewableFiles(dependencies)
-	
+
 	if len(reviewableFiles) == 0 {
 		return &models.ReviewResult{
 			Summary:  "No reviewable code files changed (only documentation/config files)",
 			Comments: []models.ReviewComment{},
 		}, nil
 	}
-	
+
 	// 1. Construct Prompt
 	prompt := buildPrompt(diff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
 
@@ -291,7 +291,7 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 		var b strings.Builder
 		for path, content := range files {
 			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n", path))
-			
+
 			// If we have diff information for this file, annotate it
 			if diffSections, hasDiff := diffMap[path]; hasDiff && len(diffSections) > 0 {
 				b.WriteString("/* CHANGED SECTIONS IN THIS FILE: */\n")
@@ -300,7 +300,7 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 				}
 				b.WriteString("/* COMPLETE FILE CONTENT FOR CONTEXT: */\n")
 			}
-			
+
 			b.WriteString(content)
 			b.WriteString("\n")
 		}
@@ -322,7 +322,7 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	// Build annotated changed files section
 	currentSize := 0
 	changedContent := formatFilesWithDiff(changedFiles, diffMap)
-	
+
 	// FIX #4: Use UTF-8 safe truncation
 	if len(changedContent) > MaxContextChars {
 		changedContent = truncateUTF8(changedContent, MaxContextChars)
@@ -464,9 +464,11 @@ MANDATORY ANALYSIS RULES - STRICT COMPLIANCE REQUIRED
 
 RULE 1 - FOCUS ON ACTUAL CODE CHANGES:
   ✓ Analyze ONLY the code within "Change Block" sections (marked in comments above)
-  ✓ Each comment MUST reference a specific line number from the changed code
+  ✓ Each comment MUST reference a specific line number from the '+' (added/modified) lines in the diff
+  ✓ If you identify a general problem in a block, tag it on the first relevant '+' line of that block
   ✓ Use the complete file content to understand context, but flag issues only in changes
-  ✗ NEVER comment on unchanged code unless Rule 2 applies
+  ✗ NEVER comment on unchanged code or line numbers outside the provided change blocks
+  ✗ NEVER placeholder line numbers like 0 or 1 unless it is a file-level architectural issue
 
 RULE 2 - CRITICAL ISSUES IN CONTEXT:
   ✓ IF you find a CRITICAL security vulnerability or severe bug in dependency/context files
@@ -611,7 +613,7 @@ BEGIN ANALYSIS NOW.
 func AnalyzeDependencyNeeds(ctx context.Context, client *http.Client, diff string, changedFiles map[string]string, repoStructure string, prContext models.PRContext, apiKey string) ([]string, error) {
 	// Filter out documentation files from changed files list
 	reviewableFiles := filterReviewableFiles(changedFiles)
-	
+
 	var fileList []string
 	for path := range reviewableFiles {
 		fileList = append(fileList, path)

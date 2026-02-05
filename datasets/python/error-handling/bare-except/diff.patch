@@ -1,5 +1,5 @@
---- datasets/python/error-handling/bare-except/buggy/api_client.py	2026-02-05 13:49:11
-+++ datasets/python/error-handling/bare-except/fixed/api_client.py	2026-02-05 13:49:18
+--- datasets/python/error-handling/bare-except/buggy/api_client.py	2026-02-05 15:59:04
++++ datasets/python/error-handling/bare-except/fixed/api_client.py	2026-02-05 15:59:04
 @@ -1,5 +1,6 @@
  import requests
  import json
@@ -7,16 +7,14 @@
  
  class APIClient:
      def __init__(self, base_url: str):
-@@ -10,19 +11,19 @@
+@@ -10,18 +11,18 @@
              response = requests.get(f"{self.base_url}/{endpoint}")
              response.raise_for_status()
              return response.json()
--        # BUG: Bare Except
 -        # Catching all exceptions hides unexpected errors (e.g., NameError, KeyboardInterrupt)
 -        # and makes debugging extremely difficult.
 -        except:
 -            print("Something went wrong")
-+        # FIXED: Catch specific exceptions
 +        except RequestException as e:
 +            print(f"Network error occurred: {e}")
              return {}

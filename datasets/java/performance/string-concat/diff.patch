@@ -1,14 +1,11 @@
---- datasets/java/performance/string-concat/buggy/ReportGenerator.java	2026-02-05 15:46:00
-+++ datasets/java/performance/string-concat/fixed/ReportGenerator.java	2026-02-05 15:46:06
-@@ -4,17 +4,15 @@
+--- datasets/java/performance/string-concat/buggy/ReportGenerator.java	2026-02-05 15:59:04
++++ datasets/java/performance/string-concat/fixed/ReportGenerator.java	2026-02-05 15:59:04
+@@ -4,15 +4,14 @@
  
  public class ReportGenerator {
      public String generateCsv(List<String[]> data) {
--        // BUG: Inefficient String Concatenation
 -        // Using += in a loop creates a new String object every iteration.
--        // O(N^2) performance when N is large.
 -        String csv = "";
-+        // FIXED: Use StringBuilder for efficient concatenation
 +        StringBuilder sb = new StringBuilder();
          
          for (String[] row : data) {

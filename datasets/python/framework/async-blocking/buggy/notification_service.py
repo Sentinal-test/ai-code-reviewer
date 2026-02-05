@@ -12,8 +12,6 @@ class NotificationService:
         """
         Sends an email notification.
         """
-        # BUG: Blocking code in async function
-        # time.sleep blocks the entire event loop, freezing all other requests.
         # Should use asyncio.sleep() for non-blocking delay.
         time.sleep(5) 
         

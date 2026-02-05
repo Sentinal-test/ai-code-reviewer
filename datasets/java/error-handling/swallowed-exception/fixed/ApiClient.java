@@ -18,7 +18,6 @@ public class ApiClient {
             conn.getOutputStream().write(data.getBytes());
             conn.getInputStream().close();
         } catch (IOException e) {
-            // FIXED: Log the exception
             LOGGER.log(Level.SEVERE, "Failed to send data to API", e);
             // Optionally rethrow if caller needs to know
             // throw new RuntimeException(e);

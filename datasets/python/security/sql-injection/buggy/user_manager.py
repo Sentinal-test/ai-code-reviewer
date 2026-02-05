@@ -13,7 +13,6 @@ class UserManager:
         cursor = conn.cursor()
         
         try:
-            # BUG: SQL Injection vulnerability
             # Directly formatting user input into the query string
             query = f"SELECT * FROM users WHERE username = '{username}'"
             cursor.execute(query)

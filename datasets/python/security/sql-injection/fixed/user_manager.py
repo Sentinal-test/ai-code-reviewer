@@ -13,7 +13,6 @@ class UserManager:
         cursor = conn.cursor()
         
         try:
-            # FIXED: Use parameterized queries to prevent SQL injection
             query = "SELECT * FROM users WHERE username = ?"
             cursor.execute(query, (username,))
             

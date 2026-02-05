@@ -23,7 +23,6 @@ func (p *OrderProcessor) ProcessOrder(orderID string, items []string) error {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
 
-	// Fixed: Added mandatory DeferClose call
 	defer tx.DeferClose()
 
 	// Process items

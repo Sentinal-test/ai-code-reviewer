@@ -10,7 +10,6 @@ class CallbackFactory:
         """
         multipliers = []
         
-        # FIXED: Use default argument to capture value immediately
         for i in range(10):
             multipliers.append(lambda x, idx=i: x * idx * factor)
             

@@ -11,7 +11,6 @@ class UserRepository {
       throw new Error('Email is required');
     }
 
-    // FIXED: Use parameterized query
     const query = `SELECT * FROM ${this.tableName} WHERE email = $1`;
     
     try {

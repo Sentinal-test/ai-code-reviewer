@@ -21,7 +21,6 @@ class Cart {
   isEligibleForFreeShipping() {
     const total = this.calculateTotal();
     
-    // BUG: Floating point precision issue
     // e.g. 19.99 + (19.99 * 0.0825) might result in 21.639175
     // Comparing floats directly is dangerous
     if (total === 50.00) {

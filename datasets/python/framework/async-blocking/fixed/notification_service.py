@@ -12,7 +12,6 @@ class NotificationService:
         """
         Sends an email notification.
         """
-        # FIXED: Use asyncio.sleep to yield control back to the event loop
         await asyncio.sleep(5) 
         
         print(f"Sent email to {email}: {message}")

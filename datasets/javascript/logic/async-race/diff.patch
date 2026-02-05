@@ -1,19 +1,16 @@
---- datasets/javascript/logic/async-race/buggy/InventoryService.js	2026-02-05 13:42:21
-+++ datasets/javascript/logic/async-race/fixed/InventoryService.js	2026-02-05 13:42:26
-@@ -5,31 +5,25 @@
+--- datasets/javascript/logic/async-race/buggy/InventoryService.js	2026-02-05 15:59:04
++++ datasets/javascript/logic/async-race/fixed/InventoryService.js	2026-02-05 15:59:04
+@@ -5,29 +5,22 @@
      this.table = 'inventory';
    }
  
--  // BUG: Race condition
 -  // Two concurrent requests can read the same stock value,
 -  // decrement it, and write it back, resulting in overselling.
-+  // FIXED: Atomic update
    async purchaseItem(itemId, quantity) {
 -    const item = await db.query('SELECT stock FROM inventory WHERE id = ?', [itemId]);
 -    
 -    if (!item || item.stock < quantity) {
 -      throw new Error('Out of stock');
-+    // Use database atomic decrement or transaction with SELECT FOR UPDATE
 +    const result = await db.query(
 +      'UPDATE inventory SET stock = stock - ? WHERE id = ? AND stock >= ? RETURNING stock',
 +      [quantity, itemId, quantity]
@@ -34,12 +31,10 @@
    }
  
    async restockItem(itemId, quantity) {
--    // Similar race condition potential
 -    const item = await db.query('SELECT stock FROM inventory WHERE id = ?', [itemId]);
 -    const newStock = item.stock + quantity;
 -    await db.query('UPDATE inventory SET stock = ? WHERE id = ?', [newStock, itemId]);
 -    return { status: 'restocked', newStock };
-+    // Atomic increment
 +    await db.query('UPDATE inventory SET stock = stock + ? WHERE id = ?', [quantity, itemId]);
 +    return { status: 'restocked' };
    }

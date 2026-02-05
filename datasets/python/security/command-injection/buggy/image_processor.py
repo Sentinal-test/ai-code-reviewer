@@ -16,13 +16,11 @@ class ImageProcessor:
         input_path = os.path.join(self.upload_dir, filename)
         output_path = os.path.join(self.upload_dir, f"resized_{filename}")
 
-        # BUG: Command Injection
         # If filename contains shell metacharacters (e.g., "test.jpg; rm -rf /"),
         # this will execute arbitrary commands.
         cmd = f"convert {input_path} -resize {width}x{height} {output_path}"
         
         try:
-            # shell=True combined with f-string input is dangerous
             subprocess.call(cmd, shell=True)
             return True
         except subprocess.CalledProcessError:

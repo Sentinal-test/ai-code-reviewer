@@ -2,7 +2,6 @@ package com.example.logic;
 
 public class AuthController {
     public boolean checkPermission(String userRole, String requiredRole) {
-        // FIXED: Use .equals() for string comparison
         if (userRole != null && userRole.equals(requiredRole)) {
             return true;
         }

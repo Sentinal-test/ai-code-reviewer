@@ -10,7 +10,6 @@ class APIClient:
             response = requests.get(f"{self.base_url}/{endpoint}")
             response.raise_for_status()
             return response.json()
-        # BUG: Bare Except
         # Catching all exceptions hides unexpected errors (e.g., NameError, KeyboardInterrupt)
         # and makes debugging extremely difficult.
         except:

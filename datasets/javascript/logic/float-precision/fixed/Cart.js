@@ -9,7 +9,6 @@ class Cart {
   }
 
   calculateTotal() {
-    // Better: work with cents (integers)
     let subtotalCents = 0;
     for (const item of this.items) {
       subtotalCents += (item.price * 100) * item.qty;
@@ -22,7 +21,6 @@ class Cart {
   isEligibleForFreeShipping() {
     const total = this.calculateTotal();
     
-    // FIXED: Use an epsilon for comparison or >= logic
     const EPSILON = 0.001;
     if (Math.abs(total - 50.00) < EPSILON) {
       return true;

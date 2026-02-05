@@ -15,7 +15,6 @@ class JobQueue {
     if (this.isProcessing) return;
     this.isProcessing = true;
 
-    // FIXED: Properly handle async execution
     while (this.jobs.length > 0) {
       const job = this.jobs.shift();
       try {

@@ -54,7 +54,6 @@ func (dp *DataProcessor) ProcessBatch(items []string) (string, error) {
 	// Logging start
 	fmt.Printf("Starting batch processing for %s\n", dp.ID)
 
-	// Inefficient string concatenation
 	var output string
 	for i, item := range items {
 		// Simulate complex processing

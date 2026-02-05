@@ -1,10 +1,9 @@
---- datasets/javascript/logic/prototype-pollution/buggy/ConfigMerger.js	2026-02-05 13:43:14
-+++ datasets/javascript/logic/prototype-pollution/fixed/ConfigMerger.js	2026-02-05 13:43:22
-@@ -3,26 +3,18 @@
+--- datasets/javascript/logic/prototype-pollution/buggy/ConfigMerger.js	2026-02-05 15:59:04
++++ datasets/javascript/logic/prototype-pollution/fixed/ConfigMerger.js	2026-02-05 15:59:04
+@@ -3,25 +3,17 @@
      this.config = defaultConfig || {};
    }
  
--  // BUG: Prototype Pollution
 -  // An attacker can send __proto__ as a key to modify Object.prototype
    merge(payload) {
 -    for (const key in payload) {
@@ -25,7 +24,6 @@
  
    mergeRecursive(target, source) {
      for (const key in source) {
-+      // FIXED: Block dangerous keys
 +      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
 +        continue;
 +      }

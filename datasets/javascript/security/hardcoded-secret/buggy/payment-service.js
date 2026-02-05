@@ -3,7 +3,6 @@ const axios = require('axios');
 class PaymentService {
   constructor() {
     this.baseUrl = 'https://api.stripe.com/v1';
-    // BUG: Hardcoded secret key
     this.apiKey = 'sk_test_51Mz9X2Hq4Kz7Jp8L0QwErTyUiOpA3SdFgHjK1LzXcVbNmQ'; 
   }
 

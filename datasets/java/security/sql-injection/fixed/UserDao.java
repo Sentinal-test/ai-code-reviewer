@@ -17,7 +17,6 @@ public class UserDao {
     public List<String> searchUsers(String query) throws Exception {
         List<String> results = new ArrayList<>();
         
-        // FIXED: Use PreparedStatement and try-with-resources
         String sql = "SELECT username FROM users WHERE username LIKE ?";
         
         try (Connection conn = dataSource.getConnection();

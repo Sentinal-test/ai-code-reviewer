@@ -3,7 +3,6 @@ class ConfigMerger {
     this.config = defaultConfig || {};
   }
 
-  // BUG: Prototype Pollution
   // An attacker can send __proto__ as a key to modify Object.prototype
   merge(payload) {
     for (const key in payload) {

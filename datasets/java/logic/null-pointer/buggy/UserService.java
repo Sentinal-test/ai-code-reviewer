@@ -13,7 +13,6 @@ public class UserService {
     public String getUserDisplayName(String userId) {
         User user = userRepo.findById(userId);
         
-        // BUG: Null Pointer Exception
         // userRepo.findById might return null if user not found.
         // Accessing user.getProfile() will throw NPE.
         return user.getProfile().getDisplayName();

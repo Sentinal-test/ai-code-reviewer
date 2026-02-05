@@ -5,9 +5,7 @@ class InventoryService {
     this.table = 'inventory';
   }
 
-  // FIXED: Atomic update
   async purchaseItem(itemId, quantity) {
-    // Use database atomic decrement or transaction with SELECT FOR UPDATE
     const result = await db.query(
       'UPDATE inventory SET stock = stock - ? WHERE id = ? AND stock >= ? RETURNING stock',
       [quantity, itemId, quantity]
@@ -21,7 +19,6 @@ class InventoryService {
   }
 
   async restockItem(itemId, quantity) {
-    // Atomic increment
     await db.query('UPDATE inventory SET stock = stock + ? WHERE id = ?', [quantity, itemId]);
     return { status: 'restocked' };
   }

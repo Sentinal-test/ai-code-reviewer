@@ -8,13 +8,11 @@ class LogWriter:
         timestamp = datetime.datetime.now().isoformat()
         entry = f"[{timestamp}] {message}\n"
         
-        # FIXED: Use context manager (with statement)
         with open(self.log_path, 'a') as f:
             f.write(entry)
 
     def batch_log(self, messages: list):
         try:
-            # FIXED: Context manager ensures file is closed even if exception occurs
             with open(self.log_path, 'a') as f:
                 for msg in messages:
                     f.write(f"[BATCH] {msg}\n")

@@ -14,7 +14,6 @@ public class UserService {
     public String getUserDisplayName(String userId) {
         User user = userRepo.findById(userId);
         
-        // FIXED: Null check
         if (user == null || user.getProfile() == null) {
             return "Unknown User";
         }

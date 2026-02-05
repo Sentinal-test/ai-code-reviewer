@@ -6,7 +6,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class OrderService {
     
-    // FIXED: Move @Transactional to the public entry point
     @Transactional
     public void createOrder(String orderId) {
         // ... validation logic

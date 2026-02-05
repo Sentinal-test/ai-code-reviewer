@@ -17,7 +17,6 @@ class ImageProcessor:
         input_path = os.path.join(self.upload_dir, filename)
         output_path = os.path.join(self.upload_dir, f"resized_{filename}")
 
-        # FIXED: Pass command as a list of arguments and use shell=False
         cmd = ["convert", input_path, "-resize", f"{width}x{height}", output_path]
         
         try:

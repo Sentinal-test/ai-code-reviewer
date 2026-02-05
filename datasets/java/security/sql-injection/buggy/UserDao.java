@@ -19,7 +19,6 @@ public class UserDao {
         Connection conn = dataSource.getConnection();
         Statement stmt = conn.createStatement();
         
-        // BUG: SQL Injection
         // User input 'query' is concatenated directly into the SQL string.
         String sql = "SELECT username FROM users WHERE username LIKE '" + query + "%'";
         

@@ -15,8 +15,6 @@ class JobQueue {
     if (this.isProcessing) return;
     this.isProcessing = true;
 
-    // BUG: Uncaught Promise Rejection
-    // The loop calls async function without await or catch.
     // If runJob fails, the error is unhandled and might crash Node.js
     while (this.jobs.length > 0) {
       const job = this.jobs.shift();

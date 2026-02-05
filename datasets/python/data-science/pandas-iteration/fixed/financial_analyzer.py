@@ -9,7 +9,6 @@ class FinancialAnalyzer:
         """
         Calculates week-over-week growth for each row.
         """
-        # FIXED: Use vectorized operations (100x+ faster)
         # Avoids explicit loops entirely
         self.df['growth'] = (self.df['current_value'] - self.df['previous_value']) / self.df['previous_value']
         
@@ -19,7 +18,6 @@ class FinancialAnalyzer:
         return self.df
 
     def normalize_data(self):
-        # Vectorized division
         self.df['normalized'] = self.df['current_value'] / 100
 
     def summary(self):

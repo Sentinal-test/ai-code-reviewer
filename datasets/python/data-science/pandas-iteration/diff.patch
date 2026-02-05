@@ -1,16 +1,13 @@
---- datasets/python/data-science/pandas-iteration/buggy/financial_analyzer.py	2026-02-05 13:49:36
-+++ datasets/python/data-science/pandas-iteration/fixed/financial_analyzer.py	2026-02-05 13:49:44
-@@ -9,20 +9,18 @@
+--- datasets/python/data-science/pandas-iteration/buggy/financial_analyzer.py	2026-02-05 15:59:04
++++ datasets/python/data-science/pandas-iteration/fixed/financial_analyzer.py	2026-02-05 15:59:04
+@@ -9,18 +9,16 @@
          """
          Calculates week-over-week growth for each row.
          """
 -        self.df['growth'] = 0.0
-+        # FIXED: Use vectorized operations (100x+ faster)
 +        # Avoids explicit loops entirely
 +        self.df['growth'] = (self.df['current_value'] - self.df['previous_value']) / self.df['previous_value']
          
--        # BUG: Iterating over Pandas DataFrame
--        # Iterating rows is extremely slow (anti-pattern) compared to vectorization.
 -        for index, row in self.df.iterrows():
 -            if row['previous_value'] > 0:
 -                growth = (row['current_value'] - row['previous_value']) / row['previous_value']
@@ -23,7 +20,6 @@
      def normalize_data(self):
 -        # Using apply is better than iterrows but still slower than vectorization
 -        self.df['normalized'] = self.df.apply(lambda x: x['current_value'] / 100, axis=1)
-+        # Vectorized division
 +        self.df['normalized'] = self.df['current_value'] / 100
  
      def summary(self):

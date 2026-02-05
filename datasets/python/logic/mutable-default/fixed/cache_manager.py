@@ -5,7 +5,6 @@ class CacheManager:
     def __init__(self):
         self.hits = 0
 
-    # FIXED: Use None as default value and initialize inside function
     def get_data(self, key: str, cache: Optional[Dict[str, Any]] = None) -> Any:
         if cache is None:
             cache = {}

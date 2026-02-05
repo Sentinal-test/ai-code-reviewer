@@ -3,7 +3,6 @@ const axios = require('axios');
 class PaymentService {
   constructor() {
     this.baseUrl = 'https://api.stripe.com/v1';
-    // FIXED: Use environment variable
     this.apiKey = process.env.STRIPE_API_KEY;
     
     if (!this.apiKey) {

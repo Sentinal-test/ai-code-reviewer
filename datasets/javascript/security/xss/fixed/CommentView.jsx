@@ -5,7 +5,6 @@ import DOMPurify from 'dompurify';
 const CommentView = ({ comment, author }) => {
   if (!comment) return null;
 
-  // FIXED: Sanitize content before rendering
   const sanitizedContent = DOMPurify.sanitize(comment.content);
 
   return (

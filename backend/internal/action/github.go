@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"time"
+
 	"github.com/google/go-github/v60/github"
 	"golang.org/x/oauth2"
 )
@@ -63,28 +65,48 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 	// we fall back to a General PR Comment for that specific item.
 
 	successCount := 0
-	for _, c := range result.Comments {
+	failedInline := 0
+
+	for i, c := range result.Comments {
+		// Periodically sleep to avoid secondary rate limits (GitHub abuse protection)
+		if i > 0 && i%5 == 0 {
+			time.Sleep(2 * time.Second)
+		}
+
 		msg := fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
 
 		comment := &github.PullRequestComment{
 			Body:     github.String(msg),
 			Path:     github.String(c.File),
 			Line:     github.Int(c.Line),
-			Side:     github.String("RIGHT"), // Default to RIGHT side
+			Side:     github.String("RIGHT"),
 			CommitID: github.String(commitSHA),
 		}
 
 		err := g.postComment(ctx, prNumber, comment)
 		if err != nil {
+			// Check if we hit a rate limit
+			if strings.Contains(err.Error(), "403") && (strings.Contains(err.Error(), "secondary rate limit") || strings.Contains(err.Error(), "temporarily blocked")) {
+				fmt.Printf("🛑 Hit GitHub Secondary Rate Limit. Aborting individual posts and dumping remaining as one summary.\n")
+				// Post remaining comments as a single bulk comment to avoid further rate limit issues
+				var remaining strings.Builder
+				remaining.WriteString("### Remaining Review Comments (Delayed due to Rate Limits)\n\n")
+				for j := i; j < len(result.Comments); j++ {
+					remC := result.Comments[j]
+					remaining.WriteString(fmt.Sprintf("- **%s** (%s:%d): %s\n", strings.ToUpper(remC.Severity), remC.File, remC.Line, remC.Message))
+				}
+				g.postGeneralComment(ctx, prNumber, remaining.String())
+				break
+			}
+
 			// If individual comment fails (likely 422 again), post as General Comment
 			if strings.Contains(err.Error(), "422") || strings.Contains(err.Error(), "Validation Failed") {
 				fmt.Printf("  ⚠️ Failed to post inline comment on %s:L%d. Retrying as General Comment..\n", c.File, c.Line)
+				failedInline++
 
 				fallbackMsg := fmt.Sprintf("⚠️ **Could not post inline on %s:L%d** (Line mismatch in diff)\n\n%s", c.File, c.Line, msg)
 				genErr := g.postGeneralComment(ctx, prNumber, fallbackMsg)
-				if genErr != nil {
-					fmt.Printf("  ❌ Failed to post general comment fallback: %v\n", genErr)
-				} else {
+				if genErr == nil {
 					successCount++
 				}
 			} else {
@@ -93,13 +115,17 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 		} else {
 			successCount++
 		}
+
+		// Small delay to be polite to the API
+		time.Sleep(500 * time.Millisecond)
 	}
 
-	// Post the summary as a separate general comment since we are in fallback mode
-	if result.Summary != "" {
-		summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s", result.Summary)
-		g.postGeneralComment(ctx, prNumber, summaryMsg)
+	// Post the final summary
+	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s", result.Summary)
+	if failedInline > 0 {
+		summaryMsg += fmt.Sprintf("\n\n---\n*Note: %d comments were posted as general comments because their line numbers could not be resolved in the PR diff.*", failedInline)
 	}
+	g.postGeneralComment(ctx, prNumber, summaryMsg)
 
 	fmt.Printf("✅ Fallback Review Complete | Posted %d/%d comments successfully\n", successCount, len(result.Comments))
 	return nil

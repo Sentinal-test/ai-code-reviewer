@@ -29,7 +29,6 @@ func (h *AdminHandler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// BUG: Direct role access bypasses hierarchy (SuperAdmin) and case sensitivity.
 	// The dependency internal/auth/user.go explicitly warns against this.
 	if ctxUser.Role != "admin" {
 		http.Error(w, "Forbidden: Admins only", http.StatusForbidden)
@@ -57,7 +56,6 @@ func (h *AdminHandler) HandleSystemConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// BUG: Another direct access instance
 	if ctxUser.Role == "viewer" {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return

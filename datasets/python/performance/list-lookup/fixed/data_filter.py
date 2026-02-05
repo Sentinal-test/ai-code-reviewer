@@ -10,7 +10,6 @@ class DataFilter:
         """
         valid_items = []
         
-        # FIXED: Convert list to set for O(1) average time complexity lookups
         blocked_set = set(self.blocked_ids)
         
         for item in items:

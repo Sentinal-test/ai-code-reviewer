@@ -1,12 +1,10 @@
---- datasets/javascript/security/hardcoded-secret/buggy/payment-service.js	2026-02-05 13:41:43
-+++ datasets/javascript/security/hardcoded-secret/fixed/payment-service.js	2026-02-05 13:41:51
-@@ -3,8 +3,12 @@
+--- datasets/javascript/security/hardcoded-secret/buggy/payment-service.js	2026-02-05 15:59:04
++++ datasets/javascript/security/hardcoded-secret/fixed/payment-service.js	2026-02-05 15:59:04
+@@ -3,7 +3,11 @@
  class PaymentService {
    constructor() {
      this.baseUrl = 'https://api.stripe.com/v1';
--    // BUG: Hardcoded secret key
 -    this.apiKey = 'sk_test_51Mz9X2Hq4Kz7Jp8L0QwErTyUiOpA3SdFgHjK1LzXcVbNmQ'; 
-+    // FIXED: Use environment variable
 +    this.apiKey = process.env.STRIPE_API_KEY;
 +    
 +    if (!this.apiKey) {

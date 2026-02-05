@@ -14,7 +14,6 @@ public class ApiClient {
             conn.getOutputStream().write(data.getBytes());
             conn.getInputStream().close();
         } catch (Exception e) {
-            // BUG: Swallowed Exception
             // Exception is caught but nothing is done.
             // No logging, no rethrowing. Errors fail silently.
         }

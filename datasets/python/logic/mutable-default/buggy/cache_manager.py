@@ -5,9 +5,7 @@ class CacheManager:
     def __init__(self):
         self.hits = 0
 
-    # BUG: Mutable Default Argument
     # The 'cache' dict is created once at definition time, not every call.
-    # This means 'cache' is shared across all calls that use the default.
     def get_data(self, key: str, cache: Dict[str, Any] = {}) -> Any:
         if key in cache:
             self.hits += 1

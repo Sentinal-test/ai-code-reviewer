@@ -23,9 +23,7 @@ func (p *OrderProcessor) ProcessOrder(orderID string, items []string) error {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
 
-	// BUG: Missing defer tx.DeferClose().
 	// The dependency pkg/database/wrapper.go explicitly states this is MANDATORY.
-	// Standard Rollback pattern or omitting it will cause resource leaks in this custom wrapper.
 
 	// Process items
 	for _, item := range items {

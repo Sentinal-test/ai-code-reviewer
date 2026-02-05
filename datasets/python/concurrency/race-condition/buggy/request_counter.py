@@ -9,8 +9,6 @@ class RequestCounter:
         # Simulate processing time
         time.sleep(0.001)
         
-        # BUG: Race Condition
-        # += is not atomic in Python (it's read-modify-write).
         # Multiple threads hitting this causes lost updates.
         self.count += 1
         

@@ -5,7 +5,6 @@ class PostController {
     try {
       const posts = await Post.findAll({ where: { published: true } });
       
-      // BUG: N+1 Query Problem
       // Fetching author for each post individually in a loop
       const postsWithAuthors = [];
       for (const post of posts) {
