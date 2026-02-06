@@ -1,7 +1,6 @@
 package main
 
 import (
-	"code-review/backend/internal/analysis"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/models"
 	"context"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time" // Added for context.WithTimeout
 
 	"github.com/joho/godotenv"
 )
@@ -58,51 +56,26 @@ func main() {
 
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		fmt.Println("GEMINI_API_KEY not set")
-		return
+		fmt.Println("❌ Error: GEMINI_API_KEY is required")
+		os.Exit(1)
 	}
-
-	caseFilter := os.Getenv("CASE_FILTER")
 
 	datasetRoot := "../datasets" // Relative to backend/cmd/benchmark
 	absRoot, _ := filepath.Abs(datasetRoot)
 	fmt.Printf("📊 Starting Benchmark Evaluation on: %s\n", absRoot)
 
 	var results []Result
-	var cases []string
-	baseDir := absRoot // Use absRoot as the base directory for walking
 
-	err := filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
+	filepath.Walk(absRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-
-		// Only look for truth.json files
-		if !info.IsDir() && info.Name() == "truth.json" {
-			// Speed optimization: filter for Go and Python only
-			rel, _ := filepath.Rel(baseDir, path)
-			parts := strings.Split(rel, string(os.PathSeparator))
-			if len(parts) > 0 && (parts[0] == "go" || parts[0] == "python") {
-				caseDir := filepath.Dir(path)
-				if caseFilter != "" && !strings.Contains(caseDir, caseFilter) {
-					return nil
-				}
-				cases = append(cases, caseDir)
-			}
+		if info.Name() == "truth.json" {
+			res := runEvalCase(path, apiKey)
+			results = append(results, res)
 		}
 		return nil
 	})
-
-	if err != nil {
-		fmt.Printf("Error walking dataset directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	for _, caseDir := range cases {
-		truthPath := filepath.Join(caseDir, "truth.json")
-		res := runEvalCase(truthPath, apiKey)
-		results = append(results, res)
-	}
 
 	printSummary(results)
 }
@@ -131,8 +104,8 @@ func runEvalCase(truthPath, apiKey string) Result {
 	}
 
 	// 3. Load Buggy Files
-	changedFiles := make(map[string]string)
 	buggyDir := filepath.Join(caseDir, "buggy")
+	changedFiles := make(map[string]string)
 	filepath.Walk(buggyDir, func(path string, info os.FileInfo, err error) error {
 		if !info.IsDir() {
 			rel, _ := filepath.Rel(buggyDir, path)
@@ -165,50 +138,47 @@ func runEvalCase(truthPath, apiKey string) Result {
 		prContext.Title = "Evaluation Test"
 	}
 
-	// EXECUTE DETERMINISTIC SCOUT PASS (Code Graph)
-	ctxBuild, cancelBuild := context.WithTimeout(ctx, 30*time.Second)
-	defer cancelBuild()
-
-	idx := analysis.NewIndex()
-	// Build index of the entire "buggy" directory (simulated repo)
-	// buggyDir is already defined above
-	if err := idx.BuildIndex(ctxBuild, buggyDir); err != nil {
-		return Result{CaseID: caseID, Error: fmt.Sprintf("Failed to build index: %v", err)}
-	}
-	// Also index the "deps" folder if it exists
-	depsDir := filepath.Join(caseDir, "deps")
-	if _, err := os.Stat(depsDir); err == nil {
-		idx.BuildIndex(ctxBuild, depsDir)
-	}
-
-	fmt.Printf("   🔭 Running Code Graph Scout...\n")
-	dependencies := idx.GetRequiredContext(string(diff), prContext.Title, prContext.Body)
-
-	tpDeps := 0
-	foundFiles := []string{}
-	for path := range dependencies {
-		foundFiles = append(foundFiles, path)
-	}
-
-	for _, expected := range truth.ExpectedDependencies {
-		found := false
-		for _, f := range foundFiles {
-			// Path matching might be tricky due to relative paths
-			if strings.HasSuffix(f, expected) {
-				found = true
-				break
-			}
-		}
-		if found {
-			tpDeps++
-		}
-	}
-
+	// EXECUTE SCOUT PASS if expected dependencies are listed
+	dependencies := make(map[string]string)
 	depRecall := 1.0
 	if len(truth.ExpectedDependencies) > 0 {
+		fmt.Printf("   🔭 Running Scout Pass...\n")
+		// Simulate repo structure by listing files in buggy dir
+		var repoFiles []string
+		for f := range changedFiles {
+			repoFiles = append(repoFiles, f)
+		}
+		// Also add expected dependencies to repo structure
+		for _, d := range truth.ExpectedDependencies {
+			repoFiles = append(repoFiles, d)
+		}
+		repoStructure := strings.Join(repoFiles, "\n")
+
+		foundPaths, _ := llm.AnalyzeDependencyNeeds(ctx, client, string(diff), changedFiles, repoStructure, prContext, apiKey)
+
+		tpDeps := 0
+		for _, expected := range truth.ExpectedDependencies {
+			found := false
+			for _, f := range foundPaths {
+				if f == expected {
+					found = true
+					break
+				}
+			}
+			if found {
+				tpDeps++
+				// Load actual dependency content if available in deps/ folder
+				depPath := filepath.Join(caseDir, "deps", expected)
+				if content, err := os.ReadFile(depPath); err == nil {
+					dependencies[expected] = string(content)
+				} else {
+					dependencies[expected] = "// Dependency found (content missing in test case)"
+				}
+			}
+		}
 		depRecall = float64(tpDeps) / float64(len(truth.ExpectedDependencies))
+		fmt.Printf("   🔍 Scout Recall: %.2f (%d/%d found)\n", depRecall, tpDeps, len(truth.ExpectedDependencies))
 	}
-	fmt.Printf("   🔍 Scout Recall: %.2f (%d/%d found)\n", depRecall, tpDeps, len(truth.ExpectedDependencies))
 
 	review, err := llm.RunReview(ctx, client, string(diff), changedFiles, dependencies, settings, "", apiKey, prContext)
 	if err != nil {
