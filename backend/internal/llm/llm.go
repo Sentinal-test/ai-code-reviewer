@@ -27,6 +27,8 @@ func truncateUTF8(s string, maxBytes int) string {
 		return s
 	}
 
+	fmt.Printf("[WARNING] Context truncation triggered! Input size: %d bytes, Max allowed: %d bytes\n", len(s), maxBytes)
+
 	// Find the last valid UTF-8 character boundary before maxBytes
 	truncated := s[:maxBytes]
 
@@ -283,8 +285,8 @@ func getFileKeys(m map[string]string) []string {
 func buildPrompt(diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, prContext models.PRContext) string {
 	// Context Window Management
 	// Priority: Complete Files with Diff Annotations > Dependencies > Repo Structure
-	// Target Max Chars: ~400,000 (approx 100k tokens safety)
-	const MaxContextChars = 1000000
+	// Target Max Chars: ~3,500,000 (approx 875k tokens safety for Gemini 2.5 Flash)
+	const MaxContextChars = 3500000
 
 	// Helper to format files with inline diff annotations
 	formatFilesWithDiff := func(files map[string]string, diffMap map[string][]string) string {
