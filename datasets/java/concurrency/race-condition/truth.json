@@ -1,0 +1,22 @@
+{
+    "id": "JAVA-CONC-RACE-001",
+    "language": "java",
+    "category": "bug",
+    "pr_context": {
+        "title": "Add simple cache",
+        "body": "Implemented in-memory cache.",
+        "commits": [
+            "feat: add cache service"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "race-condition",
+            "severity": "warning",
+            "file": "CacheService.java",
+            "line": 9,
+            "description": "HashMap is not thread-safe. Use ConcurrentHashMap for shared cache."
+        }
+    ],
+    "expected_comments": 1
+}

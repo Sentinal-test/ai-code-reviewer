@@ -1,0 +1,22 @@
+--- datasets/java/performance/string-concat/buggy/ReportGenerator.java	2026-02-05 15:59:04
++++ datasets/java/performance/string-concat/fixed/ReportGenerator.java	2026-02-05 15:59:04
+@@ -4,15 +4,14 @@
+ 
+ public class ReportGenerator {
+     public String generateCsv(List<String[]> data) {
+-        // Using += in a loop creates a new String object every iteration.
+-        String csv = "";
++        StringBuilder sb = new StringBuilder();
+         
+         for (String[] row : data) {
+-            String line = String.join(",", row);
+-            csv += line + "\n";
++            sb.append(String.join(",", row));
++            sb.append("\n");
+         }
+         
+-        return csv;
++        return sb.toString();
+     }
+ 
+     public String formatHeader(String[] headers) {

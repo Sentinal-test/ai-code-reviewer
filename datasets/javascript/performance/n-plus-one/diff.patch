@@ -1,0 +1,28 @@
+--- datasets/javascript/performance/n-plus-one/buggy/PostController.js	2026-02-05 15:59:04
++++ datasets/javascript/performance/n-plus-one/fixed/PostController.js	2026-02-05 15:59:04
+@@ -3,17 +3,15 @@
+ class PostController {
+   async getAllPosts(req, res) {
+     try {
+-      const posts = await Post.findAll({ where: { published: true } });
++      const posts = await Post.findAll({ 
++        where: { published: true },
++        include: [{ model: Author, attributes: ['name'] }]
++      });
+       
+-      // Fetching author for each post individually in a loop
+-      const postsWithAuthors = [];
+-      for (const post of posts) {
+-        const author = await Author.findById(post.authorId);
+-        postsWithAuthors.push({
+-          ...post.toJSON(),
+-          author: author.name
+-        });
+-      }
++      const postsWithAuthors = posts.map(post => ({
++        ...post.toJSON(),
++        author: post.Author.name
++      }));
+ 
+       res.json(postsWithAuthors);
+     } catch (error) {

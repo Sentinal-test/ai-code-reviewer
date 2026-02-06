@@ -1,0 +1,22 @@
+{
+    "id": "JAVA-ERR-SWALLOW-001",
+    "language": "java",
+    "category": "error-handling",
+    "pr_context": {
+        "title": "Add API client",
+        "body": "Implemented data sender.",
+        "commits": [
+            "feat: add api client"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "swallowed-exception",
+            "severity": "warning",
+            "file": "ApiClient.java",
+            "line": 15,
+            "description": "Swallowed exception detected. Log the error or rethrow it."
+        }
+    ],
+    "expected_comments": 1
+}

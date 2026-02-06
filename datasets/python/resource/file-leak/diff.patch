@@ -1,0 +1,24 @@
+--- datasets/python/resource/file-leak/buggy/log_writer.py	2026-02-05 15:59:04
++++ datasets/python/resource/file-leak/fixed/log_writer.py	2026-02-05 15:59:04
+@@ -8,16 +8,14 @@
+         timestamp = datetime.datetime.now().isoformat()
+         entry = f"[{timestamp}] {message}\n"
+         
+-        # In high-throughput apps, this hits the OS file descriptor limit.
+-        f = open(self.log_path, 'a')
+-        f.write(entry)
++        with open(self.log_path, 'a') as f:
++            f.write(entry)
+ 
+     def batch_log(self, messages: list):
+         try:
+-            f = open(self.log_path, 'a')
+-            for msg in messages:
+-                f.write(f"[BATCH] {msg}\n")
+-            # If exception happens above, file never closes
++            with open(self.log_path, 'a') as f:
++                for msg in messages:
++                    f.write(f"[BATCH] {msg}\n")
+         except IOError:
+             print("Failed to write logs")
+ 

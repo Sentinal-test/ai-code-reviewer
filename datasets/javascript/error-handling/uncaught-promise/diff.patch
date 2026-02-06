@@ -1,0 +1,23 @@
+--- datasets/javascript/error-handling/uncaught-promise/buggy/JobQueue.js	2026-02-05 15:59:04
++++ datasets/javascript/error-handling/uncaught-promise/fixed/JobQueue.js	2026-02-05 15:59:04
+@@ -11,14 +11,17 @@
+     this.process();
+   }
+ 
+-  process() {
++  async process() {
+     if (this.isProcessing) return;
+     this.isProcessing = true;
+ 
+-    // If runJob fails, the error is unhandled and might crash Node.js
+     while (this.jobs.length > 0) {
+       const job = this.jobs.shift();
+-      this.runJob(job);
++      try {
++        await this.runJob(job);
++      } catch (err) {
++        console.error(`Failed to run job ${job.id}:`, err);
++      }
+     }
+     
+     this.isProcessing = false;

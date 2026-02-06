@@ -1,0 +1,30 @@
+--- datasets/go/performance/string-concatenation/buggy/processor.go	2026-02-05 15:59:04
++++ datasets/go/performance/string-concatenation/fixed/processor.go	2026-02-05 15:59:04
+@@ -54,22 +54,23 @@
+ 	// Logging start
+ 	fmt.Printf("Starting batch processing for %s\n", dp.ID)
+ 
+-	var output string
++	// Efficient string concatenation
++	var sb strings.Builder
+ 	for i, item := range items {
+ 		// Simulate complex processing
+ 		processed := strings.TrimSpace(item)
+ 		processed = strings.ToUpper(processed)
+ 
+ 		if i > 0 {
+-			output += ","
++			sb.WriteString(",")
+ 		}
+-		output += processed
++		sb.WriteString(processed)
+ 	}
+ 
+ 	// Post-processing hooks
+ 	dp.runPostHooks()
+ 
+-	return output, nil
++	return sb.String(), nil
+ }
+ 
+ func (dp *DataProcessor) runPostHooks() {

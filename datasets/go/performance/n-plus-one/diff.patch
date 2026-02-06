@@ -1,0 +1,27 @@
+--- datasets/go/performance/n-plus-one/buggy/service.go	2026-02-05 12:40:59
++++ datasets/go/performance/n-plus-one/fixed/service.go	2026-02-05 12:41:03
+@@ -18,7 +18,11 @@
+ }
+ 
+ func (s *OrderService) GetOrdersWithCustomers() ([]map[string]interface{}, error) {
+-	rows, err := s.db.Query("SELECT id, customer_id, total FROM orders")
++	rows, err := s.db.Query(`
++		SELECT o.id, o.customer_id, o.total, c.id, c.name 
++		FROM orders o 
++		JOIN customers c ON o.customer_id = c.id
++	`)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -27,10 +31,8 @@
+ 	var results []map[string]interface{}
+ 	for rows.Next() {
+ 		var order Order
+-		rows.Scan(&order.ID, &order.CustomerID, &order.Total)
+-
+ 		var customer Customer
+-		s.db.QueryRow("SELECT id, name FROM customers WHERE id = ?", order.CustomerID).Scan(&customer.ID, &customer.Name)
++		rows.Scan(&order.ID, &order.CustomerID, &order.Total, &customer.ID, &customer.Name)
+ 
+ 		results = append(results, map[string]interface{}{
+ 			"order":    order,

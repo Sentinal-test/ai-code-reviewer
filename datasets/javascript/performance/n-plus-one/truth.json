@@ -1,0 +1,22 @@
+{
+    "id": "JS-PERF-NPLUSONE-001",
+    "language": "javascript",
+    "category": "performance",
+    "pr_context": {
+        "title": "API: Get posts with authors",
+        "body": "Updated getAllPosts to include author names.",
+        "commits": [
+            "feat: add author to posts response"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "n-plus-one-query",
+            "severity": "warning",
+            "file": "PostController.js",
+            "line": 12,
+            "description": "N+1 query detected inside loop. Use eager loading (include) or batching."
+        }
+    ],
+    "expected_comments": 1
+}

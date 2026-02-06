@@ -1,0 +1,16 @@
+{
+    "id": "GO-NIL-001",
+    "language": "go",
+    "category": "nil-pointer",
+    "bugs": [
+        {
+            "type": "nil-pointer",
+            "severity": "high",
+            "file": "service.go",
+            "line": 24,
+            "symbol": "CreateUser",
+            "description": "userRepo.Find may return nil; dereferenced without check"
+        }
+    ],
+    "expected_comments": 1
+}

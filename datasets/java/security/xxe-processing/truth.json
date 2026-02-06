@@ -1,0 +1,22 @@
+{
+    "id": "JAVA-SEC-XXE-001",
+    "language": "java",
+    "category": "security",
+    "pr_context": {
+        "title": "Add invoice parsing",
+        "body": "Implemented XML parser for invoices.",
+        "commits": [
+            "feat: add xml parser"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "xxe-processing",
+            "severity": "critical",
+            "file": "XmlProcessor.java",
+            "line": 15,
+            "description": "XXE vulnerability detected. Disable external entity processing in DocumentBuilderFactory."
+        }
+    ],
+    "expected_comments": 1
+}

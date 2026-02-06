@@ -1,0 +1,20 @@
+--- datasets/java/resource/stream-leak/buggy/FileReader.java	2026-02-05 15:59:04
++++ datasets/java/resource/stream-leak/fixed/FileReader.java	2026-02-05 15:59:04
+@@ -5,12 +5,11 @@
+ 
+ public class FileReader {
+     public byte[] readFile(String path) throws IOException {
+-        // Even if exception occurs during read, stream remains open.
+-        FileInputStream fis = new FileInputStream(path);
+-        byte[] content = new byte[fis.available()];
+-        fis.read(content);
+-        
+-        return content;
++        try (FileInputStream fis = new FileInputStream(path)) {
++            byte[] content = new byte[fis.available()];
++            fis.read(content);
++            return content;
++        }
+     }
+ 
+     public void logError(String msg) {

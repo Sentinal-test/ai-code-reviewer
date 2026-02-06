@@ -1,0 +1,29 @@
+{
+    "id": "GO-SEC-002",
+    "language": "go",
+    "category": "security",
+    "pr_context": {
+        "title": "Add configuration helpers",
+        "body": "Added helper functions to get database and API configuration.",
+        "commits": [
+            "feat: add config helpers"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "hardcoded-secret",
+            "severity": "critical",
+            "file": "config.go",
+            "line": 3,
+            "description": "Database credentials hardcoded in source code."
+        },
+        {
+            "type": "hardcoded-secret",
+            "severity": "critical",
+            "file": "config.go",
+            "line": 4,
+            "description": "API key hardcoded in source code."
+        }
+    ],
+    "expected_comments": 2
+}

@@ -5,12 +5,12 @@ This document outlines how the AI Code Review system handles large codebases and
 ## Current Implementation
 
 ### Limits
-- **Max Context Characters**: 1,000,000 (approx. 1MB of text).
-- **Estimated Tokens**: ~250,000 to 300,000 tokens (assuming 1 token ≈ 3.5 - 4 characters for code).
-- **Model Capacity**: Gemini 1.5 Flash supports up to 1M tokens, while Gemini 1.5 Pro supports up to 2M tokens.
+- **Max Context Characters**: 3,500,000 (approx. 3.5MB of text).
+- **Estimated Tokens**: ~875,000 to 1,000,000 tokens (assuming 1 token ≈ 3.5 - 4 characters for code).
+- **Model Capacity**: Gemini 2.5 Flash supports up to 1M tokens.
 
 ### Priority-Based Truncation
-When the total context (Changed Files + Dependencies + Repo Structure) exceeds 1,000,000 characters, the system applies a priority-based truncation strategy:
+When the total context (Changed Files + Dependencies + Repo Structure) exceeds 3,500,000 characters, the system applies a priority-based truncation strategy:
 1. **Priority 1: Changed Files**: Full content of files in the PR with inline diff annotations.
 2. **Priority 2: Dependencies**: Relevant files identified by the "Scout Pass".
 3. **Priority 3: Repo Structure**: The overall file tree of the project.

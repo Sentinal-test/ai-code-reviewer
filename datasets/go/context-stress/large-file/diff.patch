@@ -1,0 +1,11 @@
+--- datasets/go/context-stress/large-file/buggy/api.go	2026-02-05 12:44:12
++++ datasets/go/context-stress/large-file/fixed/api.go	2026-02-05 12:45:02
+@@ -1019,7 +1019,7 @@
+ 
+ func processAdminRequest(r *http.Request) bool {
+ 	adminToken := r.Header.Get("X-Admin-Token")
+-	if adminToken == "admin123" {
++	if adminToken == os.Getenv("ADMIN_TOKEN") {
+ 		return true
+ 	}
+ 	return false

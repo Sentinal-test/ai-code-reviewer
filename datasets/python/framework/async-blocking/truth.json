@@ -1,0 +1,22 @@
+{
+    "id": "PY-FW-ASYNC-001",
+    "language": "python",
+    "category": "performance",
+    "pr_context": {
+        "title": "Add notification service",
+        "body": "Implemented async email sender.",
+        "commits": [
+            "feat: add async notifications"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "blocking-call-in-async",
+            "severity": "critical",
+            "file": "notification_service.py",
+            "line": 15,
+            "description": "Blocking I/O (time.sleep) in async function. Use asyncio.sleep() or run in a separate thread."
+        }
+    ],
+    "expected_comments": 1
+}

@@ -1,0 +1,22 @@
+{
+    "id": "JAVA-FRAMEWORK-TX-001",
+    "language": "java",
+    "category": "architecture",
+    "pr_context": {
+        "title": "Add order service",
+        "body": "Implemented transactional order creation.",
+        "commits": [
+            "feat: add order service"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "transactional-on-private-method",
+            "severity": "warning",
+            "file": "OrderService.java",
+            "line": 15,
+            "description": "@Transactional on private method is ignored by Spring AOP. Move to public method."
+        }
+    ],
+    "expected_comments": 1
+}

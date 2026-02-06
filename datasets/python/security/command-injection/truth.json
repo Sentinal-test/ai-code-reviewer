@@ -1,0 +1,22 @@
+{
+    "id": "PY-SEC-CMD-001",
+    "language": "python",
+    "category": "security",
+    "pr_context": {
+        "title": "Add image resizing",
+        "body": "Implemented resize_image using system convert utility.",
+        "commits": [
+            "feat: add image processing"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "command-injection",
+            "severity": "critical",
+            "file": "image_processor.py",
+            "line": 23,
+            "description": "Command injection vulnerability. Pass arguments as a list and avoid shell=True."
+        }
+    ],
+    "expected_comments": 1
+}

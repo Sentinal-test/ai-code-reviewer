@@ -1,0 +1,25 @@
+{
+    "id": "GO-CROSS-002",
+    "language": "go",
+    "category": "cross-file-logic",
+    "pr_context": {
+        "title": "Implement global email uniqueness check",
+        "body": "User registration must now verify that emails are unique across the entire platform. I've updated the registration logic.",
+        "commits": [
+            "feat: add email uniqueness check"
+        ]
+    },
+    "expected_dependencies": [
+        "internal/db/client.go"
+    ],
+    "bugs": [
+        {
+            "type": "logic",
+            "severity": "high",
+            "file": "service.go",
+            "line": 9,
+            "description": "Email uniqueness is checked against a local instance cache instead of the persistent database."
+        }
+    ],
+    "expected_comments": 1
+}
