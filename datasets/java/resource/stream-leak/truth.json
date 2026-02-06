@@ -1,0 +1,22 @@
+{
+    "id": "JAVA-RES-STREAM-001",
+    "language": "java",
+    "category": "bug",
+    "pr_context": {
+        "title": "Add file reader",
+        "body": "Added simple file reading utility.",
+        "commits": [
+            "feat: add file reader"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "resource-leak",
+            "severity": "warning",
+            "file": "FileReader.java",
+            "line": 10,
+            "description": "Resource leak detected. FileInputStream is not closed. Use try-with-resources."
+        }
+    ],
+    "expected_comments": 1
+}

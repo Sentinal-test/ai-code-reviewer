@@ -1,0 +1,22 @@
+{
+    "id": "GO-CROSS-AUTH-001",
+    "language": "go",
+    "category": "security",
+    "pr_context": {
+        "title": "Add user deletion endpoint",
+        "body": "Implemented HandleDeleteUser for admins to remove users.",
+        "commits": [
+            "feat: add delete user handler"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "auth-bypass",
+            "severity": "critical",
+            "file": "internal/api/admin.go",
+            "line": 32,
+            "description": "Direct role check bypasses hierarchy defined in auth package. Use HasRole()."
+        }
+    ],
+    "expected_comments": 1
+}

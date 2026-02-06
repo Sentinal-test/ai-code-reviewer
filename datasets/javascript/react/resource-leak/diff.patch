@@ -1,0 +1,15 @@
+--- datasets/javascript/react/resource-leak/buggy/LiveFeed.jsx	2026-02-05 15:59:04
++++ datasets/javascript/react/resource-leak/fixed/LiveFeed.jsx	2026-02-05 15:59:04
+@@ -14,9 +14,9 @@
+ 
+     ws.connect();
+ 
+-    // When component unmounts or feedId changes, the connection remains open.
+-    // This causes memory leaks and multiple subscriptions.
+-
++    return () => {
++      ws.close();
++    };
+   }, [feedId]);
+ 
+   return (

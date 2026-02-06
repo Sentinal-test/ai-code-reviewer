@@ -1,0 +1,24 @@
+--- datasets/go/cross-file/custom-resource-leak/buggy/services/order/processor.go	2026-02-05 15:59:04
++++ datasets/go/cross-file/custom-resource-leak/fixed/services/order/processor.go	2026-02-05 15:59:04
+@@ -23,19 +23,18 @@
+ 		return fmt.Errorf("failed to start transaction: %w", err)
+ 	}
+ 
+-	// The dependency pkg/database/wrapper.go explicitly states this is MANDATORY.
++	defer tx.DeferClose()
+ 
+ 	// Process items
+ 	for _, item := range items {
+ 		if err := p.updateInventory(tx, item); err != nil {
+-			tx.Rollback() // Manually rolling back, but missing DeferClose for metrics/cleanup
++			// Rollback handled by DeferClose, no manual call needed (though explicit is okay too)
+ 			return err
+ 		}
+ 	}
+ 
+ 	// Calculate totals
+ 	if err := p.calculateTotal(tx, orderID); err != nil {
+-		// Forgot to rollback here entirely!
+ 		return err
+ 	}
+ 

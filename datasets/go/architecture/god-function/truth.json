@@ -1,0 +1,22 @@
+{
+    "id": "GO-ARCH-001",
+    "language": "go",
+    "category": "architecture",
+    "pr_context": {
+        "title": "Add order processing endpoint",
+        "body": "Implemented the main order processing logic.",
+        "commits": [
+            "feat: add ProcessOrder handler"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "god-function",
+            "severity": "warning",
+            "file": "handler.go",
+            "line": 14,
+            "description": "Single function handles validation, pricing, discounts, inventory, and persistence."
+        }
+    ],
+    "expected_comments": 1
+}

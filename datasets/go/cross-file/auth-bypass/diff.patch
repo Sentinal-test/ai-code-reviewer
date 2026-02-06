@@ -1,0 +1,21 @@
+--- datasets/go/cross-file/auth-bypass/buggy/internal/api/admin.go	2026-02-05 15:59:04
++++ datasets/go/cross-file/auth-bypass/fixed/internal/api/admin.go	2026-02-05 15:59:04
+@@ -29,8 +29,7 @@
+ 		return
+ 	}
+ 
+-	// The dependency internal/auth/user.go explicitly warns against this.
+-	if ctxUser.Role != "admin" {
++	if !ctxUser.HasRole(auth.RoleAdmin) {
+ 		http.Error(w, "Forbidden: Admins only", http.StatusForbidden)
+ 		return
+ 	}
+@@ -56,7 +55,7 @@
+ 		return
+ 	}
+ 
+-	if ctxUser.Role == "viewer" {
++	if !ctxUser.HasRole(auth.RoleEditor) {
+ 		http.Error(w, "Forbidden", http.StatusForbidden)
+ 		return
+ 	}

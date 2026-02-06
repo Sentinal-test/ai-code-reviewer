@@ -1,0 +1,22 @@
+{
+    "id": "JAVA-SEC-SQLI-001",
+    "language": "java",
+    "category": "security",
+    "pr_context": {
+        "title": "Add user search",
+        "body": "Implemented search functionality.",
+        "commits": [
+            "feat: add searchUsers"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "sql-injection",
+            "severity": "critical",
+            "file": "UserDao.java",
+            "line": 22,
+            "description": "SQL Injection detected. Use PreparedStatement with placeholders."
+        }
+    ],
+    "expected_comments": 1
+}

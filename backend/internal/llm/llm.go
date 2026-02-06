@@ -188,8 +188,14 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	// 1. Construct Prompt
 	prompt := buildPrompt(diff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
 
+	fmt.Println("\n" + strings.Repeat("█", 80))
+	fmt.Println("� [REVIEW PASS] - FULL PROMPT")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println(prompt)
+	fmt.Println(strings.Repeat("█", 80))
+
 	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Println("🔍 [REVIEW PASS] - PROMPT CONTEXT")
+	fmt.Println("🔍 [REVIEW PASS] - METADATA")
 	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("Diff Size: %d bytes\n", len(diff))
 	fmt.Printf("Reviewable Files: %v\n", getFileKeys(reviewableFiles))
@@ -257,6 +263,12 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	}
 
 	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
+
+	fmt.Println("\n" + strings.Repeat("✅", 40))
+	fmt.Println("📥 [REVIEW PASS] - RAW LLM RESPONSE")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println(responseText)
+	fmt.Println(strings.Repeat("✅", 40) + "\n")
 
 	// Robust parsing: try Result object first, then fallback to Array of comments
 	var result models.ReviewResult
@@ -709,8 +721,14 @@ Rules:
 BEGIN ANALYSIS NOW.
 `, diff, fileList, repoStructure)
 
+	fmt.Println("\n" + strings.Repeat("█", 80))
+	fmt.Println("�️ [SCOUT PASS] - FULL PROMPT")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println(prompt)
+	fmt.Println(strings.Repeat("█", 80))
+
 	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Println("🔭 [SCOUT PASS] - PROMPT CONTEXT")
+	fmt.Println("🔭 [SCOUT PASS] - METADATA")
 	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("Diff Size: %d bytes\n", len(diff))
 	fmt.Printf("Reviewable Code Files: %d\n", len(fileList))

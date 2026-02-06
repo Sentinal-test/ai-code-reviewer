@@ -1,0 +1,25 @@
+--- datasets/go/cross-file/case_002/buggy/service.go	2026-02-05 12:07:17
++++ datasets/go/cross-file/case_002/fixed/service.go	2026-02-05 12:07:19
+@@ -1,15 +1,17 @@
+ package service
+ 
++import "code-review/internal/db"
++
+ type UserService struct {
+-	cache map[string]bool
++	db *db.Client
+ }
+ 
+ func (s *UserService) RegisterUser(email string) bool {
+-	// BUG: Only checks local cache. Should check DB for global uniqueness.
+-	// The PR says "global uniqueness", but this only handles the current instance.
+-	if s.cache[email] {
++	// FIXED: Checks DB for global uniqueness
++	exists, _ := s.db.CheckEmailExists(email)
++	if exists {
+ 		return false
+ 	}
+-	s.cache[email] = true
++	s.db.SaveUser(email)
+ 	return true
+ }

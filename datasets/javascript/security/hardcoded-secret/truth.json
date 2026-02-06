@@ -1,0 +1,22 @@
+{
+    "id": "JS-SEC-SECRET-001",
+    "language": "javascript",
+    "category": "security",
+    "pr_context": {
+        "title": "Add payment processing",
+        "body": "Integrated Stripe API for payments.",
+        "commits": [
+            "feat: add payment service"
+        ]
+    },
+    "bugs": [
+        {
+            "type": "hardcoded-secret",
+            "severity": "critical",
+            "file": "payment-service.js",
+            "line": 6,
+            "description": "Hardcoded API key detected. Use environment variables."
+        }
+    ],
+    "expected_comments": 1
+}
