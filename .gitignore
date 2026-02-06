@@ -26,5 +26,5 @@ backend/server
 backend/*.db
 backend/*.pem
  
- # Datasets
- datasets/
+# Datasets
+datasets/
