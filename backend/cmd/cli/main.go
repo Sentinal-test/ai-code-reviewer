@@ -2,6 +2,7 @@ package main
 
 import (
 	"code-review/backend/internal/action"
+	"code-review/backend/internal/analysis"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/models"
 	"context"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -72,31 +74,38 @@ func main() {
 		Body:  "Running via GitHub Actions CLI",
 	}
 
-	// 4.7 Scout Pass: Analyze Dependencies
-	dependencies := make(map[string]string)
-	fmt.Printf("🕵️‍♀️ Scout Pass: Analyzing dependency needs...\n")
+	// 4. Scout Pass: Deterministic Code Graph Analysis
+	fmt.Printf("🕵️‍♀️ Scout Pass: Building Code Graph Index...\n")
 
-	// Create a client for the Scout Pass
-	scoutClient := &http.Client{}
+	idx := analysis.NewIndex()
+	ctxIdx, cancelIdx := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelIdx()
 
-	depPaths, err := llm.AnalyzeDependencyNeeds(context.Background(), scoutClient, diff, changedFiles, repoStructure, prContext, apiKey)
-	if err != nil {
-		fmt.Printf("⚠️ Scout Pass failed: %v\n", err)
-	} else {
-		fmt.Printf("🔍 Scout identified %d dependencies: %v\n", len(depPaths), depPaths)
-		for _, path := range depPaths {
-			// Skip if already in changedFiles
-			if _, exists := changedFiles[path]; exists {
-				continue
-			}
-			fmt.Printf("  📥 Fetching dependency: %s\n", path)
-			content, err := action.GetFileContent(path)
-			if err != nil {
-				fmt.Printf("  ⚠️ Failed to fetch dependency %s: %v\n", path, err)
-			} else {
-				dependencies[path] = content
+	// Get current working directory (repo root)
+	cwd, _ := os.Getwd()
+	if err := idx.BuildIndex(ctxIdx, cwd); err != nil {
+		fmt.Printf("⚠️ Warning: Failed to build index: %v\n", err)
+	}
+
+	fmt.Printf("🔍 Analyzing dependency needs from diff & context...\n")
+	dependencies := idx.GetRequiredContext(diff, prContext.Title, prContext.Body)
+
+	if len(dependencies) > 0 {
+		fmt.Printf("✅ Scout identified %d files providing relevant context:\n", len(dependencies))
+		for path, content := range dependencies {
+			fmt.Printf("  � %s:\n", path)
+			// Log the first few lines of the context to show what's being provided
+			lines := strings.Split(content, "\n")
+			for i, line := range lines {
+				if i > 5 {
+					fmt.Printf("     ... (%d more lines)\n", len(lines)-i)
+					break
+				}
+				fmt.Printf("     %s\n", line)
 			}
 		}
+	} else {
+		fmt.Println("ℹ️ No external dependencies or symbols needed for this diff.")
 	}
 
 	// Settings - Default to "Enable All" for Action mode, or parse inputs
