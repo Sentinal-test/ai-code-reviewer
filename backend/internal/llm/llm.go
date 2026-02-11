@@ -188,20 +188,6 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	// 1. Construct Prompt
 	prompt := buildPrompt(diff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
 
-	fmt.Println("\n" + strings.Repeat("█", 80))
-	fmt.Println("� [REVIEW PASS] - FULL PROMPT")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Println(prompt)
-	fmt.Println(strings.Repeat("█", 80))
-
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Println("🔍 [REVIEW PASS] - METADATA")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Printf("Diff Size: %d bytes\n", len(diff))
-	fmt.Printf("Reviewable Files: %v\n", getFileKeys(reviewableFiles))
-	fmt.Printf("Dependency Files: %v\n", getFileKeys(reviewableDeps))
-	fmt.Printf("Filtered Out (docs/config): %d files\n", len(changedFiles)-len(reviewableFiles))
-
 	// 2. Prepare Request
 	reqBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
@@ -263,12 +249,6 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	}
 
 	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
-
-	fmt.Println("\n" + strings.Repeat("✅", 40))
-	fmt.Println("📥 [REVIEW PASS] - RAW LLM RESPONSE")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Println(responseText)
-	fmt.Println(strings.Repeat("✅", 40) + "\n")
 
 	// Robust parsing: try Result object first, then fallback to Array of comments
 	var result models.ReviewResult
@@ -623,8 +603,8 @@ BEGIN ANALYSIS NOW.
 `, prContextSection, changedContent, depsContent, repoStructure, layers)
 }
 
-// AnalyzeDependencyNeeds asks the LLM which other files are needed for context.
-func AnalyzeDependencyNeeds(ctx context.Context, client *http.Client, diff string, changedFiles map[string]string, repoStructure string, prContext models.PRContext, apiKey string) ([]string, error) {
+// buildScoutPrompt constructs the prompt for the dependency analysis LLM.
+func buildScoutPrompt(diff string, changedFiles map[string]string, repoStructure string, prContext models.PRContext) string {
 	// Filter out documentation files from changed files list
 	reviewableFiles := filterReviewableFiles(changedFiles)
 
@@ -633,12 +613,7 @@ func AnalyzeDependencyNeeds(ctx context.Context, client *http.Client, diff strin
 		fileList = append(fileList, path)
 	}
 
-	// If no code files changed, no dependencies needed
-	if len(fileList) == 0 {
-		return []string{}, nil
-	}
-
-	prompt := fmt.Sprintf(`You are a dependency analyzer for automated code review systems.
+	return fmt.Sprintf(`You are a dependency analyzer for automated code review systems.
 Your task is to identify which additional repository files are REQUIRED to accurately validate the changes in the provided diff.
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -720,18 +695,16 @@ Rules:
 
 BEGIN ANALYSIS NOW.
 `, diff, fileList, repoStructure)
+}
 
-	fmt.Println("\n" + strings.Repeat("█", 80))
-	fmt.Println("�️ [SCOUT PASS] - FULL PROMPT")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Println(prompt)
-	fmt.Println(strings.Repeat("█", 80))
+// AnalyzeDependencyNeeds asks the LLM which other files are needed for context.
+func AnalyzeDependencyNeeds(ctx context.Context, client *http.Client, diff string, changedFiles map[string]string, repoStructure string, prContext models.PRContext, apiKey string) ([]string, error) {
+	// If no code files changed, no dependencies needed
+	if len(filterReviewableFiles(changedFiles)) == 0 {
+		return []string{}, nil
+	}
 
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Println("🔭 [SCOUT PASS] - METADATA")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Printf("Diff Size: %d bytes\n", len(diff))
-	fmt.Printf("Reviewable Code Files: %d\n", len(fileList))
+	prompt := buildScoutPrompt(diff, changedFiles, repoStructure, prContext)
 
 	// Prepare Request
 	reqBody := map[string]interface{}{
@@ -795,12 +768,6 @@ BEGIN ANALYSIS NOW.
 
 	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
 
-	fmt.Println("\n" + strings.Repeat("*", 80))
-	fmt.Println("📥 [SCOUT PASS] - RAW LLM RESPONSE")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Println(responseText)
-	fmt.Println(strings.Repeat("*", 80) + "\n")
-
 	// Extraction logic to handle markdown backticks
 	jsonStr := responseText
 	if idx := strings.Index(jsonStr, "```json"); idx != -1 {
@@ -832,12 +799,8 @@ BEGIN ANALYSIS NOW.
 		}
 	}
 
-	fmt.Println("✅ [SCOUT PASS] - IDENTIFIED DEPENDENCIES")
-	fmt.Printf("Files: %v\n", filteredFiles)
-	if len(filteredFiles) != len(result.Files) {
-		fmt.Printf("Filtered out %d doc/config files\n", len(result.Files)-len(filteredFiles))
+	if len(filteredFiles) > 0 {
+		fmt.Printf("✅ [SCOUT PASS] - Identified %d dependencies\n", len(filteredFiles))
 	}
-	fmt.Println(strings.Repeat("=", 80) + "\n")
-
 	return filteredFiles, nil
 }

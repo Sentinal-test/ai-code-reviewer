@@ -89,30 +89,19 @@ func main() {
 
 	// 4.7 Scout Pass: Analyze Dependencies
 	dependencies := make(map[string]string)
+	fmt.Printf("🚀 Starting Scout Pass: Analyzing %d changed files...\n", len(changedFiles))
 
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Println("🚀 ORCHESTRATION: Starting SCOUT PASS")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Printf("Analyzing %d changed files for external dependencies...\n", len(changedFiles))
-
-	// Create a client for the Scout Pass
 	scoutClient := &http.Client{}
-
 	depPaths, err := llm.AnalyzeDependencyNeeds(context.Background(), scoutClient, diff, changedFiles, repoStructure, prContext, apiKey)
 	if err != nil {
 		fmt.Printf("⚠️ Scout Pass failed: %v\n", err)
 	} else {
-		fmt.Printf("🔍 Scout identified %d dependencies: %v\n", len(depPaths), depPaths)
 		for _, path := range depPaths {
-			// Skip if already in changedFiles
 			if _, exists := changedFiles[path]; exists {
 				continue
 			}
-			fmt.Printf("  📥 Fetching dependency: %s\n", path)
 			content, err := action.GetFileContent(path)
-			if err != nil {
-				fmt.Printf("  ⚠️ Failed to fetch dependency %s: %v\n", path, err)
-			} else {
+			if err == nil {
 				dependencies[path] = content
 			}
 		}
@@ -128,10 +117,7 @@ func main() {
 	}
 
 	// 4. Run Review
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Println("🚀 ORCHESTRATION: Starting REVIEW PASS")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Printf("Processing %d changed files + %d dependencies...\n", len(changedFiles), len(dependencies))
+	fmt.Printf("🚀 Starting Review Pass: Processing %d files...\n", len(changedFiles)+len(dependencies))
 
 	// Action mode execution
 	ctx := context.Background()
@@ -145,14 +131,10 @@ func main() {
 
 	// 5. Output Results
 	if *dryRun || githubToken == "" {
-		fmt.Println("✅ Dry Run / No Token - Printing results to stdout:")
-		fmt.Println("==================================================")
-		fmt.Printf("SUMMARY: %s\n", result.Summary)
-		fmt.Println("--------------------------------------------------")
-		for _, c := range result.Comments {
-			fmt.Printf("[%s] %s:%d - %s\n", c.Severity, c.File, c.Line, c.Message)
+		fmt.Printf("✅ Review Complete - Summary: %s\n", result.Summary)
+		if *dryRun {
+			fmt.Println("Results not posted (Dry Run)")
 		}
-		fmt.Println("==================================================")
 	} else {
 		// Post to GitHub
 		if repoName == "" || prNumber == "" {
