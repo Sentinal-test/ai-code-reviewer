@@ -44,6 +44,42 @@ flowchart TD
 ```
 
 
+---
+
+## 🚀 Team Developer Quick-Start
+
+Want AI code reviews on your repo? It takes less than a minute.
+
+1.  **[Install the GitHub App](https://github.com/settings/apps/sentinal-review/installations)** on your repository.
+2.  **Add `GEMINI_API_KEY`** to your repository secrets (Settings > Secrets > Actions).
+3.  Add a simple workflow file at `.github/workflows/ai-review.yml`:
+
+```yaml
+name: AI Code Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run AI Reviewer
+        uses: tegveer-work/ai-code-reviewer@main 
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+```
+
+👉 **[See the Full Developer Guide](./docs/DEVELOPER_GUIDE.md)**
 
 ---
 

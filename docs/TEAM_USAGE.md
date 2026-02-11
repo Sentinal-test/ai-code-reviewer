@@ -1,76 +1,58 @@
 # AI Code Reviewer - Team Usage Guide
 
-This guide details how to set up the **AI Code Reviewer** for any team member's repository.
+This guide explains how any team or repository can start using the AI Code Reviewer.
 
-## 🔑 1. Prerequisites (Secrets)
+## 🚀 The Best Practice (GitHub App + Actions)
 
-To use this action, your repository must have a Google Gemini API Key available.
+This is the recommended setup. It uses a GitHub App for secure authentication and GitHub Actions for the review process.
 
-1.  **Get an API Key**: [Google AI Studio](https://aistudio.google.com/app/apikey)
-2.  **Add to Repository**:
-    *   Go to your Repo -> **Settings** -> **Secrets and variables** -> **Actions**.
-    *   Click **New repository secret**.
-    *   Name: `GEMINI_API_KEY`
-    *   Value: `AIza...` (your key)
+### 1. Requirements
+*   **Gemini API Key**: Each repository must have a `GEMINI_API_KEY` secret.
+    *   Go to **Settings > Secrets and variables > Actions**.
+    *   Create a new secret named `GEMINI_API_KEY`.
+*   **App Installation**: The Sentinel Review App must be installed on the repository.
+    *   👉 **[Install Sentinel Review App](https://github.com/settings/apps/sentinal-review/installations)**
 
-## 📦 2. Usage (Choose your method)
+### 2. Workflow Setup
+Add the following to `.github/workflows/ai-review.yml`:
 
-Because your Action repository is **Private**, you have two ways to share it with your team.
-
-### Option A: The "Private Repo" Method (Recommended for your Team)
-Use this if you want to keep your code private. Teammates must use a **Personal Access Token (PAT)** to "download" the action into their workflow.
-
-**Teammate Workflow:**
 ```yaml
 name: AI Code Review
 on:
   pull_request:
     types: [opened, synchronize]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Your Code
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Checkout AI Reviewer Action
-        uses: actions/checkout@v4
-        with:
-          repository: tegveer-work/ai-code-reviewer
-          token: ${{ secrets.ACTION_ACCESS_TOKEN }} # Their PAT with 'repo' scope
-          path: .github/actions/ai-reviewer
-          ref: main
-
       - name: Run AI Reviewer
-        uses: ./.github/actions/ai-reviewer
-        with:
-          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-```
-
----
-
-### Option B: The "Standard" Method (If you make the repo PUBLIC)
-If you make your repo public, anyone can use it with a single line. This is much cleaner.
-
-**Teammate Workflow:**
-```yaml
-      - name: AI Code Reviewer
         uses: tegveer-work/ai-code-reviewer@main 
-        with:
-          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 ```
 
-## ❓ FAQ
+## 💡 Key Features of this Setup
 
-### Which one should I use?
-*   **Use Option A** if you want to keep your AI Reviewer code hidden from the world.
-*   **Use Option B** if you want the easiest setup and don't mind the code being public.
+*   **Diff Context**: Automatically fetches related files (dependencies) using a preliminary "Scout" LLM pass.
+*   **Privacy**: Your code never leaves the GitHub environment except for the LLM analysis via encrypted API calls.
+*   **Zero Maintenance**: Updates to the reviewer logic are automatically applied when we push to the `main` branch.
 
-### "Dependencies file not found" error?
-Ensure you are using the latest version of the action. The `action.yml` has been updated to handle paths correctly regardless of which option you choose!
+## ❓ Troubleshooting
 
+### No comments appearing?
+1. Check the **Actions** tab in your repo to see if the workflow failed.
+2. Ensure the `GEMINI_API_KEY` is valid and hasn't expired.
+3. Verify that the GitHub App is installed on the repo.
+
+### "Not Found" error during checkout?
+Ensure the repository `tegveer-work/ai-code-reviewer` is public, or that you have added the necessary tokens if it's private.
