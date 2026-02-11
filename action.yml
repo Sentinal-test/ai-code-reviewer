@@ -2,11 +2,11 @@ name: 'AI Code Reviewer'
 description: 'AI-powered code review running entirely within GitHub Actions'
 inputs:
   gemini_api_key:
-    description: 'Google Gemini API Key'
-    required: true
+    description: 'Google Gemini API Key (Optional if provided via env)'
+    required: false
   github_token:
-    description: 'GitHub Token for posting comments'
-    required: true
+    description: 'GitHub Token for posting comments (Optional, defaults to github.token)'
+    required: false
   pr_number:
     description: 'Pull Request Number'
     required: false
@@ -17,9 +17,6 @@ inputs:
   head_ref:
     description: 'Head reference for diff'
     default: 'HEAD'
-  allowed_domain:
-    description: 'Optional: Organization domain'
-    required: false
 
 runs:
   using: "composite"
@@ -27,28 +24,25 @@ runs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.24' # Matching go.mod
+        go-version: '1.24'
         cache-dependency-path: ${{ github.action_path }}/backend/go.sum
 
     - name: Run AI Reviewer
       shell: bash
       env:
-        GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
-        GITHUB_TOKEN: ${{ inputs.github_token }}
+        # We use the expression below to ONLY set the env var if the input is provided.
+        # If the input is empty, we don't define the key in this 'env' block, 
+        # allowing it to be inherited from the job/workflow level.
+        GEMINI_API_KEY: ${{ inputs.gemini_api_key || env.GEMINI_API_KEY }}
+        GITHUB_TOKEN: ${{ inputs.github_token || env.GITHUB_TOKEN || github.token }}
         PR_NUMBER: ${{ inputs.pr_number }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_SHA: ${{ github.sha }}
       run: |
         echo "Building AI Reviewer..."
-        # We need to build the tool from the ACTION'S source code
         cd "${{ github.action_path }}/backend"
-        
-        # Build the binary
         go build -v -o ../ai-reviewer cmd/cli/main.go
         
         echo "Running AI Reviewer..."
-        # Return to workspace to run git commands
         cd "${{ github.workspace }}"
-        
-        # Execute the binary
         "${{ github.action_path }}/ai-reviewer" --base "${{ inputs.base_ref }}" --head "${{ inputs.head_ref }}"

@@ -169,3 +169,17 @@ func (g *GitHubClient) postGeneralComment(ctx context.Context, prNumber int, bod
 	_, _, err := g.client.Issues.CreateComment(ctx, g.owner, g.repo, prNumber, comment)
 	return err
 }
+
+// GetPullRequest fetches the PR metadata (Title, Body).
+func (g *GitHubClient) GetPullRequest(ctx context.Context, prNumber int) (*models.PRContext, error) {
+	pr, _, err := g.client.PullRequests.Get(ctx, g.owner, g.repo, prNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.PRContext{
+		Title: pr.GetTitle(),
+		Body:  pr.GetBody(),
+		// Commits fetching could be added here if needed, but Title/Body is the main missing piece
+	}, nil
+}

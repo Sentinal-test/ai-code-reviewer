@@ -65,16 +65,35 @@ func main() {
 	repoStructure, _ := action.GetRepoStructure()
 
 	// 3. Prepare Context
-	// In a real action, we might read the PullRequest Event JSON to get Title/Body.
-	// For now, we use placeholders or minimal info.
 	prContext := models.PRContext{
 		Title: "Automated PR Review",
 		Body:  "Running via GitHub Actions CLI",
 	}
 
+	// Fetch real PR metadata if tokens are available
+	if githubToken != "" && repoName != "" && prNumber != "" {
+		parts := strings.Split(repoName, "/")
+		if len(parts) == 2 {
+			var prNum int
+			fmt.Sscanf(prNumber, "%d", &prNum)
+			ghClient := action.NewGitHubClient(context.Background(), githubToken, parts[0], parts[1])
+			realPR, err := ghClient.GetPullRequest(context.Background(), prNum)
+			if err != nil {
+				fmt.Printf("⚠️ Failed to fetch PR metadata: %v. Using defaults.\n", err)
+			} else {
+				prContext = *realPR
+				fmt.Printf("✅ Fetched PR Context: %s\n", prContext.Title)
+			}
+		}
+	}
+
 	// 4.7 Scout Pass: Analyze Dependencies
 	dependencies := make(map[string]string)
-	fmt.Printf("🕵️‍♀️ Scout Pass: Analyzing dependency needs...\n")
+
+	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println("🚀 ORCHESTRATION: Starting SCOUT PASS")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Printf("Analyzing %d changed files for external dependencies...\n", len(changedFiles))
 
 	// Create a client for the Scout Pass
 	scoutClient := &http.Client{}
@@ -109,7 +128,11 @@ func main() {
 	}
 
 	// 4. Run Review
-	fmt.Println("🤖 Starting AI Review...")
+	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println("🚀 ORCHESTRATION: Starting REVIEW PASS")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Printf("Processing %d changed files + %d dependencies...\n", len(changedFiles), len(dependencies))
+
 	// Action mode execution
 	ctx := context.Background()
 	client := &http.Client{} // Standard client
