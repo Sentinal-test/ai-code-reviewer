@@ -53,7 +53,13 @@ You (the owner of the `ai-code-reviewer` action repo) need to store these secret
     *   Name: `APP_PRIVATE_KEY`
     *   Value: The content of the `.pem` file you downloaded.
 
-### 4. Usage in GitHub Actions
+### 4. Install the App
+The App MUST be installed on the repositories where you want it to run.
+1.  On the App settings page, click **Install App** in the sidebar.
+2.  Click **Install** next to your organization/account.
+3.  Select **All repositories** or **Only select repositories** (ensure the Reviewer repo and target repos are included).
+
+### 5. Usage in GitHub Actions
 
 In your workflow file (e.g., `.github/workflows/review.yml`), you will use these secrets to generate a short-lived token.
 
@@ -63,8 +69,8 @@ steps:
     id: generate_token
     uses: actions/create-github-app-token@v1
     with:
-      app_id: ${{ secrets.APP_ID }}
-      private_key: ${{ secrets.APP_PRIVATE_KEY }}
+      app-id: ${{ secrets.APP_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
   - name: Run AI Reviewer
     uses: your-org/ai-code-reviewer@v1
