@@ -17,11 +17,18 @@ jobs:
         with:
           fetch-depth: 0 # Important to get history for diffs
 
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - name: Run AI Reviewer
         uses: ./ # Uses the action in the root of this repo
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ steps.generate_token.outputs.token }}
           pr_number: ${{ github.event.pull_request.number }}
           base_ref: ${{ github.event.pull_request.base.sha }}
           head_ref: ${{ github.event.pull_request.head.sha }}
