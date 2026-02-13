@@ -65,3 +65,27 @@ jobs:
 If the review doesn't start, ensure:
 1.  The App is installed on the specific repository.
 2.  The repository is part of our approved organization.
+
+<a name="troubleshooting"></a>
+## 🛠️ Troubleshooting
+
+### 1. `Error: Unable to resolve action... repository not found`
+**Reason**: Your AI Reviewer repository is **Private**, and the repository you are reviewing can't see it.
+**Fix**: 
+- Use **Option A (Private Action)** from the README.
+- You must checkout the AI Reviewer code into your workflow using `actions/checkout@v4` with a Personal Access Token (`ACTION_ACCESS_TOKEN`).
+
+### 2. `❌ Error: GEMINI_API_KEY is required`
+**Reason**: The `GEMINI_API_KEY` secret is not being passed correctly to the action.
+**Fix**: 
+- Ensure you have added `GEMINI_API_KEY` to **Settings > Secrets and variables > Actions** in the repository being reviewed.
+- Check that your YAML file includes:
+  ```yaml
+  with:
+    gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+  ```
+
+### 3. `Warning: Restore cache failed`
+**Reason**: This is often a non-fatal warning from `actions/setup-go` on first run.
+**Fix**: Safe to ignore if the build completes and the review runs.
+

@@ -39,16 +39,30 @@ runs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_SHA: ${{ github.sha }}
       run: |
-        echo "Building AI Reviewer..."
+        echo "🔍 Validating inputs..."
+        if [ -z "$GEMINI_API_KEY" ]; then
+          echo "❌ Error: GEMINI_API_KEY is missing. Please set it in your repository secrets."
+          exit 1
+        fi
+
+        echo "🏗️ Building AI Reviewer..."
         # We need to build the tool from the ACTION'S source code
         cd "${{ github.action_path }}/backend"
         
         # Build the binary
         go build -v -o ../ai-reviewer cmd/cli/main.go
         
-        echo "Running AI Reviewer..."
+        echo "🚀 Running AI Reviewer..."
         # Return to workspace to run git commands
         cd "${{ github.workspace }}"
         
-        # Execute the binary
-        "${{ github.action_path }}/ai-reviewer" --base "${{ inputs.base_ref }}" --head "${{ inputs.head_ref }}"
+        # Execute the binary with flags for better reliability
+        "${{ github.action_path }}/ai-reviewer" \
+          --api-key "$GEMINI_API_KEY" \
+          --github-token "$GITHUB_TOKEN" \
+          --pr-number "$PR_NUMBER" \
+          --repo "$GITHUB_REPOSITORY" \
+          --sha "$GITHUB_SHA" \
+          --base "${{ inputs.base_ref }}" \
+          --head "${{ inputs.head_ref }}"
+

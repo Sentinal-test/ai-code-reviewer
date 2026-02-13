@@ -150,12 +150,13 @@ You can run the AI Code Reviewer entirely within your repository using GitHub Ac
 ### 🔑 1. Configure Secrets
 Add the following secrets to your repository (**Settings > Secrets and variables > Actions**):
 
-1.  **`GEMINI_API_KEY`**: Your Google AI Studio key. [Get one here](https://aistudio.google.com/app/apikey).
-2.  **`ACTION_ACCESS_TOKEN`** (Required for PRIVATE repositories): A Personal Access Token (PAT) with `repo` scope. This allows the action to "download" itself into your repo.
-
 ### 📦 2. Choose Your Setup
 
+> [!IMPORTANT]
+> The simple setup (Option B) ONLY works if your AI Reviewer repository is **Public**. If it is **Private**, you MUST use Option A.
+
 #### Option A: Private Action (Recommended for Teams)
+
 Use this if you want to keep the AI Reviewer code private.
 
 Create `.github/workflows/ai-review.yml`:
@@ -211,4 +212,6 @@ If you make the AI Reviewer repository **Public**, anyone can use it with a sing
 - [Architectural Decision Records](./docs/ARCHITECTURAL_DECISION_RECORDS.md)
 - [Context Window Management](./docs/CONTEXT_WINDOW_MANAGEMENT.md)
 - [Accuracy Improvement Plan](./docs/ACCURACY_IMPROVEMENT_PLAN.md)
+- [**Troubleshooting Guide**](./docs/DEVELOPER_GUIDE.md#troubleshooting)
+
 

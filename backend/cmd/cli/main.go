@@ -14,11 +14,11 @@ import (
 
 func main() {
 	// 1. Parse Args & Env
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	githubToken := os.Getenv("GITHUB_TOKEN")
-	prNumber := os.Getenv("PR_NUMBER")         // PR number usually comes from event payload, but direct env var is simpler for some setups
-	repoName := os.Getenv("GITHUB_REPOSITORY") // owner/repo
-	commitSHA := os.Getenv("GITHUB_SHA")
+	apiKeyFlag := flag.String("api-key", "", "Gemini API Key")
+	githubTokenFlag := flag.String("github-token", "", "GitHub Token")
+	prNumberFlag := flag.String("pr-number", "", "Pull Request Number")
+	repoNameFlag := flag.String("repo", "", "Repository Name (owner/repo)")
+	commitShaFlag := flag.String("sha", "", "Commit SHA")
 
 	// Flags for local testing or overrides
 	baseRef := flag.String("base", "main", "Base ref to diff against")
@@ -26,8 +26,34 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Print results to stdout instead of commenting")
 	flag.Parse()
 
+	// 2. Resolve parameters (Priority: Flag -> Env)
+	apiKey := *apiKeyFlag
 	if apiKey == "" {
-		fmt.Println("❌ Error: GEMINI_API_KEY is required")
+		apiKey = os.Getenv("GEMINI_API_KEY")
+	}
+
+	githubToken := *githubTokenFlag
+	if githubToken == "" {
+		githubToken = os.Getenv("GITHUB_TOKEN")
+	}
+
+	prNumber := *prNumberFlag
+	if prNumber == "" {
+		prNumber = os.Getenv("PR_NUMBER")
+	}
+
+	repoName := *repoNameFlag
+	if repoName == "" {
+		repoName = os.Getenv("GITHUB_REPOSITORY")
+	}
+
+	commitSHA := *commitShaFlag
+	if commitSHA == "" {
+		commitSHA = os.Getenv("GITHUB_SHA")
+	}
+
+	if apiKey == "" {
+		fmt.Println("❌ Error: GEMINI_API_KEY is required. Pass via --api-key or GEMINI_API_KEY environment variable.")
 		os.Exit(1)
 	}
 
