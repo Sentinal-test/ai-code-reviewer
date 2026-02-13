@@ -75,8 +75,10 @@ jobs:
 
       - name: Run AI Reviewer
         uses: tegveer-work/ai-code-reviewer@main 
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
 ```
 
 👉 **[See the Full Developer Guide](./docs/DEVELOPER_GUIDE.md)**

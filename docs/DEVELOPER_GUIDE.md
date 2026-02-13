@@ -46,8 +46,10 @@ jobs:
 
       - name: Run AI Reviewer
         uses: tegveer-work/ai-code-reviewer@main 
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
 ```
 
 **That’s it!** Every time you open or update a PR, the AI will automatically analyze your code and post review comments.

@@ -33,26 +33,38 @@ runs:
     - name: Run AI Reviewer
       shell: bash
       env:
-        GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
-        GITHUB_TOKEN: ${{ inputs.github_token }}
+        # Map inputs to environment variables for the script
+        # We use a fallback logic here: prioritize inputs.gemini_api_key
+        # but also accept GEMINI_API_KEY if passed directly via env: block in caller
+        GEMINI_API_KEY_INPUT: ${{ inputs.gemini_api_key }}
+        GITHUB_TOKEN_INPUT: ${{ inputs.github_token }}
         PR_NUMBER: ${{ inputs.pr_number }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_SHA: ${{ github.sha }}
       run: |
         echo "🔍 Validating inputs..."
         
-        # Verify if the input is actually received from the workflow
-        if [ -n "$GEMINI_API_KEY" ]; then
-          echo "✅ GEMINI_API_KEY is received by the action environment."
+        # Resolve the API Key: Priority Input -> Env
+        API_KEY="${GEMINI_API_KEY_INPUT:-$GEMINI_API_KEY}"
+        
+        if [ -n "$API_KEY" ]; then
+          echo "✅ API Key detected."
           # Print the first few characters for verification (safe for secrets)
-          echo "Debug: API Key starts with: ${GEMINI_API_KEY:0:4}..."
+          echo "Debug: API Key starts with: ${API_KEY:0:4}..."
         else
-          echo "❌ Error: GEMINI_API_KEY is missing in the action environment."
-          echo "Check if your workflow passes it correctly in the 'with:' block."
+          echo "❌ Error: GEMINI_API_KEY is missing."
+          echo "Please ensure you pass it in the 'with:' block of your workflow:"
+          echo "  with:"
+          echo "    gemini_api_key: \${{ secrets.GEMINI_API_KEY }}"
           exit 1
         fi
 
+        # Export for subsequent tool use if needed
+        export GEMINI_API_KEY="$API_KEY"
+        export GITHUB_TOKEN="${GITHUB_TOKEN_INPUT:-$GITHUB_TOKEN}"
+
         echo "🏗️ Building AI Reviewer..."
+
 
         # We need to build the tool from the ACTION'S source code
         cd "${{ github.action_path }}/backend"
