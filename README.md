@@ -50,6 +50,8 @@ flowchart TD
 
 Want AI code reviews on your repo? It takes less than a minute.
 
+👉 **[Company Deployment Guide](./docs/ENTERPRISE_SETUP.md)** — *Follow this for private company-wide setup.*
+
 1.  **[Install the GitHub App](https://github.com/settings/apps/sentinal-review/installations)** on your repository.
 2.  **Add `GEMINI_API_KEY`** to your repository secrets (Settings > Secrets > Actions).
 3.  Add a simple workflow file at `.github/workflows/ai-review.yml`:
@@ -208,12 +210,11 @@ If you make the AI Reviewer repository **Public**, anyone can use it with a sing
 
 ---
 
-## 🛡️ Key Documentation
-- [Team Usage Guide](./docs/TEAM_USAGE.md) - Deep dive for teammates.
+- [Enterprise/Private Setup](./docs/ENTERPRISE_SETUP.md) - **Start Here for Company Setup**
+- [Team Usage Guide](./docs/TEAM_USAGE.md)
 - [Project Overview](./docs/PROJECT_OVERVIEW.md)
 - [Architectural Decision Records](./docs/ARCHITECTURAL_DECISION_RECORDS.md)
-- [Context Window Management](./docs/CONTEXT_WINDOW_MANAGEMENT.md)
-- [Accuracy Improvement Plan](./docs/ACCURACY_IMPROVEMENT_PLAN.md)
 - [**Troubleshooting Guide**](./docs/DEVELOPER_GUIDE.md#troubleshooting)
+
 
 

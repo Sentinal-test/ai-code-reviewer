@@ -492,3 +492,9 @@ func getSettings(db *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(settings)
 	}
 }
+
+func getSettings() {
+	http.HandleFunc("/settings", func(w http.ResponseWriter, r *http.Request) {
+		change tghe stettihfbvcibeirbfvcbgierbci
+	})			
+}

@@ -64,9 +64,12 @@ jobs:
 *   ✅ **Least Privilege**: The app only sees what it needs to review the PR.
 
 ## ❓ Need Help?
+Check out the **[Enterprise Setup Guide](./docs/ENTERPRISE_SETUP.md)** for detailed company-wide deployment plans for private repositories.
+
 If the review doesn't start, ensure:
 1.  The App is installed on the specific repository.
 2.  The repository is part of our approved organization.
+
 
 <a name="troubleshooting"></a>
 ## 🛠️ Troubleshooting
