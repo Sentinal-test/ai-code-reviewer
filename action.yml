@@ -40,12 +40,20 @@ runs:
         GITHUB_SHA: ${{ github.sha }}
       run: |
         echo "🔍 Validating inputs..."
-        if [ -z "$GEMINI_API_KEY" ]; then
-          echo "❌ Error: GEMINI_API_KEY is missing. Please set it in your repository secrets."
+        
+        # Verify if the input is actually received from the workflow
+        if [ -n "$GEMINI_API_KEY" ]; then
+          echo "✅ GEMINI_API_KEY is received by the action environment."
+          # Print the first few characters for verification (safe for secrets)
+          echo "Debug: API Key starts with: ${GEMINI_API_KEY:0:4}..."
+        else
+          echo "❌ Error: GEMINI_API_KEY is missing in the action environment."
+          echo "Check if your workflow passes it correctly in the 'with:' block."
           exit 1
         fi
 
         echo "🏗️ Building AI Reviewer..."
+
         # We need to build the tool from the ACTION'S source code
         cd "${{ github.action_path }}/backend"
         
