@@ -290,7 +290,15 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 						if totalContextSize+addedSize <= MaxDepContextChars {
 							foundSnippets[candidatePath] = newContent
 							totalContextSize += addedSize
+
+							// Detailed logging
+							preview := snippet
+							if len(preview) > 60 {
+								preview = preview[:57] + "..."
+							}
+							preview = strings.ReplaceAll(preview, "\n", " ")
 							fmt.Printf("✅ [CodeGraph] Found definition for '%s' in %s\n", sym, candidatePath)
+							fmt.Printf("   Snippet: %s\n", preview)
 						}
 					}
 				} else {
@@ -301,7 +309,15 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 					if totalContextSize+addedSize <= MaxDepContextChars {
 						foundSnippets[candidatePath] = newContent
 						totalContextSize += addedSize
+
+						// Detailed logging
+						preview := snippet
+						if len(preview) > 60 {
+							preview = preview[:57] + "..."
+						}
+						preview = strings.ReplaceAll(preview, "\n", " ")
 						fmt.Printf("✅ [CodeGraph] Found definition for '%s' in %s\n", sym, candidatePath)
+						fmt.Printf("   Snippet: %s\n", preview)
 					}
 				}
 				mu.Unlock()
