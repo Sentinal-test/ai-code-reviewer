@@ -5,12 +5,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
 
-// MaxDepContextChars caps total dependency context to ~12k tokens
-const MaxDepContextChars = 50000
+// MaxDepContextChars keeps dependency summaries compact for the LLM context window.
+const MaxDepContextChars = 12000
+
+// MaxSymbolsPerSummary limits per-file symbol lists to avoid verbose summaries.
+const MaxSymbolsPerSummary = 8
+
+// MaxSnippetsPerFile caps captured snippets used only for deterministic data-flow inference.
+const MaxSnippetsPerFile = 6
+
+// MaxBehaviorSignals caps inferred behavior hints per summary.
+const MaxBehaviorSignals = 4
+
+// MaxGraphEdgeSymbols limits symbol examples shown per graph edge.
+const MaxGraphEdgeSymbols = 4
+
+// MaxDataFlowLines limits emitted data-flow chains.
+const MaxDataFlowLines = 12
 
 type Service struct {
 	RepoPath string
@@ -151,15 +167,25 @@ func isBuiltinSymbol(symbol string) bool {
 	return builtins[symbol]
 }
 
-// GetContext analyzes the changed files and returns a map of file path -> relevant definition snippets.
+type dependencyInfo struct {
+	Symbols     map[string]struct{}
+	Snippets    []string
+	Definitions map[string]struct{}
+	References  []Reference
+}
+
+// GetContext analyzes changed files and returns compact summaries:
+// - per dependency file behavior summary
+// - a context-graph relationship summary with data flow
 func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string) (map[string]string, error) {
 	fmt.Println("🔍 [CodeGraph] Starting deterministic context analysis...")
 
 	referencedSymbols := make(map[string]string) // symbol -> lang
+	refsByChangedFile := make(map[string][]Reference)
 
 	// 1. Extract references from changed files
 	fmt.Println("📝 [CodeGraph] Input: Analyzing the following changed files:")
-	for path := range changedFiles {
+	for _, path := range sortedMapKeys(changedFiles) {
 		fmt.Printf("  - %s\n", path)
 	}
 
@@ -175,7 +201,7 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 			continue
 		}
 
-		refs, err := s.Parser.ExtractReferences(root, []byte(content), strings.ToLower(langConfig.Name))
+		referenceDetails, err := s.Parser.ExtractReferenceDetails(root, []byte(content), strings.ToLower(langConfig.Name))
 		if err != nil {
 			fmt.Printf("⚠️ [CodeGraph] Failed to extract refs from %s: %v\n", path, err)
 			continue
@@ -183,16 +209,18 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 
 		// Filter out builtins before adding
 		filtered := 0
-		for _, ref := range refs {
-			if !isBuiltinSymbol(ref) {
-				referencedSymbols[ref] = strings.ToLower(langConfig.Name)
-			} else {
+		for _, ref := range referenceDetails {
+			if isBuiltinSymbol(ref.Symbol) {
 				filtered++
+				continue
 			}
+
+			referencedSymbols[ref.Symbol] = strings.ToLower(langConfig.Name)
+			refsByChangedFile[path] = addReferenceUnique(refsByChangedFile[path], ref)
 		}
 
-		if len(refs) > 0 {
-			fmt.Printf("   -> Found %d references in %s (%d builtin filtered)\n", len(refs)-filtered, path, filtered)
+		if len(referenceDetails) > 0 {
+			fmt.Printf("   -> Found %d references in %s (%d builtin filtered)\n", len(referenceDetails)-filtered, path, filtered)
 		}
 	}
 
@@ -205,16 +233,11 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 		fmt.Printf("   Symbols: %v\n", symList)
 	}
 
-	// 2. Find definitions and extract only the relevant snippets
-	type snippetEntry struct {
-		path    string
-		snippet string
-	}
-
-	foundSnippets := make(map[string]string) // path -> accumulated snippets
+	// 2. Find definitions and extract only enough detail to build summaries
+	foundDeps := make(map[string]*dependencyInfo)
+	symbolToDefPath := make(map[string]string) // symbol -> dependency file path
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	totalContextSize := 0
 
 	semaphore := make(chan struct{}, 10)
 
@@ -224,14 +247,6 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 			defer wg.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
-
-			// Check context budget
-			mu.Lock()
-			if totalContextSize >= MaxDepContextChars {
-				mu.Unlock()
-				return
-			}
-			mu.Unlock()
 
 			langConfig, _ := SupportedLanguages[l]
 			candidates, err := s.Scanner.FindCandidates(ctx, sym, langConfig.Extensions)
@@ -244,10 +259,6 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 				if _, exists := changedFiles[candidatePath]; exists {
 					mu.Unlock()
 					continue
-				}
-				if totalContextSize >= MaxDepContextChars {
-					mu.Unlock()
-					return
 				}
 				mu.Unlock()
 
@@ -275,64 +286,474 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 				}
 
 				mu.Lock()
-				if totalContextSize >= MaxDepContextChars {
-					mu.Unlock()
-					return
+				if _, alreadyMapped := symbolToDefPath[sym]; !alreadyMapped {
+					symbolToDefPath[sym] = candidatePath
 				}
 
-				// Append snippet to this file's accumulated snippets
-				existing := foundSnippets[candidatePath]
-				if existing != "" {
-					// Check if this snippet is already included (dedup)
-					if !strings.Contains(existing, snippet) {
-						newContent := existing + "\n\n" + snippet
-						addedSize := len(snippet) + 2
-						if totalContextSize+addedSize <= MaxDepContextChars {
-							foundSnippets[candidatePath] = newContent
-							totalContextSize += addedSize
-
-							// Detailed logging
-							preview := snippet
-							if len(preview) > 60 {
-								preview = preview[:57] + "..."
-							}
-							preview = strings.ReplaceAll(preview, "\n", " ")
-							fmt.Printf("✅ [CodeGraph] Found definition for '%s' in %s\n", sym, candidatePath)
-							fmt.Printf("   Snippet: %s\n", preview)
-						}
+				dep := foundDeps[candidatePath]
+				if dep == nil {
+					dep = &dependencyInfo{
+						Symbols:     make(map[string]struct{}),
+						Definitions: make(map[string]struct{}),
 					}
-				} else {
-					// First snippet for this file — add file header
-					header := fmt.Sprintf("// From: %s\n", candidatePath)
-					newContent := header + snippet
-					addedSize := len(newContent)
-					if totalContextSize+addedSize <= MaxDepContextChars {
-						foundSnippets[candidatePath] = newContent
-						totalContextSize += addedSize
-
-						// Detailed logging
-						preview := snippet
-						if len(preview) > 60 {
-							preview = preview[:57] + "..."
-						}
-						preview = strings.ReplaceAll(preview, "\n", " ")
-						fmt.Printf("✅ [CodeGraph] Found definition for '%s' in %s\n", sym, candidatePath)
-						fmt.Printf("   Snippet: %s\n", preview)
-					}
+					foundDeps[candidatePath] = dep
 				}
+				dep.Symbols[sym] = struct{}{}
+				if len(dep.Snippets) < MaxSnippetsPerFile && !containsString(dep.Snippets, snippet) {
+					dep.Snippets = append(dep.Snippets, snippet)
+				}
+
+				preview := snippet
+				if len(preview) > 60 {
+					preview = preview[:57] + "..."
+				}
+				preview = strings.ReplaceAll(preview, "\n", " ")
+				fmt.Printf("✅ [CodeGraph] Found definition for '%s' in %s\n", sym, candidatePath)
+				fmt.Printf("   Snippet: %s\n", preview)
 				mu.Unlock()
+
+				// A single concrete definition is enough for deterministic context.
+				break
 			}
 		}(symbol, lang)
 	}
 
 	wg.Wait()
 
-	fmt.Printf("✅ [CodeGraph] Analysis complete. Found definitions in %d files (%d chars of context).\n", len(foundSnippets), totalContextSize)
-	if len(foundSnippets) > 0 {
+	// 3. Parse selected dependency files once to extract definitions and their own references.
+	definitionIndex := make(map[string]string)
+	for symbol, path := range symbolToDefPath {
+		definitionIndex[symbol] = path
+	}
+	for _, path := range sortedDependencyKeys(foundDeps) {
+		s.enrichDependencyMetadata(ctx, path, foundDeps[path], definitionIndex)
+	}
+
+	result := make(map[string]string)
+	totalContextSize := 0
+
+	for _, path := range sortedDependencyKeys(foundDeps) {
+		dep := foundDeps[path]
+		summary := buildDependencySummary(path, dep, definitionIndex)
+		if summary == "" {
+			continue
+		}
+		added := len(summary)
+		if totalContextSize+added > MaxDepContextChars {
+			continue
+		}
+		result[path] = summary
+		totalContextSize += added
+	}
+
+	contextGraph := buildContextGraphSummary(changedFiles, refsByChangedFile, foundDeps, definitionIndex)
+	if contextGraph != "" {
+		if totalContextSize+len(contextGraph) <= MaxDepContextChars {
+			result["_codegraph/context_graph"] = contextGraph
+			totalContextSize += len(contextGraph)
+		}
+	}
+
+	fmt.Printf("✅ [CodeGraph] Analysis complete. Found summaries for %d files (%d chars of context).\n", len(result), totalContextSize)
+	if len(result) > 0 {
 		fmt.Println("📂 [CodeGraph] Output: Added the following files to context:")
-		for path := range foundSnippets {
+		for _, path := range sortedMapKeys(result) {
 			fmt.Printf("  + %s\n", path)
 		}
 	}
-	return foundSnippets, nil
+	return result, nil
+}
+
+func sortedMapKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedDependencyKeys(m map[string]*dependencyInfo) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func addReferenceUnique(existing []Reference, candidate Reference) []Reference {
+	for _, item := range existing {
+		if item.Symbol == candidate.Symbol && item.Kind == candidate.Kind {
+			return existing
+		}
+	}
+	return append(existing, candidate)
+}
+
+func containsString(list []string, target string) bool {
+	for _, item := range list {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedSymbolSlice(symbols map[string]struct{}) []string {
+	out := make([]string, 0, len(symbols))
+	for s := range symbols {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func graphNodeLabel(path string) string {
+	clean := filepath.ToSlash(strings.TrimSpace(path))
+	if clean == "" {
+		return "unknown"
+	}
+	clean = strings.TrimSuffix(clean, filepath.Ext(clean))
+	parts := strings.Split(clean, "/")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2] + "." + parts[len(parts)-1]
+	}
+	return clean
+}
+
+func relationForReferenceKind(kind string) string {
+	switch kind {
+	case "call", "method_call":
+		return "calls"
+	case "type_ref", "constructor_call":
+		return "uses_type"
+	default:
+		return "depends_on"
+	}
+}
+
+func displayList(values []string, limit int) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	if len(values) <= limit {
+		return strings.Join(values, ", ")
+	}
+	return strings.Join(values[:limit], ", ") + fmt.Sprintf(" (+%d more)", len(values)-limit)
+}
+
+func inferBehaviorSignals(snippets []string) []string {
+	combined := strings.ToLower(strings.Join(snippets, "\n"))
+	if combined == "" {
+		return nil
+	}
+
+	type signalRule struct {
+		Message  string
+		Patterns []string
+	}
+	rules := []signalRule{
+		{
+			Message:  "Performs data-store operations",
+			Patterns: []string{"select ", "insert ", "update ", "delete ", "query", "sql", "database", "sqlite", "mongodb", "redis"},
+		},
+		{
+			Message:  "Performs network/API operations",
+			Patterns: []string{"http.", "fetch(", "axios", "requests.", "grpc", "webhook", "socket", "client.do"},
+		},
+		{
+			Message:  "Touches filesystem I/O",
+			Patterns: []string{"readfile", "writefile", "open(", "filepath", "os.", "ioutil", "fs.", "file."},
+		},
+		{
+			Message:  "Handles identity/authentication data",
+			Patterns: []string{"jwt", "oauth", "token", "session", "auth", "password", "secret", "credential"},
+		},
+		{
+			Message:  "Serializes or parses structured payloads",
+			Patterns: []string{"json", "yaml", "xml", "marshal", "unmarshal", "encode", "decode", "parse"},
+		},
+		{
+			Message:  "Contains concurrency/async coordination",
+			Patterns: []string{"goroutine", "mutex", "thread", "async", "await", "promise", "channel", "lock"},
+		},
+		{
+			Message:  "Spawns external commands/processes",
+			Patterns: []string{"exec(", "command", "spawn", "system(", "subprocess"},
+		},
+	}
+
+	var signals []string
+	for _, rule := range rules {
+		for _, pattern := range rule.Patterns {
+			if strings.Contains(combined, pattern) {
+				signals = append(signals, rule.Message)
+				break
+			}
+		}
+	}
+	signals = uniqueStrings(signals)
+	if len(signals) > MaxBehaviorSignals {
+		signals = signals[:MaxBehaviorSignals]
+	}
+	return signals
+}
+
+func collectDownstreamDependencies(path string, dep *dependencyInfo, definitionIndex map[string]string) []string {
+	targets := make(map[string]struct{})
+	for _, ref := range dep.References {
+		targetPath, ok := definitionIndex[ref.Symbol]
+		if !ok || targetPath == path {
+			continue
+		}
+		targets[targetPath] = struct{}{}
+	}
+	return sortedSymbolSlice(targets)
+}
+
+func buildDependencySummary(path string, dep *dependencyInfo, definitionIndex map[string]string) string {
+	if dep == nil {
+		return ""
+	}
+
+	resolvedSymbols := sortedSymbolSlice(dep.Symbols)
+	if len(resolvedSymbols) == 0 {
+		return ""
+	}
+	definedSymbols := sortedSymbolSlice(dep.Definitions)
+	downstreamDeps := collectDownstreamDependencies(path, dep, definitionIndex)
+	signals := inferBehaviorSignals(dep.Snippets)
+
+	var b strings.Builder
+	b.WriteString("DEPENDENCY SUMMARY")
+	b.WriteString("\n")
+	b.WriteString("- File: ")
+	b.WriteString(path)
+	b.WriteString("\n")
+	b.WriteString("- Resolves symbols: ")
+	b.WriteString(displayList(resolvedSymbols, MaxSymbolsPerSummary))
+	b.WriteString("\n")
+
+	if len(definedSymbols) > 0 {
+		b.WriteString("- Local definitions observed: ")
+		b.WriteString(displayList(definedSymbols, MaxSymbolsPerSummary))
+		b.WriteString("\n")
+	}
+	if len(downstreamDeps) > 0 {
+		nodeLabels := make([]string, 0, len(downstreamDeps))
+		for _, depPath := range downstreamDeps {
+			nodeLabels = append(nodeLabels, graphNodeLabel(depPath))
+		}
+		b.WriteString("- Depends on components: ")
+		b.WriteString(displayList(nodeLabels, MaxSymbolsPerSummary))
+		b.WriteString("\n")
+	}
+	if len(signals) > 0 {
+		b.WriteString("- Behavior signals: ")
+		b.WriteString(strings.Join(signals, "; "))
+		b.WriteString("\n")
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+type edgeKey struct {
+	From     string
+	To       string
+	Relation string
+}
+
+func sortedEdgeKeys(edges map[edgeKey]map[string]struct{}) []edgeKey {
+	keys := make([]edgeKey, 0, len(edges))
+	for key := range edges {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].From == keys[j].From {
+			if keys[i].To == keys[j].To {
+				return keys[i].Relation < keys[j].Relation
+			}
+			return keys[i].To < keys[j].To
+		}
+		return keys[i].From < keys[j].From
+	})
+	return keys
+}
+
+func countGraphNodes(edges map[edgeKey]map[string]struct{}) int {
+	nodes := make(map[string]struct{})
+	for key := range edges {
+		nodes[key.From] = struct{}{}
+		nodes[key.To] = struct{}{}
+	}
+	return len(nodes)
+}
+
+func buildDataFlowLines(changedFiles map[string]string, edges map[edgeKey]map[string]struct{}) []string {
+	changedSet := make(map[string]struct{}, len(changedFiles))
+	for path := range changedFiles {
+		changedSet[path] = struct{}{}
+	}
+
+	edgeKeys := sortedEdgeKeys(edges)
+	lines := make([]string, 0, MaxDataFlowLines)
+	seen := make(map[string]struct{})
+
+	// Direct flow from changed files
+	for _, key := range edgeKeys {
+		if _, ok := changedSet[key.From]; !ok {
+			continue
+		}
+		symbols := sortedSymbolSlice(edges[key])
+		line := fmt.Sprintf("%s -> %s via %s", graphNodeLabel(key.From), graphNodeLabel(key.To), displayList(symbols, 2))
+		if _, exists := seen[line]; exists {
+			continue
+		}
+		seen[line] = struct{}{}
+		lines = append(lines, line)
+		if len(lines) >= MaxDataFlowLines {
+			return lines
+		}
+	}
+
+	// One-hop extension to expose chain-like flow
+	for _, first := range edgeKeys {
+		if _, ok := changedSet[first.From]; !ok {
+			continue
+		}
+		for _, second := range edgeKeys {
+			if first.To != second.From {
+				continue
+			}
+			line := fmt.Sprintf("%s -> %s -> %s", graphNodeLabel(first.From), graphNodeLabel(first.To), graphNodeLabel(second.To))
+			if _, exists := seen[line]; exists {
+				continue
+			}
+			seen[line] = struct{}{}
+			lines = append(lines, line)
+			if len(lines) >= MaxDataFlowLines {
+				return lines
+			}
+		}
+	}
+
+	return lines
+}
+
+func buildContextGraphSummary(changedFiles map[string]string, refsByChangedFile map[string][]Reference, foundDeps map[string]*dependencyInfo, definitionIndex map[string]string) string {
+	edges := make(map[edgeKey]map[string]struct{})
+
+	addEdge := func(fromPath, toPath, relation, symbol string) {
+		if fromPath == "" || toPath == "" || fromPath == toPath {
+			return
+		}
+		key := edgeKey{
+			From:     fromPath,
+			To:       toPath,
+			Relation: relation,
+		}
+		if edges[key] == nil {
+			edges[key] = make(map[string]struct{})
+		}
+		if symbol != "" {
+			edges[key][symbol] = struct{}{}
+		}
+	}
+
+	// Changed file -> dependency edges
+	for changedPath, refs := range refsByChangedFile {
+		for _, ref := range refs {
+			targetPath, ok := definitionIndex[ref.Symbol]
+			if !ok {
+				continue
+			}
+			addEdge(changedPath, targetPath, relationForReferenceKind(ref.Kind), ref.Symbol)
+		}
+	}
+
+	// Dependency -> dependency edges
+	for depPath, dep := range foundDeps {
+		for _, ref := range dep.References {
+			targetPath, ok := definitionIndex[ref.Symbol]
+			if !ok {
+				continue
+			}
+			addEdge(depPath, targetPath, relationForReferenceKind(ref.Kind), ref.Symbol)
+		}
+	}
+
+	if len(edges) == 0 {
+		return ""
+	}
+
+	edgeKeys := sortedEdgeKeys(edges)
+	var b strings.Builder
+	b.WriteString("CONTEXT GRAPH\n")
+	b.WriteString(fmt.Sprintf("- Nodes: %d | Edges: %d\n", countGraphNodes(edges), len(edgeKeys)))
+	for _, key := range edgeKeys {
+		edgeSymbols := sortedSymbolSlice(edges[key])
+		b.WriteString(fmt.Sprintf("[%s] --%s--> [%s] (via: %s)\n",
+			graphNodeLabel(key.From), key.Relation, graphNodeLabel(key.To), displayList(edgeSymbols, MaxGraphEdgeSymbols)))
+	}
+
+	dataFlowLines := buildDataFlowLines(changedFiles, edges)
+	if len(dataFlowLines) > 0 {
+		b.WriteString("\nDATA FLOW\n")
+		for _, line := range dataFlowLines {
+			b.WriteString("- ")
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+func (s *Service) enrichDependencyMetadata(ctx context.Context, path string, dep *dependencyInfo, definitionIndex map[string]string) {
+	if dep == nil {
+		return
+	}
+	if dep.Definitions == nil {
+		dep.Definitions = make(map[string]struct{})
+	}
+
+	fullPath := filepath.Join(s.RepoPath, path)
+	contentBytes, err := os.ReadFile(fullPath)
+	if err != nil {
+		return
+	}
+
+	langConfig, ok := GetLanguageForFile(path)
+	if !ok {
+		return
+	}
+
+	root, err := s.Parser.ParseFile(ctx, contentBytes, langConfig)
+	if err != nil {
+		return
+	}
+
+	definitions, err := s.Parser.ExtractDefinitions(root, contentBytes, strings.ToLower(langConfig.Name))
+	if err == nil {
+		for _, def := range definitions {
+			if def == "" || isBuiltinSymbol(def) {
+				continue
+			}
+			dep.Definitions[def] = struct{}{}
+			if _, exists := definitionIndex[def]; !exists {
+				definitionIndex[def] = path
+			}
+		}
+	}
+
+	references, err := s.Parser.ExtractReferenceDetails(root, contentBytes, strings.ToLower(langConfig.Name))
+	if err == nil {
+		for _, ref := range references {
+			if ref.Symbol == "" || isBuiltinSymbol(ref.Symbol) {
+				continue
+			}
+			dep.References = addReferenceUnique(dep.References, ref)
+		}
+	}
 }

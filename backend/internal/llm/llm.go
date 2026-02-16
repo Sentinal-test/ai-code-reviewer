@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -194,23 +195,25 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
 
 	fmt.Printf("📂 Changed Files (%d):\n", len(reviewableFiles))
-	for path := range reviewableFiles {
+	for _, path := range getFileKeys(reviewableFiles) {
 		fmt.Printf("  - %s\n", path)
 	}
 
-	fmt.Printf("\n🔍 Code Graph Dependencies (%d):\n", len(reviewableDeps))
-	for path, content := range reviewableDeps {
+	fmt.Printf("\n🔍 Code Graph Summaries (%d):\n", len(reviewableDeps))
+	for _, path := range getFileKeys(reviewableDeps) {
+		content := reviewableDeps[path]
 		fmt.Printf("  + File: %s (%d chars)\n", path, len(content))
-		fmt.Println("    --- START SNIPPET ---")
+		fmt.Println("    --- START SUMMARY ---")
 		fmt.Println(content)
-		fmt.Println("    --- END SNIPPET ---")
+		fmt.Println("    --- END SUMMARY ---")
 	}
 
 	fmt.Printf("\n📊 Meta Context:\n")
 	fmt.Printf("  - Repository Structure: %d chars\n", len(repoStructure))
 	fmt.Printf("  - PR Intent Context:   %d chars\n", len(buildPRContextSummary(prContext)))
 	fmt.Printf("  - Total Prompt Size:   %d chars\n", len(prompt))
-	fmt.Println("═══════════════════════════════════════════════════════════════════════════════\n")
+	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+	fmt.Println()
 
 	// 2. Prepare Request
 	reqBody := map[string]interface{}{
@@ -295,6 +298,7 @@ func getFileKeys(m map[string]string) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return keys
 }
 
@@ -308,7 +312,8 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	// Sends: imports/package header + diff hunks only.
 	formatFilesWithDiff := func(files map[string]string, diffMap map[string][]string) string {
 		var b strings.Builder
-		for path, content := range files {
+		for _, path := range getFileKeys(files) {
+			content := files[path]
 			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n", path))
 
 			// Extract the import/package header (first ~30 lines or until first function)
@@ -355,7 +360,8 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	// Helper for dependencies (no diff annotations)
 	formatFiles := func(files map[string]string) string {
 		var b strings.Builder
-		for path, content := range files {
+		for _, path := range getFileKeys(files) {
+			content := files[path]
 			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n%s\n", path, content))
 		}
 		return b.String()
@@ -489,7 +495,7 @@ The diff hunks show exactly what was added (+) and removed (-).
 %s
 
 ═══════════════════════════════════════════════════════════════════════════════
-SUPPORTING CONTEXT: Related Definitions (Type/Function Signatures)
+SUPPORTING CONTEXT: Code Graph (Relationships + Behavioral Summaries)
 ═══════════════════════════════════════════════════════════════════════════════
 %s
 

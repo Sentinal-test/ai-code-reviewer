@@ -12,6 +12,11 @@ type Parser struct {
 	// We could cache parsers here if needed
 }
 
+type Reference struct {
+	Symbol string
+	Kind   string
+}
+
 func NewParser() *Parser {
 	return &Parser{}
 }
@@ -29,40 +34,56 @@ func (p *Parser) ParseFile(ctx context.Context, content []byte, langConfig *Lang
 
 // ExtractReferences finds symbols used in the code (function calls, type references)
 func (p *Parser) ExtractReferences(root *sitter.Node, content []byte, langName string) ([]string, error) {
-	var references []string
-	// query will be language specific
-	var queryStr string
+	referenceDetails, err := p.ExtractReferenceDetails(root, content, langName)
+	if err != nil {
+		return nil, err
+	}
 
+	references := make([]string, 0, len(referenceDetails))
+	for _, ref := range referenceDetails {
+		references = append(references, ref.Symbol)
+	}
+	return uniqueStrings(references), nil
+}
+
+// ExtractReferenceDetails returns symbol references with semantic usage kind.
+func (p *Parser) ExtractReferenceDetails(root *sitter.Node, content []byte, langName string) ([]Reference, error) {
+	type referenceQuery struct {
+		Kind  string
+		Query string
+	}
+
+	var queries []referenceQuery
 	switch langName {
 	case "go":
-		queryStr = `
-			(call_expression function: (identifier) @call)
-			(call_expression function: (selector_expression field: (field_identifier) @method_call))
-			(type_identifier) @type_ref
-		`
+		queries = []referenceQuery{
+			{Kind: "call", Query: `(call_expression function: (identifier) @ref)`},
+			{Kind: "method_call", Query: `(call_expression function: (selector_expression field: (field_identifier) @ref))`},
+			{Kind: "type_ref", Query: `(type_identifier) @ref`},
+		}
 	case "python":
-		queryStr = `
-			(call function: (identifier) @call)
-			(call function: (attribute attribute: (identifier) @method_call))
-			(type (identifier) @type_ref)
-		`
+		queries = []referenceQuery{
+			{Kind: "call", Query: `(call function: (identifier) @ref)`},
+			{Kind: "method_call", Query: `(call function: (attribute attribute: (identifier) @ref))`},
+			{Kind: "type_ref", Query: `(type (identifier) @ref)`},
+		}
 	case "javascript":
-		queryStr = `
-			(call_expression function: (identifier) @call)
-			(call_expression function: (member_expression property: (property_identifier) @method_call))
-		`
+		queries = []referenceQuery{
+			{Kind: "call", Query: `(call_expression function: (identifier) @ref)`},
+			{Kind: "method_call", Query: `(call_expression function: (member_expression property: (property_identifier) @ref))`},
+		}
 	case "typescript":
-		queryStr = `
-			(call_expression function: (identifier) @call)
-			(call_expression function: (member_expression property: (property_identifier) @method_call))
-			(type_identifier) @type_ref
-		`
+		queries = []referenceQuery{
+			{Kind: "call", Query: `(call_expression function: (identifier) @ref)`},
+			{Kind: "method_call", Query: `(call_expression function: (member_expression property: (property_identifier) @ref))`},
+			{Kind: "type_ref", Query: `(type_identifier) @ref`},
+		}
 	case "java":
-		queryStr = `
-			(method_invocation name: (identifier) @method_call)
-			(object_creation_expression type: (type_identifier) @constructor_call)
-			(type_identifier) @type_ref
-		`
+		queries = []referenceQuery{
+			{Kind: "method_call", Query: `(method_invocation name: (identifier) @ref)`},
+			{Kind: "constructor_call", Query: `(object_creation_expression type: (type_identifier) @ref)`},
+			{Kind: "type_ref", Query: `(type_identifier) @ref`},
+		}
 	default:
 		return nil, fmt.Errorf("unsupported language for references: %s", langName)
 	}
@@ -72,33 +93,43 @@ func (p *Parser) ExtractReferences(root *sitter.Node, content []byte, langName s
 		return nil, fmt.Errorf("unknown language: %s", langName)
 	}
 
-	q, err := sitter.NewQuery([]byte(queryStr), langConfig.Grammar)
-	if err != nil {
-		return nil, fmt.Errorf("invalid query for %s: %v", langName, err)
-	}
-	defer q.Close()
+	var references []Reference
+	seen := make(map[string]struct{})
 
-	qc := sitter.NewQueryCursor()
-	defer qc.Close()
-
-	qc.Exec(q, root)
-
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
+	for _, refQuery := range queries {
+		q, err := sitter.NewQuery([]byte(refQuery.Query), langConfig.Grammar)
+		if err != nil {
+			return nil, fmt.Errorf("invalid query for %s (%s): %v", langName, refQuery.Kind, err)
 		}
-		for _, capture := range m.Captures {
-			// Extract the text of the captured node
-			node := capture.Node
-			symbol := node.Content(content)
-			if symbol != "" {
-				references = append(references, symbol)
+
+		qc := sitter.NewQueryCursor()
+		qc.Exec(q, root)
+
+		for {
+			m, ok := qc.NextMatch()
+			if !ok {
+				break
+			}
+			for _, capture := range m.Captures {
+				symbol := capture.Node.Content(content)
+				if symbol == "" {
+					continue
+				}
+
+				key := refQuery.Kind + "\x00" + symbol
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				seen[key] = struct{}{}
+				references = append(references, Reference{Symbol: symbol, Kind: refQuery.Kind})
 			}
 		}
+
+		qc.Close()
+		q.Close()
 	}
 
-	return uniqueStrings(references), nil
+	return references, nil
 }
 
 // ExtractDefinitions finds symbols defined in the code (functions, classes, types)
