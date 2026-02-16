@@ -2,6 +2,7 @@ package main
 
 import (
 	"code-review/backend/internal/action"
+	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/models"
 	"context"
@@ -113,23 +114,23 @@ func main() {
 		}
 	}
 
-	// 4.7 Scout Pass: Analyze Dependencies
+	// 4.7 Code Graph: Deterministic Context Analysis
 	dependencies := make(map[string]string)
-	fmt.Printf("🚀 Starting Scout Pass: Analyzing %d changed files...\n", len(changedFiles))
+	fmt.Printf("🚀 Starting Code Graph: Analyzing %d changed files...\n", len(changedFiles))
 
-	scoutClient := &http.Client{}
-	depPaths, err := llm.AnalyzeDependencyNeeds(context.Background(), scoutClient, diff, changedFiles, repoStructure, prContext, apiKey)
+	// Initialize Code Graph Service
+	// We assume the binary is running from the root or we can derive repo path
+	// For CLI, we are usually in the repo root or provided via args.
+	// We'll use the current working directory as a safe default for now, or the repo path if known.
+	wd, _ := os.Getwd()
+	cgService := codegraph.NewService(wd)
+
+	cgContext, err := cgService.GetContext(context.Background(), changedFiles)
 	if err != nil {
-		fmt.Printf("⚠️ Scout Pass failed: %v\n", err)
+		fmt.Printf("⚠️ Code Graph failed: %v\n", err)
 	} else {
-		for _, path := range depPaths {
-			if _, exists := changedFiles[path]; exists {
-				continue
-			}
-			content, err := action.GetFileContent(path)
-			if err == nil {
-				dependencies[path] = content
-			}
+		for path, content := range cgContext {
+			dependencies[path] = content
 		}
 	}
 

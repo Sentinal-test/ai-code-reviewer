@@ -1,6 +1,7 @@
 package main
 
 import (
+	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/database"
 	internalGH "code-review/backend/internal/github"
 	"code-review/backend/internal/llm"
@@ -305,26 +306,22 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 		changedFiles = make(map[string]string)
 	}
 
-	// 4.7 Scout Pass: Analyze Dependencies
+	// 4.7 Code Graph: Deterministic Context Analysis
 	dependencies := make(map[string]string)
-	fmt.Printf("🕵️‍♀️ Scout Pass: Analyzing dependency needs...\n")
-	depPaths, err := llm.AnalyzeDependencyNeeds(ctx, nil, diff, changedFiles, repoStructure, prContext, apiKey)
+	fmt.Printf("🕵️‍♀️ Code Graph: Analyzing dependency needs...\n")
+
+	// Initialize Code Graph Service
+	wd, _ := os.Getwd()
+	cgService := codegraph.NewService(wd)
+
+	cgContext, err := cgService.GetContext(ctx, changedFiles)
+
 	if err != nil {
-		fmt.Printf("⚠️ Scout Pass failed: %v\n", err)
+		fmt.Printf("⚠️ Code Graph failed: %v\n", err)
 	} else {
-		fmt.Printf("🔍 Scout identified %d dependencies: %v\n", len(depPaths), depPaths)
-		for _, path := range depPaths {
-			// Skip if already in changedFiles
-			if _, exists := changedFiles[path]; exists {
-				continue
-			}
-			fmt.Printf("  📥 Fetching dependency: %s\n", path)
-			content, err := internalGH.GetFileContent(ctx, client, repo.GetOwner().GetLogin(), repo.GetName(), path, commitSHA)
-			if err != nil {
-				fmt.Printf("  ⚠️ Failed to fetch dependency %s: %v\n", path, err)
-			} else {
-				dependencies[path] = content
-			}
+		fmt.Printf("🔍 Code Graph identified %d dependencies\n", len(cgContext))
+		for path, content := range cgContext {
+			dependencies[path] = content
 		}
 	}
 
@@ -491,10 +488,4 @@ func getSettings(db *sql.DB) http.HandlerFunc {
 		}
 		json.NewEncoder(w).Encode(settings)
 	}
-}
-
-func getSettings() {
-	http.HandleFunc("/settings", func(w http.ResponseWriter, r *http.Request) {
-		change tghe stettihfbvcibeirbfvcbgierbci
-	})			
 }
