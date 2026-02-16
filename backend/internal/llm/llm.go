@@ -188,12 +188,29 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	// 1. Construct Prompt
 	prompt := buildPrompt(diff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
 
-	// LOGGING: Print the prompt to stdout as requested
+	// LOGGING: Detailed context summary as requested
 	fmt.Println("\n═══════════════════════════════════════════════════════════════════════════════")
-	fmt.Println("🧠 [LLM INPUT] Review Pass Prompt Preview")
+	fmt.Println("🧠 [LLM INPUT] Context Summary & Code Graph Contributions")
 	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
-	fmt.Println(prompt)
-	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+
+	fmt.Printf("📂 Changed Files (%d):\n", len(reviewableFiles))
+	for path := range reviewableFiles {
+		fmt.Printf("  - %s\n", path)
+	}
+
+	fmt.Printf("\n🔍 Code Graph Dependencies (%d):\n", len(reviewableDeps))
+	for path, content := range reviewableDeps {
+		fmt.Printf("  + File: %s (%d chars)\n", path, len(content))
+		fmt.Println("    --- START SNIPPET ---")
+		fmt.Println(content)
+		fmt.Println("    --- END SNIPPET ---")
+	}
+
+	fmt.Printf("\n📊 Meta Context:\n")
+	fmt.Printf("  - Repository Structure: %d chars\n", len(repoStructure))
+	fmt.Printf("  - PR Intent Context:   %d chars\n", len(buildPRContextSummary(prContext)))
+	fmt.Printf("  - Total Prompt Size:   %d chars\n", len(prompt))
+	fmt.Println("═══════════════════════════════════════════════════════════════════════════════\n")
 
 	// 2. Prepare Request
 	reqBody := map[string]interface{}{
@@ -635,4 +652,18 @@ REMEMBER: You are a DEFECT DETECTOR with context awareness.
 
 BEGIN ANALYSIS NOW.
 `, prContextSection, changedContent, depsContent, repoStructure, layers)
+}
+
+func buildPRContextSummary(prContext models.PRContext) string {
+	var b strings.Builder
+	if prContext.Title != "" {
+		b.WriteString(prContext.Title)
+	}
+	if prContext.Body != "" {
+		b.WriteString(prContext.Body)
+	}
+	for _, msg := range prContext.CommitMessages {
+		b.WriteString(msg)
+	}
+	return b.String()
 }
