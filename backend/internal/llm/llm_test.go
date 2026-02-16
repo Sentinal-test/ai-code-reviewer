@@ -22,6 +22,10 @@ func (m *MockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 func TestRunReview_Success(t *testing.T) {
+	changedFiles := map[string]string{
+		"main.go": "package main\nfunc main() {}\n",
+	}
+
 	// Prepare expected review result
 	expectedResult := models.ReviewResult{
 		Summary: "Good code",
@@ -62,7 +66,7 @@ func TestRunReview_Success(t *testing.T) {
 		},
 	}
 
-	result, err := RunReview(context.Background(), mockClient, "diff content", nil, nil, models.RepoSettings{}, "", "test-api-key", models.PRContext{})
+	result, err := RunReview(context.Background(), mockClient, "diff content", changedFiles, nil, models.RepoSettings{}, "", "test-api-key", models.PRContext{})
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, "Good code", result.Summary)
@@ -70,6 +74,10 @@ func TestRunReview_Success(t *testing.T) {
 }
 
 func TestRunReview_APIError(t *testing.T) {
+	changedFiles := map[string]string{
+		"main.go": "package main\nfunc main() {}\n",
+	}
+
 	mockClient := &http.Client{
 		Transport: &MockRoundTripper{
 			RoundTripFunc: func(req *http.Request) (*http.Response, error) {
@@ -82,12 +90,16 @@ func TestRunReview_APIError(t *testing.T) {
 		},
 	}
 
-	_, err := RunReview(context.Background(), mockClient, "diff", nil, nil, models.RepoSettings{}, "", "key", models.PRContext{})
+	_, err := RunReview(context.Background(), mockClient, "diff", changedFiles, nil, models.RepoSettings{}, "", "key", models.PRContext{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "LLM returned status 500")
 }
 
 func TestRunReview_EmptyResponse(t *testing.T) {
+	changedFiles := map[string]string{
+		"main.go": "package main\nfunc main() {}\n",
+	}
+
 	// Mock empty candidates
 	geminiRespObj := map[string]interface{}{
 		"candidates": []interface{}{},
@@ -106,12 +118,16 @@ func TestRunReview_EmptyResponse(t *testing.T) {
 		},
 	}
 
-	_, err := RunReview(context.Background(), mockClient, "diff", nil, nil, models.RepoSettings{}, "", "key", models.PRContext{})
+	_, err := RunReview(context.Background(), mockClient, "diff", changedFiles, nil, models.RepoSettings{}, "", "key", models.PRContext{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "LLM returned empty response")
 }
 
 func TestRunReview_MalformedJSON(t *testing.T) {
+	changedFiles := map[string]string{
+		"main.go": "package main\nfunc main() {}\n",
+	}
+
 	// Mock response where text is not valid JSON
 	geminiRespObj := map[string]interface{}{
 		"candidates": []map[string]interface{}{
@@ -138,7 +154,7 @@ func TestRunReview_MalformedJSON(t *testing.T) {
 		},
 	}
 
-	_, err := RunReview(context.Background(), mockClient, "diff", nil, nil, models.RepoSettings{}, "", "key", models.PRContext{})
+	_, err := RunReview(context.Background(), mockClient, "diff", changedFiles, nil, models.RepoSettings{}, "", "key", models.PRContext{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to unmarshal JSON content")
 }

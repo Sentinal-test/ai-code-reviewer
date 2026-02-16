@@ -1,6 +1,7 @@
 package main
 
 import (
+	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/models"
 	"context"
@@ -138,29 +139,34 @@ func runEvalCase(truthPath, apiKey string) Result {
 		prContext.Title = "Evaluation Test"
 	}
 
-	// EXECUTE SCOUT PASS if expected dependencies are listed
+	// EXECUTE CODE GRAPH if expected dependencies are listed
 	dependencies := make(map[string]string)
 	depRecall := 1.0
 	if len(truth.ExpectedDependencies) > 0 {
-		fmt.Printf("   🔭 Running Scout Pass...\n")
-		// Simulate repo structure by listing files in buggy dir
-		var repoFiles []string
-		for f := range changedFiles {
-			repoFiles = append(repoFiles, f)
-		}
-		// Also add expected dependencies to repo structure
-		for _, d := range truth.ExpectedDependencies {
-			repoFiles = append(repoFiles, d)
-		}
-		repoStructure := strings.Join(repoFiles, "\n")
+		fmt.Printf("   🔭 Running Code Graph...\n")
+		// Initialize Code Graph Service
+		// Benchmark runs from backend/cmd/benchmark, so repo root is ../..
+		// However, we are running on datasets which are external.
+		// The Scanner expects a RepoPath to run git grep in.
+		// For benchmarks, the "Changes" are in `caseDir/buggy`.
+		// But definition files might be in `caseDir/deps` or implied.
+		// Detailed benchmarking of Code Graph requires strict repo structure.
+		// We'll point Scanner to caseDir for now.
+		cgService := codegraph.NewService(caseDir)
 
-		foundPaths, _ := llm.AnalyzeDependencyNeeds(ctx, client, string(diff), changedFiles, repoStructure, prContext, apiKey)
+		cgContext, _ := cgService.GetContext(ctx, changedFiles)
+
+		foundPaths := make([]string, 0, len(cgContext))
+		for p := range cgContext {
+			foundPaths = append(foundPaths, p)
+		}
 
 		tpDeps := 0
 		for _, expected := range truth.ExpectedDependencies {
 			found := false
 			for _, f := range foundPaths {
-				if f == expected {
+				// Benchmark truth might use relative paths, Code Graph returns relative to RepoPath
+				if f == expected || strings.HasSuffix(f, expected) {
 					found = true
 					break
 				}
@@ -177,7 +183,7 @@ func runEvalCase(truthPath, apiKey string) Result {
 			}
 		}
 		depRecall = float64(tpDeps) / float64(len(truth.ExpectedDependencies))
-		fmt.Printf("   🔍 Scout Recall: %.2f (%d/%d found)\n", depRecall, tpDeps, len(truth.ExpectedDependencies))
+		fmt.Printf("   🔍 Code Graph Recall: %.2f (%d/%d found)\n", depRecall, tpDeps, len(truth.ExpectedDependencies))
 	}
 
 	review, err := llm.RunReview(ctx, client, string(diff), changedFiles, dependencies, settings, "", apiKey, prContext)

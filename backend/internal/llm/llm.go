@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -188,6 +189,32 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	// 1. Construct Prompt
 	prompt := buildPrompt(diff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
 
+	// LOGGING: Detailed context summary as requested
+	fmt.Println("\n═══════════════════════════════════════════════════════════════════════════════")
+	fmt.Println("🧠 [LLM INPUT] Context Summary & Code Graph Contributions")
+	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+
+	fmt.Printf("📂 Changed Files (%d):\n", len(reviewableFiles))
+	for _, path := range getFileKeys(reviewableFiles) {
+		fmt.Printf("  - %s\n", path)
+	}
+
+	fmt.Printf("\n🔍 Code Graph Summaries (%d):\n", len(reviewableDeps))
+	for _, path := range getFileKeys(reviewableDeps) {
+		content := reviewableDeps[path]
+		fmt.Printf("  + File: %s (%d chars)\n", path, len(content))
+		fmt.Println("    --- START SUMMARY ---")
+		fmt.Println(content)
+		fmt.Println("    --- END SUMMARY ---")
+	}
+
+	fmt.Printf("\n📊 Meta Context:\n")
+	fmt.Printf("  - Repository Structure: %d chars\n", len(repoStructure))
+	fmt.Printf("  - PR Intent Context:   %d chars\n", len(buildPRContextSummary(prContext)))
+	fmt.Printf("  - Total Prompt Size:   %d chars\n", len(prompt))
+	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+	fmt.Println()
+
 	// 2. Prepare Request
 	reqBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
@@ -271,6 +298,7 @@ func getFileKeys(m map[string]string) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return keys
 }
 
@@ -280,23 +308,51 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	// Target Max Chars: ~3,500,000 (approx 875k tokens safety for Gemini 2.5 Flash)
 	const MaxContextChars = 3500000
 
-	// Helper to format files with inline diff annotations
+	// Helper to format changed files with diff annotations — NO full file duplication.
+	// Sends: imports/package header + diff hunks only.
 	formatFilesWithDiff := func(files map[string]string, diffMap map[string][]string) string {
 		var b strings.Builder
-		for path, content := range files {
+		for _, path := range getFileKeys(files) {
+			content := files[path]
 			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n", path))
 
-			// If we have diff information for this file, annotate it
+			// Extract the import/package header (first ~30 lines or until first function)
+			// This gives the LLM type context without the full file
+			lines := strings.Split(content, "\n")
+			headerEnd := 0
+			for i, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				// Stop at first function/class/type definition
+				if i > 5 && (strings.HasPrefix(trimmed, "func ") ||
+					strings.HasPrefix(trimmed, "def ") ||
+					strings.HasPrefix(trimmed, "class ") ||
+					strings.HasPrefix(trimmed, "export ") ||
+					strings.HasPrefix(trimmed, "public ") ||
+					strings.HasPrefix(trimmed, "private ") ||
+					strings.HasPrefix(trimmed, "const (") ||
+					strings.HasPrefix(trimmed, "var (")) {
+					break
+				}
+				headerEnd = i + 1
+				if headerEnd > 30 {
+					break
+				}
+			}
+
+			if headerEnd > 0 {
+				header := strings.Join(lines[:headerEnd], "\n")
+				b.WriteString("/* FILE HEADER (imports/package): */\n")
+				b.WriteString(header)
+				b.WriteString("\n\n")
+			}
+
+			// Add diff hunks
 			if diffSections, hasDiff := diffMap[path]; hasDiff && len(diffSections) > 0 {
-				b.WriteString("/* CHANGED SECTIONS IN THIS FILE: */\n")
+				b.WriteString("/* CHANGED SECTIONS: */\n")
 				for i, section := range diffSections {
 					b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s\n*/\n\n", i+1, section))
 				}
-				b.WriteString("/* COMPLETE FILE CONTENT FOR CONTEXT: */\n")
 			}
-
-			b.WriteString(content)
-			b.WriteString("\n")
 		}
 		return b.String()
 	}
@@ -304,7 +360,8 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	// Helper for dependencies (no diff annotations)
 	formatFiles := func(files map[string]string) string {
 		var b strings.Builder
-		for path, content := range files {
+		for _, path := range getFileKeys(files) {
+			content := files[path]
 			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n%s\n", path, content))
 		}
 		return b.String()
@@ -426,19 +483,19 @@ Your SOLE objective is to identify defects, vulnerabilities, bugs, and code qual
 ═══════════════════════════════════════════════════════════════════════════════
 PRIMARY ANALYSIS TARGET: Changed Code Files
 ═══════════════════════════════════════════════════════════════════════════════
-Below are the complete files that were modified, with inline annotations showing 
+Below are the changed files with their import headers and diff hunks showing
 exactly what changed. Focus your analysis on the CHANGED SECTIONS marked in comments.
 
-The complete file content is provided to help you understand:
-- The context in which changes were made
-- How changes interact with existing code
-- Whether changes break existing functionality
-- Type signatures, function definitions, and dependencies
+The import/package header helps you understand:
+- What packages and types are imported
+- The language and module context
+
+The diff hunks show exactly what was added (+) and removed (-).
 
 %s
 
 ═══════════════════════════════════════════════════════════════════════════════
-SUPPORTING CONTEXT: Related Dependencies (For Interface/Type Verification)
+SUPPORTING CONTEXT: Code Graph (Relationships + Behavioral Summaries)
 ═══════════════════════════════════════════════════════════════════════════════
 %s
 
@@ -603,204 +660,16 @@ BEGIN ANALYSIS NOW.
 `, prContextSection, changedContent, depsContent, repoStructure, layers)
 }
 
-// buildScoutPrompt constructs the prompt for the dependency analysis LLM.
-func buildScoutPrompt(diff string, changedFiles map[string]string, repoStructure string, prContext models.PRContext) string {
-	// Filter out documentation files from changed files list
-	reviewableFiles := filterReviewableFiles(changedFiles)
-
-	var fileList []string
-	for path := range reviewableFiles {
-		fileList = append(fileList, path)
+func buildPRContextSummary(prContext models.PRContext) string {
+	var b strings.Builder
+	if prContext.Title != "" {
+		b.WriteString(prContext.Title)
 	}
-
-	return fmt.Sprintf(`You are a dependency analyzer for automated code review systems.
-Your task is to identify which additional repository files are REQUIRED to accurately validate the changes in the provided diff.
-
-═══════════════════════════════════════════════════════════════════════════════
-INPUT: GIT DIFF (Code Changes Only)
-═══════════════════════════════════════════════════════════════════════════════
-%s
-
-═══════════════════════════════════════════════════════════════════════════════
-ALREADY AVAILABLE: Changed Code Files
-═══════════════════════════════════════════════════════════════════════════════
-%v
-
-Note: Documentation files (.md, README, etc.) and config files have been filtered out.
-Only actual code files are being reviewed.
-
-═══════════════════════════════════════════════════════════════════════════════
-AVAILABLE: Repository Structure
-═══════════════════════════════════════════════════════════════════════════════
-%s
-
-═══════════════════════════════════════════════════════════════════════════════
-ANALYSIS TASK
-═══════════════════════════════════════════════════════════════════════════════
-
-Analyze the diff and identify CODE files that are CRITICAL for validating the changes.
-
-INCLUDE files that provide:
-✓ Type definitions, struct definitions, or interfaces used in the changed code
-✓ Function/method signatures that are called by the changes
-✓ Constants, enums, or configuration referenced in the code
-✓ Parent classes, base implementations, or mixins that changed code extends
-✓ Database models or schema if the diff includes queries/database operations
-✓ API route definitions if the diff implements handlers
-✓ Middleware, interceptors, or decorators that process the changed code
-✓ Core utility functions with complex logic that changed code depends on
-✓ Shared state, singletons, or global variables accessed by the changes
-
-EXCLUDE files that are:
-✗ Documentation files (README.md, CHANGELOG.md, *.txt, *.rst, docs/*)
-✗ Configuration files (package.json, go.mod, .gitignore, docker-compose.yml, *.config.js)
-✗ Standard library imports (e.g., "fmt", "os", "react", "lodash")
-✗ External dependencies from node_modules, vendor, site-packages
-✗ Test files UNLESS the diff modifies production code that those tests directly validate
-✗ Build scripts, CI/CD configs (Makefile, .github/, .gitlab-ci.yml)
-✗ Static assets (images, fonts, CSS-only files) unless they affect code logic
-✗ Files not present in the "Repository Structure" above
-✗ Changed files already listed in "ALREADY AVAILABLE" section
-
-PRIORITIZATION (request max 12 files, highest priority first):
-1. **Direct imports/dependencies** (15 files imported/called by changed code)
-2. **Type definitions** (10 - interfaces, structs, classes used in changes)
-3. **Parent/base classes** (8 - inheritance hierarchy for changed classes)
-4. **Shared utilities** (6 - helper functions used by changes)
-5. **API/Route definitions** (4 - if changes implement endpoints)
-6. **Database models** (3 - if changes query/modify data)
-7. **Middleware** (2 - if changes are processed by middleware)
-
-SMART FILTERING:
-- If a changed file is self-contained (no external calls), return empty array
-- If imports are simple (just stdlib), no dependencies needed
-- If file only has isolated logic, skip dependencies
-- Prefer fewer, more relevant files over comprehensive coverage
-
-═══════════════════════════════════════════════════════════════════════════════
-OUTPUT REQUIREMENTS
-═══════════════════════════════════════════════════════════════════════════════
-
-Return ONLY valid JSON matching this schema:
-{
-  "files": ["path/to/file1.go", "path/to/file2.ts"]
-}
-
-Rules:
-- Return empty array if no additional files are needed: {"files": []}
-- Maximum 12 files (prioritize most critical for code validation)
-- ONLY include actual code files (no docs, no configs)
-- Paths must exactly match those in "Repository Structure"
-- No markdown formatting, no explanations, only JSON
-
-BEGIN ANALYSIS NOW.
-`, diff, fileList, repoStructure)
-}
-
-// AnalyzeDependencyNeeds asks the LLM which other files are needed for context.
-func AnalyzeDependencyNeeds(ctx context.Context, client *http.Client, diff string, changedFiles map[string]string, repoStructure string, prContext models.PRContext, apiKey string) ([]string, error) {
-	// If no code files changed, no dependencies needed
-	if len(filterReviewableFiles(changedFiles)) == 0 {
-		return []string{}, nil
+	if prContext.Body != "" {
+		b.WriteString(prContext.Body)
 	}
-
-	prompt := buildScoutPrompt(diff, changedFiles, repoStructure, prContext)
-
-	// Prepare Request
-	reqBody := map[string]interface{}{
-		"contents": []map[string]interface{}{
-			{
-				"parts": []map[string]string{
-					{"text": prompt},
-				},
-			},
-		},
-		"generationConfig": map[string]interface{}{
-			"responseMimeType": "application/json",
-		},
+	for _, msg := range prContext.CommitMessages {
+		b.WriteString(msg)
 	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	url := fmt.Sprintf("%s?key=%s", geminiURL, apiKey)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	// Execute
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("LLM scout failed status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Parse
-	var geminiResp struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
-		return nil, err
-	}
-
-	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
-		return []string{}, nil
-	}
-
-	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
-
-	// Extraction logic to handle markdown backticks
-	jsonStr := responseText
-	if idx := strings.Index(jsonStr, "```json"); idx != -1 {
-		jsonStr = jsonStr[idx+7:]
-		if endIdx := strings.Index(jsonStr, "```"); endIdx != -1 {
-			jsonStr = jsonStr[:endIdx]
-		}
-	} else if idx := strings.Index(jsonStr, "```"); idx != -1 {
-		jsonStr = jsonStr[idx+3:]
-		if endIdx := strings.Index(jsonStr, "```"); endIdx != -1 {
-			jsonStr = jsonStr[:endIdx]
-		}
-	}
-	jsonStr = strings.TrimSpace(jsonStr)
-
-	var result struct {
-		Files []string `json:"files"`
-	}
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		fmt.Printf("⚠️ Scout JSON Parse Failed: %v | Response: %s\n", err, responseText)
-		return nil, fmt.Errorf("failed to parse scout JSON: %v", err)
-	}
-
-	// Filter out any documentation files that might have slipped through
-	filteredFiles := []string{}
-	for _, file := range result.Files {
-		if !isDocumentationFile(file) {
-			filteredFiles = append(filteredFiles, file)
-		}
-	}
-
-	if len(filteredFiles) > 0 {
-		fmt.Printf("✅ [SCOUT PASS] - Identified %d dependencies\n", len(filteredFiles))
-	}
-	return filteredFiles, nil
+	return b.String()
 }
