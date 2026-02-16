@@ -287,23 +287,50 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	// Target Max Chars: ~3,500,000 (approx 875k tokens safety for Gemini 2.5 Flash)
 	const MaxContextChars = 3500000
 
-	// Helper to format files with inline diff annotations
+	// Helper to format changed files with diff annotations — NO full file duplication.
+	// Sends: imports/package header + diff hunks only.
 	formatFilesWithDiff := func(files map[string]string, diffMap map[string][]string) string {
 		var b strings.Builder
 		for path, content := range files {
 			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n", path))
 
-			// If we have diff information for this file, annotate it
+			// Extract the import/package header (first ~30 lines or until first function)
+			// This gives the LLM type context without the full file
+			lines := strings.Split(content, "\n")
+			headerEnd := 0
+			for i, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				// Stop at first function/class/type definition
+				if i > 5 && (strings.HasPrefix(trimmed, "func ") ||
+					strings.HasPrefix(trimmed, "def ") ||
+					strings.HasPrefix(trimmed, "class ") ||
+					strings.HasPrefix(trimmed, "export ") ||
+					strings.HasPrefix(trimmed, "public ") ||
+					strings.HasPrefix(trimmed, "private ") ||
+					strings.HasPrefix(trimmed, "const (") ||
+					strings.HasPrefix(trimmed, "var (")) {
+					break
+				}
+				headerEnd = i + 1
+				if headerEnd > 30 {
+					break
+				}
+			}
+
+			if headerEnd > 0 {
+				header := strings.Join(lines[:headerEnd], "\n")
+				b.WriteString("/* FILE HEADER (imports/package): */\n")
+				b.WriteString(header)
+				b.WriteString("\n\n")
+			}
+
+			// Add diff hunks
 			if diffSections, hasDiff := diffMap[path]; hasDiff && len(diffSections) > 0 {
-				b.WriteString("/* CHANGED SECTIONS IN THIS FILE: */\n")
+				b.WriteString("/* CHANGED SECTIONS: */\n")
 				for i, section := range diffSections {
 					b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s\n*/\n\n", i+1, section))
 				}
-				b.WriteString("/* COMPLETE FILE CONTENT FOR CONTEXT: */\n")
 			}
-
-			b.WriteString(content)
-			b.WriteString("\n")
 		}
 		return b.String()
 	}
@@ -433,19 +460,19 @@ Your SOLE objective is to identify defects, vulnerabilities, bugs, and code qual
 ═══════════════════════════════════════════════════════════════════════════════
 PRIMARY ANALYSIS TARGET: Changed Code Files
 ═══════════════════════════════════════════════════════════════════════════════
-Below are the complete files that were modified, with inline annotations showing 
+Below are the changed files with their import headers and diff hunks showing
 exactly what changed. Focus your analysis on the CHANGED SECTIONS marked in comments.
 
-The complete file content is provided to help you understand:
-- The context in which changes were made
-- How changes interact with existing code
-- Whether changes break existing functionality
-- Type signatures, function definitions, and dependencies
+The import/package header helps you understand:
+- What packages and types are imported
+- The language and module context
+
+The diff hunks show exactly what was added (+) and removed (-).
 
 %s
 
 ═══════════════════════════════════════════════════════════════════════════════
-SUPPORTING CONTEXT: Related Dependencies (For Interface/Type Verification)
+SUPPORTING CONTEXT: Related Definitions (Type/Function Signatures)
 ═══════════════════════════════════════════════════════════════════════════════
 %s
 

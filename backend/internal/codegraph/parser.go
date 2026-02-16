@@ -175,6 +175,99 @@ func (p *Parser) ExtractDefinitions(root *sitter.Node, content []byte, langName 
 	return uniqueStrings(definitions), nil
 }
 
+// ExtractDefinitionSnippet finds the definition of a specific symbol and returns
+// only the source text of that definition (function, type, class, etc.) — not the entire file.
+func (p *Parser) ExtractDefinitionSnippet(root *sitter.Node, content []byte, langName string, targetSymbol string) (string, error) {
+	var queryStr string
+
+	switch langName {
+	case "go":
+		queryStr = `
+			(function_declaration name: (identifier) @func_def)
+			(method_declaration name: (field_identifier) @method_def)
+			(type_spec name: (type_identifier) @type_def)
+		`
+	case "python":
+		queryStr = `
+			(function_definition name: (identifier) @func_def)
+			(class_definition name: (identifier) @class_def)
+		`
+	case "javascript":
+		queryStr = `
+			(function_declaration name: (identifier) @func_def)
+			(class_declaration name: (identifier) @class_def)
+			(method_definition name: (property_identifier) @method_def)
+			(variable_declarator name: (identifier) @var_def)
+		`
+	case "typescript":
+		queryStr = `
+			(function_declaration name: (identifier) @func_def)
+			(class_declaration name: (type_identifier) @class_def)
+			(method_definition name: (property_identifier) @method_def)
+			(variable_declarator name: (identifier) @var_def)
+		`
+	case "java":
+		queryStr = `
+			(method_declaration name: (identifier) @method_def)
+			(class_declaration name: (identifier) @class_def)
+			(interface_declaration name: (identifier) @interface_def)
+		`
+	default:
+		return "", fmt.Errorf("unsupported language: %s", langName)
+	}
+
+	langConfig, ok := SupportedLanguages[langName]
+	if !ok {
+		return "", fmt.Errorf("unknown language: %s", langName)
+	}
+
+	q, err := sitter.NewQuery([]byte(queryStr), langConfig.Grammar)
+	if err != nil {
+		return "", fmt.Errorf("invalid query for %s: %v", langName, err)
+	}
+	defer q.Close()
+
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
+	qc.Exec(q, root)
+
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+		for _, capture := range m.Captures {
+			node := capture.Node
+			symbol := node.Content(content)
+			if symbol == targetSymbol {
+				// Found the definition — extract the PARENT node's text
+				// The parent is the actual declaration (function_declaration, type_spec, etc.)
+				parent := node.Parent()
+				if parent == nil {
+					parent = node
+				}
+
+				// For Go type_spec, go up one more level to get the full type declaration
+				if langName == "go" && parent.Type() == "type_spec" {
+					grandparent := parent.Parent()
+					if grandparent != nil && grandparent.Type() == "type_declaration" {
+						parent = grandparent
+					}
+				}
+
+				snippet := parent.Content(content)
+				// Cap individual snippet to 3000 chars to prevent huge functions
+				if len(snippet) > 3000 {
+					snippet = snippet[:3000] + "\n// ... (truncated)"
+				}
+				return snippet, nil
+			}
+		}
+	}
+
+	return "", nil // Not found
+}
+
 func uniqueStrings(slice []string) []string {
 	keys := make(map[string]bool)
 	list := []string{}
