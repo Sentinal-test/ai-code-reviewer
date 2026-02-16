@@ -188,6 +188,13 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	// 1. Construct Prompt
 	prompt := buildPrompt(diff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
 
+	// LOGGING: Print the prompt to stdout as requested
+	fmt.Println("\n═══════════════════════════════════════════════════════════════════════════════")
+	fmt.Println("🧠 [LLM INPUT] Review Pass Prompt Preview")
+	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+	fmt.Println(prompt)
+	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+
 	// 2. Prepare Request
 	reqBody := map[string]interface{}{
 		"contents": []map[string]interface{}{

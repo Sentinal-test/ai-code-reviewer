@@ -31,13 +31,18 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 	referencedSymbols := make(map[string]string) // symbol -> lang
 
 	// 1. Extract references from changed files
+	fmt.Println("📝 [CodeGraph] Input: Analyzing the following changed files:")
+	for path := range changedFiles {
+		fmt.Printf("  - %s\n", path)
+	}
+
 	for path, content := range changedFiles {
 		langConfig, ok := GetLanguageForFile(path)
 		if !ok {
 			continue
 		}
 
-		fmt.Printf("🔍 [CodeGraph] Parsing changed file: %s (%s)\n", path, langConfig.Name)
+		// fmt.Printf("🔍 [CodeGraph] Parsing changed file: %s (%s)\n", path, langConfig.Name)
 		root, err := s.Parser.ParseFile(ctx, []byte(content), langConfig)
 		if err != nil {
 			fmt.Printf("⚠️ [CodeGraph] Failed to parse %s: %v\n", path, err)
@@ -50,12 +55,16 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 			continue
 		}
 
+		if len(refs) > 0 {
+			fmt.Printf("   -> Found references in %s: %v\n", path, refs)
+		}
+
 		for _, ref := range refs {
 			referencedSymbols[ref] = strings.ToLower(langConfig.Name)
 		}
 	}
 
-	fmt.Printf("🔍 [CodeGraph] Found %d unique referenced symbols.\n", len(referencedSymbols))
+	fmt.Printf("🔍 [CodeGraph] Total unique referenced symbols to search: %d\n", len(referencedSymbols))
 
 	// 2. Find definitions for these symbols
 	// We'll use a concurrent approach for searching
@@ -134,5 +143,11 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 	wg.Wait()
 
 	fmt.Printf("✅ [CodeGraph] Analysis complete. Found %d related context files.\n", len(foundFiles))
+	if len(foundFiles) > 0 {
+		fmt.Println("📂 [CodeGraph] Output: Added the following files to context:")
+		for path := range foundFiles {
+			fmt.Printf("  + %s\n", path)
+		}
+	}
 	return foundFiles, nil
 }
