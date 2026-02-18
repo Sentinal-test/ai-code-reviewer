@@ -309,47 +309,26 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	// Budget: 720K chars ≈ 180K tokens, aligned with chunker's DefaultTokenBudget
 	const MaxContextChars = 720_000
 
-	// Helper to format changed files with diff annotations — NO full file duplication.
-	// Sends: imports/package header + diff hunks only.
+	// Helper to format changed files with FULL context + line numbers.
 	formatFilesWithDiff := func(files map[string]string, diffMap map[string][]string) string {
 		var b strings.Builder
 		for _, path := range getFileKeys(files) {
 			content := files[path]
-			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n", path))
+			b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
+			b.WriteString(fmt.Sprintf("FILE: %s (Full Content with Line Numbers)\n", path))
+			b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 
-			// Extract the import/package header (first ~30 lines or until first function)
-			// This gives the LLM type context without the full file
+			// Add full content with line numbers
 			lines := strings.Split(content, "\n")
-			headerEnd := 0
 			for i, line := range lines {
-				trimmed := strings.TrimSpace(line)
-				// Stop at first function/class/type definition
-				if i > 5 && (strings.HasPrefix(trimmed, "func ") ||
-					strings.HasPrefix(trimmed, "def ") ||
-					strings.HasPrefix(trimmed, "class ") ||
-					strings.HasPrefix(trimmed, "export ") ||
-					strings.HasPrefix(trimmed, "public ") ||
-					strings.HasPrefix(trimmed, "private ") ||
-					strings.HasPrefix(trimmed, "const (") ||
-					strings.HasPrefix(trimmed, "var (")) {
-					break
-				}
-				headerEnd = i + 1
-				if headerEnd > 30 {
-					break
-				}
+				b.WriteString(fmt.Sprintf("%d: %s\n", i+1, line))
 			}
 
-			if headerEnd > 0 {
-				header := strings.Join(lines[:headerEnd], "\n")
-				b.WriteString("/* FILE HEADER (imports/package): */\n")
-				b.WriteString(header)
-				b.WriteString("\n\n")
-			}
-
-			// Add diff hunks
+			// Add diff hunks for focus
 			if diffSections, hasDiff := diffMap[path]; hasDiff && len(diffSections) > 0 {
-				b.WriteString("/* CHANGED SECTIONS: */\n")
+				b.WriteString("\n--------------------------------------------------------------------------------\n")
+				b.WriteString(fmt.Sprintf("RECENT CHANGES IN: %s\n", path))
+				b.WriteString("--------------------------------------------------------------------------------\n")
 				for i, section := range diffSections {
 					b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s\n*/\n\n", i+1, section))
 				}
@@ -746,6 +725,16 @@ func RunChunkReview(ctx context.Context, client *http.Client, chunkIndex int, ch
 	if len(crossRefs) > 0 {
 		fmt.Printf("  🔗 Cross-chunk refs: %s\n", strings.Join(crossRefs, ", "))
 	}
+
+	// FULL PROMPT LOGGING (requested by user)
+	if settings.VerbosePrompt {
+		fmt.Println("\n📜 [VERBOSE] FULL LLM PROMPT DATA:")
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Println(prompt)
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Println("📜 [VERBOSE] END OF PROMPT DATA")
+	}
+
 	fmt.Println("--------------------------------------------------------------------------------")
 
 	// Execute LLM call (same API logic as RunReview)

@@ -17,6 +17,7 @@ type RepoSettings struct {
 	LintEnabled         bool   `json:"lint_enabled"`
 	PerformanceEnabled  bool   `json:"performance_enabled"`
 	ArchitectureEnabled bool   `json:"architecture_enabled"`
+	VerbosePrompt       bool   `json:"verbose_prompt"`
 }
 
 type ReviewComment struct {

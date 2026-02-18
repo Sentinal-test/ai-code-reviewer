@@ -29,6 +29,7 @@ func main() {
 	headRef := flag.String("head", "HEAD", "Head ref to diff")
 	dryRun := flag.Bool("dry-run", false, "Print results to stdout instead of commenting")
 	noCache := flag.Bool("no-cache", false, "Skip graph cache (force fresh analysis)")
+	verbosePrompt := flag.Bool("verbose-prompt", false, "Log the full prompt sent to LLM")
 	flag.Parse()
 
 	// 2. Resolve parameters (Priority: Flag -> Env)
@@ -181,6 +182,7 @@ func main() {
 		LintEnabled:         true,
 		PerformanceEnabled:  true,
 		ArchitectureEnabled: true,
+		VerbosePrompt:       *verbosePrompt,
 	}
 
 	// 4. Run Review — with token-aware chunking
@@ -196,8 +198,8 @@ func main() {
 	chunks := chunker.GroupFiles(changedFiles, diff, graphEdges, chunker.DefaultTokenBudget)
 	fmt.Printf("🚀 Starting Review: %d files → %d chunk(s)\n", len(changedFiles), len(chunks))
 
-	// Detailed Chunking Breakdown Logging
-	if len(chunks) > 1 {
+	// Detailed Chunking Breakdown Logging (enabled if multi-chunk OR verbose)
+	if len(chunks) > 1 || settings.VerbosePrompt {
 		fmt.Println("\n═══════════════════════════════════════════════════════════════════════════════")
 		fmt.Println("📦 [CodeGraph] Chunking Strategy Breakdown")
 		fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
