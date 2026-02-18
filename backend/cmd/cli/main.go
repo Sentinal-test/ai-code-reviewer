@@ -6,6 +6,7 @@ import (
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/models"
+	"code-review/backend/internal/orchestrator"
 	"context"
 	"flag"
 	"fmt"
@@ -174,14 +175,9 @@ func main() {
 		}
 	}
 
-	// Settings - Default to "Enable All" for Action mode, or parse inputs
-	settings := models.RepoSettings{
-		SecurityEnabled:     true,
-		BugEnabled:          true,
-		LintEnabled:         true,
-		PerformanceEnabled:  true,
-		ArchitectureEnabled: true,
-	}
+	// Note: Review layer selection is now handled by the multi-agent orchestrator.
+	// Each specialist agent (Correctness, Security, Structure) covers its own layers.
+	// Per-layer toggles from RepoSettings can be re-added when rules.yml is implemented.
 
 	// 4. Run Review — with token-aware chunking
 	ctx := context.Background()
@@ -226,10 +222,14 @@ func main() {
 		// Scope dependencies to this chunk's files
 		scopedDeps := scopeDependencies(dependencies, chunk, cgService)
 
-		r, err := llm.RunChunkReview(ctx, client,
+		// Multi-agent review: 3 specialist agents in parallel per chunk
+		r, err := orchestrator.ReviewChunk(ctx, client,
+			chunk.Files, chunk.Diff,
 			chunk.Index, chunk.Total,
-			chunk.Files, chunk.Diff, chunk.CrossRefs,
-			scopedDeps, settings, repoStructure, apiKey, prContext,
+			chunk.CrossRefs,
+			scopedDeps, repoStructure,
+			apiKey, prContext,
+			cgService.Graph, wd,
 		)
 		if err != nil {
 			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)
@@ -243,6 +243,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Cross-chunk consolidation (each chunk was already consolidated by orchestrator)
 	result := llm.ConsolidateResults(results)
 
 	// 5. Output Results
