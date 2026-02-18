@@ -306,8 +306,8 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 	// Context Window Management
 	// Priority order: Changed Files (highest) > Dependencies > Repo Structure (lowest)
 	// When over budget, drop the LARGEST dependency files first — never cut mid-file.
-	// Budget: 720K chars ≈ 180K tokens, aligned with chunker's DefaultTokenBudget
-	const MaxContextChars = 720_000
+	// Budget: 200K chars ≈ 50K tokens, aligned with chunker's DefaultTokenBudget
+	const MaxContextChars = 200_000
 
 	// Helper to format changed files with FULL context + line numbers.
 	formatFilesWithDiff := func(files map[string]string, diffMap map[string][]string) string {
@@ -739,6 +739,13 @@ func RunChunkReview(ctx context.Context, client *http.Client, chunkIndex int, ch
 	if len(crossRefs) > 0 {
 		fmt.Printf("🔗 [Cross-Chunk] Known boundaries: %s\n", strings.Join(crossRefs, ", "))
 	}
+	fmt.Println("--------------------------------------------------------------------------------")
+
+	// RAW PROMPT LOGGING (requested by user for full transparency)
+	fmt.Println("\n📜 [RAW LLM PROMPT START]")
+	fmt.Println(prompt)
+	fmt.Println("📜 [RAW LLM PROMPT END]")
+
 	fmt.Println("--------------------------------------------------------------------------------")
 
 	// Execute LLM call (same API logic as RunReview)
