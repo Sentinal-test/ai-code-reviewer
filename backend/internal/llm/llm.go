@@ -304,51 +304,31 @@ func getFileKeys(m map[string]string) []string {
 
 func buildPrompt(diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, prContext models.PRContext) string {
 	// Context Window Management
-	// Priority: Complete Files with Diff Annotations > Dependencies > Repo Structure
-	// Target Max Chars: ~3,500,000 (approx 875k tokens safety for Gemini 2.5 Flash)
-	const MaxContextChars = 3500000
+	// Priority order: Changed Files (highest) > Dependencies > Repo Structure (lowest)
+	// When over budget, drop the LARGEST dependency files first — never cut mid-file.
+	// Budget: 720K chars ≈ 180K tokens, aligned with chunker's DefaultTokenBudget
+	const MaxContextChars = 720_000
 
-	// Helper to format changed files with diff annotations — NO full file duplication.
-	// Sends: imports/package header + diff hunks only.
+	// Helper to format changed files with FULL context + line numbers.
 	formatFilesWithDiff := func(files map[string]string, diffMap map[string][]string) string {
 		var b strings.Builder
 		for _, path := range getFileKeys(files) {
 			content := files[path]
-			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n", path))
+			b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
+			b.WriteString(fmt.Sprintf("FILE: %s (Full Content with Line Numbers)\n", path))
+			b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 
-			// Extract the import/package header (first ~30 lines or until first function)
-			// This gives the LLM type context without the full file
+			// Add full content with line numbers
 			lines := strings.Split(content, "\n")
-			headerEnd := 0
 			for i, line := range lines {
-				trimmed := strings.TrimSpace(line)
-				// Stop at first function/class/type definition
-				if i > 5 && (strings.HasPrefix(trimmed, "func ") ||
-					strings.HasPrefix(trimmed, "def ") ||
-					strings.HasPrefix(trimmed, "class ") ||
-					strings.HasPrefix(trimmed, "export ") ||
-					strings.HasPrefix(trimmed, "public ") ||
-					strings.HasPrefix(trimmed, "private ") ||
-					strings.HasPrefix(trimmed, "const (") ||
-					strings.HasPrefix(trimmed, "var (")) {
-					break
-				}
-				headerEnd = i + 1
-				if headerEnd > 30 {
-					break
-				}
+				b.WriteString(fmt.Sprintf("%d: %s\n", i+1, line))
 			}
 
-			if headerEnd > 0 {
-				header := strings.Join(lines[:headerEnd], "\n")
-				b.WriteString("/* FILE HEADER (imports/package): */\n")
-				b.WriteString(header)
-				b.WriteString("\n\n")
-			}
-
-			// Add diff hunks
+			// Add diff hunks for focus
 			if diffSections, hasDiff := diffMap[path]; hasDiff && len(diffSections) > 0 {
-				b.WriteString("/* CHANGED SECTIONS: */\n")
+				b.WriteString("\n--------------------------------------------------------------------------------\n")
+				b.WriteString(fmt.Sprintf("RECENT CHANGES IN: %s\n", path))
+				b.WriteString("--------------------------------------------------------------------------------\n")
 				for i, section := range diffSections {
 					b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s\n*/\n\n", i+1, section))
 				}
@@ -357,52 +337,63 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 		return b.String()
 	}
 
-	// Helper for dependencies (no diff annotations)
-	formatFiles := func(files map[string]string) string {
-		var b strings.Builder
-		for _, path := range getFileKeys(files) {
-			content := files[path]
-			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n%s\n", path, content))
-		}
-		return b.String()
-	}
-
 	// Extract changed lines from diff
 	diffMap := extractChangedLinesFromDiff(diff)
 
-	// Build annotated changed files section
+	// Build annotated changed files section (always included in full — highest priority)
 	currentSize := 0
 	changedContent := formatFilesWithDiff(changedFiles, diffMap)
-
-	// FIX #4: Use UTF-8 safe truncation
-	if len(changedContent) > MaxContextChars {
-		changedContent = truncateUTF8(changedContent, MaxContextChars)
-	}
 	currentSize += len(changedContent)
 
-	// Add dependencies
-	depsContent := formatFiles(dependencies)
-	if currentSize+len(depsContent) > MaxContextChars {
-		available := MaxContextChars - currentSize
-		if available > 0 {
-			if len(depsContent) > available {
-				depsContent = truncateUTF8(depsContent, available)
-			}
-		} else {
-			depsContent = ""
+	// Priority-based dependency inclusion:
+	// Include deps by ascending size (smallest first). When budget is exhausted,
+	// drop remaining deps instead of cutting mid-file.
+	type depEntry struct {
+		Path    string
+		Content string
+		Size    int
+	}
+
+	depKeys := getFileKeys(dependencies)
+	depEntries := make([]depEntry, 0, len(depKeys))
+	for _, path := range depKeys {
+		formatted := fmt.Sprintf("\n--- FILE: %s ---\n%s\n", path, dependencies[path])
+		depEntries = append(depEntries, depEntry{Path: path, Content: formatted, Size: len(formatted)})
+	}
+
+	// Sort by size ascending — smallest (most critical / compact) deps survive
+	sort.Slice(depEntries, func(i, j int) bool {
+		return depEntries[i].Size < depEntries[j].Size
+	})
+
+	var depsBuilder strings.Builder
+	var droppedDeps []string
+	for _, dep := range depEntries {
+		if currentSize+dep.Size > MaxContextChars {
+			droppedDeps = append(droppedDeps, dep.Path)
+			continue
+		}
+		depsBuilder.WriteString(dep.Content)
+		currentSize += dep.Size
+	}
+	depsContent := depsBuilder.String()
+
+	if len(droppedDeps) > 0 {
+		fmt.Printf("⚠️  [Context Budget] Dropped %d large dependency files to fit within %dK token limit:\n", len(droppedDeps), MaxContextChars/4/1000)
+		for _, d := range droppedDeps {
+			fmt.Printf("    - %s\n", d)
 		}
 	}
-	currentSize += len(depsContent)
 
-	// Repo structure
+	// Repo structure (lowest priority — truncate or omit if needed)
 	if currentSize+len(repoStructure) > MaxContextChars {
 		available := MaxContextChars - currentSize
-		if available > 0 {
-			if len(repoStructure) > available {
-				repoStructure = truncateUTF8(repoStructure, available)
-			}
+		if available > 1000 { // Only include if there's meaningful space
+			repoStructure = truncateUTF8(repoStructure, available)
+			fmt.Printf("⚠️  [Context Budget] Repo structure truncated to %d chars\n", available)
 		} else {
 			repoStructure = ""
+			fmt.Println("⚠️  [Context Budget] Repo structure omitted (no space)")
 		}
 	}
 
@@ -672,4 +663,238 @@ func buildPRContextSummary(prContext models.PRContext) string {
 		b.WriteString(msg)
 	}
 	return b.String()
+}
+
+// RunChunkReview reviews a single chunk of files with scoped dependencies.
+// It adds chunk metadata and cross-chunk context to the prompt.
+func RunChunkReview(ctx context.Context, client *http.Client, chunkIndex int, chunkTotal int,
+	chunkFiles map[string]string, chunkDiff string, crossRefs []string,
+	dependencies map[string]string, settings models.RepoSettings,
+	repoStructure string, apiKey string, prContext models.PRContext,
+) (*models.ReviewResult, error) {
+
+	// Filter out documentation files
+	reviewableFiles := filterReviewableFiles(chunkFiles)
+	reviewableDeps := filterReviewableFiles(dependencies)
+
+	if len(reviewableFiles) == 0 {
+		return &models.ReviewResult{
+			Summary:  "No reviewable code files in this chunk",
+			Comments: []models.ReviewComment{},
+		}, nil
+	}
+
+	// Build prompt with chunk awareness
+	prompt := buildPrompt(chunkDiff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
+
+	// Inject chunk metadata and cross-chunk context at the start of the prompt
+	var chunkHeader strings.Builder
+	chunkHeader.WriteString(fmt.Sprintf("NOTE: You are reviewing chunk %d of %d.\n", chunkIndex, chunkTotal))
+
+	// Collect directory names for this chunk
+	dirSet := make(map[string]bool)
+	for path := range reviewableFiles {
+		dirSet[filepath.Dir(path)] = true
+	}
+	dirs := make([]string, 0, len(dirSet))
+	for d := range dirSet {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	chunkHeader.WriteString(fmt.Sprintf("This chunk covers: %s\n", strings.Join(dirs, ", ")))
+
+	if len(crossRefs) > 0 {
+		chunkHeader.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
+		chunkHeader.WriteString("ARCHITECTURAL CONTEXT: Cross-Chunk Dependencies\n")
+		chunkHeader.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		chunkHeader.WriteString("Files in THIS chunk depend on files being reviewed in OTHER chunks:\n")
+		for _, ref := range crossRefs {
+			chunkHeader.WriteString(fmt.Sprintf("  - %s\n", ref))
+		}
+		chunkHeader.WriteString("\nIf you detect that changes in this chunk could break or conflict with\n")
+		chunkHeader.WriteString("these external dependencies, flag it as an ARCHITECTURAL issue.\n\n")
+	}
+
+	prompt = chunkHeader.String() + prompt
+
+	// Simplified Prompt Summary Logging (shows exactly what context is being used)
+	fmt.Printf("🔍 [Chunk Context] Processing %d changed files:\n", len(reviewableFiles))
+	for _, f := range getFileKeys(reviewableFiles) {
+		fmt.Printf("   + %s (%d chars)\n", f, len(reviewableFiles[f]))
+	}
+	if len(reviewableDeps) > 0 {
+		fmt.Printf("🔍 [Code Graph] Including %d project dependencies:\n", len(reviewableDeps))
+		for _, d := range getFileKeys(reviewableDeps) {
+			// Show a tiny preview of the dependency summary/code
+			preview := "Graph Context"
+			if !strings.HasPrefix(reviewableDeps[d], "CONTEXT GRAPH") {
+				lines := strings.Split(reviewableDeps[d], "\n")
+				if len(lines) > 2 {
+					preview = lines[1] // Usually shows "resolves: ..." or First line of snippet
+				}
+			}
+			fmt.Printf("   🔗 %s (%s)\n", d, preview)
+		}
+	}
+	if len(crossRefs) > 0 {
+		fmt.Printf("🔗 [Cross-Chunk] Known boundaries: %s\n", strings.Join(crossRefs, ", "))
+	}
+	fmt.Println("--------------------------------------------------------------------------------")
+
+	// Execute LLM call (same API logic as RunReview)
+	reqBody := map[string]interface{}{
+		"contents": []map[string]interface{}{
+			{
+				"parts": []map[string]string{
+					{"text": prompt},
+				},
+			},
+		},
+		"generationConfig": map[string]interface{}{
+			"responseMimeType": "application/json",
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %v", err)
+	}
+
+	url := fmt.Sprintf("%s?key=%s", geminiURL, apiKey)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("chunk %d/%d LLM request failed: %v", chunkIndex, chunkTotal, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("chunk %d/%d LLM returned status %d: %s", chunkIndex, chunkTotal, resp.StatusCode, string(body))
+	}
+
+	var geminiResp struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
+		return nil, fmt.Errorf("failed to decode chunk %d response: %v", chunkIndex, err)
+	}
+
+	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		return nil, fmt.Errorf("chunk %d LLM returned empty response", chunkIndex)
+	}
+
+	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
+
+	var result models.ReviewResult
+	if err := json.Unmarshal([]byte(responseText), &result); err != nil {
+		var comments []models.ReviewComment
+		if errArray := json.Unmarshal([]byte(responseText), &comments); errArray == nil {
+			result.Comments = comments
+			result.Summary = fmt.Sprintf("Chunk %d/%d: Automated review comments", chunkIndex, chunkTotal)
+		} else {
+			return nil, fmt.Errorf("failed to unmarshal chunk %d response: %v", chunkIndex, err)
+		}
+	}
+
+	fmt.Printf("✅ [CHUNK %d/%d] Found %d comments\n", chunkIndex, chunkTotal, len(result.Comments))
+	return &result, nil
+}
+
+// ConsolidateResults merges results from multiple chunks into a single ReviewResult.
+// Deduplicates comments by (file, line, message) to avoid repeats across overlapping context.
+func ConsolidateResults(results []*models.ReviewResult) *models.ReviewResult {
+	if len(results) == 0 {
+		return &models.ReviewResult{
+			Summary:  "No issues detected",
+			Comments: []models.ReviewComment{},
+		}
+	}
+	if len(results) == 1 {
+		return results[0]
+	}
+
+	// Deduplicate by (file, line, truncated message)
+	type commentKey struct {
+		File    string
+		Line    int
+		MsgHash string
+	}
+
+	seen := make(map[commentKey]bool)
+	var allComments []models.ReviewComment
+	var summaries []string
+
+	for _, r := range results {
+		if r == nil {
+			continue
+		}
+		if r.Summary != "" {
+			summaries = append(summaries, r.Summary)
+		}
+		for _, c := range r.Comments {
+			// Use first 80 chars of message as hash to catch near-dupes
+			msgHash := c.Message
+			if len(msgHash) > 80 {
+				msgHash = msgHash[:80]
+			}
+			key := commentKey{File: c.File, Line: c.Line, MsgHash: msgHash}
+			if !seen[key] {
+				seen[key] = true
+				allComments = append(allComments, c)
+			}
+		}
+	}
+
+	// Build consolidated summary
+	critCount, warnCount, infoCount := 0, 0, 0
+	for _, c := range allComments {
+		switch c.Severity {
+		case "critical":
+			critCount++
+		case "warning":
+			warnCount++
+		case "info":
+			infoCount++
+		}
+	}
+
+	summary := fmt.Sprintf("Found %d critical, %d warning, %d info issue(s) across %d chunks",
+		critCount, warnCount, infoCount, len(results))
+	if len(allComments) == 0 {
+		summary = "No issues detected"
+	}
+
+	fmt.Printf("\n🔄 [Consolidation] %d chunks → %d unique comments (deduped from %d total)\n",
+		len(results), len(allComments), countTotalComments(results))
+
+	return &models.ReviewResult{
+		Summary:  summary,
+		Comments: allComments,
+	}
+}
+
+func countTotalComments(results []*models.ReviewResult) int {
+	total := 0
+	for _, r := range results {
+		if r != nil {
+			total += len(r.Comments)
+		}
+	}
+	return total
 }

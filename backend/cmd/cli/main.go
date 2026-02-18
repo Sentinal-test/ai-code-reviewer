@@ -2,6 +2,7 @@ package main
 
 import (
 	"code-review/backend/internal/action"
+	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/models"
@@ -10,6 +11,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -25,6 +28,7 @@ func main() {
 	baseRef := flag.String("base", "main", "Base ref to diff against")
 	headRef := flag.String("head", "HEAD", "Head ref to diff")
 	dryRun := flag.Bool("dry-run", false, "Print results to stdout instead of commenting")
+	noCache := flag.Bool("no-cache", false, "Skip graph cache (force fresh analysis)")
 	flag.Parse()
 
 	// 2. Resolve parameters (Priority: Flag -> Env)
@@ -119,11 +123,40 @@ func main() {
 	fmt.Printf("🚀 Starting Code Graph: Analyzing %d changed files...\n", len(changedFiles))
 
 	// Initialize Code Graph Service
-	// We assume the binary is running from the root or we can derive repo path
-	// For CLI, we are usually in the repo root or provided via args.
-	// We'll use the current working directory as a safe default for now, or the repo path if known.
 	wd, _ := os.Getwd()
 	cgService := codegraph.NewService(wd)
+	graphDir := filepath.Join(wd, ".ai-reviewer")
+
+	// Graph Persistence: Load → Delta Update → Save
+	if !*noCache {
+		cachedGraph, err := codegraph.LoadGraph(graphDir)
+		if err != nil {
+			fmt.Printf("⚠️ Failed to load cached graph: %v\n", err)
+		}
+		if cachedGraph != nil {
+			// Graph found — check if delta update is needed
+			currentSHA := codegraph.GetCurrentCommitSHA(wd)
+			if cachedGraph.CommitSHA == currentSHA {
+				fmt.Println("✅ [CodeGraph] Cache hit — graph is current")
+			} else {
+				fmt.Printf("🔄 [CodeGraph] Cache stale (cached: %.7s, current: %.7s) — running delta update\n",
+					cachedGraph.CommitSHA, currentSHA)
+				if err := codegraph.DeltaUpdate(context.Background(), cachedGraph, wd, changedFilesList); err != nil {
+					fmt.Printf("⚠️ Delta update failed: %v\n", err)
+				}
+			}
+			cgService.SetGraph(cachedGraph)
+		} else {
+			// No cache — build full graph
+			fmt.Println("🔨 [CodeGraph] No cache found — building full graph...")
+			fullGraph, err := codegraph.BuildFull(context.Background(), wd)
+			if err != nil {
+				fmt.Printf("⚠️ Full graph build failed: %v\n", err)
+			} else {
+				cgService.SetGraph(fullGraph)
+			}
+		}
+	}
 
 	cgContext, err := cgService.GetContext(context.Background(), changedFiles)
 	if err != nil {
@@ -131,6 +164,13 @@ func main() {
 	} else {
 		for path, content := range cgContext {
 			dependencies[path] = content
+		}
+	}
+
+	// Save graph after analysis
+	if !*noCache && cgService.Graph != nil {
+		if err := codegraph.SaveGraph(cgService.Graph, graphDir); err != nil {
+			fmt.Printf("⚠️ Failed to save graph: %v\n", err)
 		}
 	}
 
@@ -143,18 +183,67 @@ func main() {
 		ArchitectureEnabled: true,
 	}
 
-	// 4. Run Review
-	fmt.Printf("🚀 Starting Review Pass: Processing %d files...\n", len(changedFiles)+len(dependencies))
-
-	// Action mode execution
+	// 4. Run Review — with token-aware chunking
 	ctx := context.Background()
-	client := &http.Client{} // Standard client
+	client := &http.Client{}
 
-	result, err := llm.RunReview(ctx, client, diff, changedFiles, dependencies, settings, repoStructure, apiKey, prContext)
-	if err != nil {
-		fmt.Printf("❌ Review failed: %v\n", err)
+	// Get graph edges for smart chunk grouping
+	var graphEdges []codegraph.Edge
+	if cgService.Graph != nil {
+		graphEdges = cgService.Graph.Edges
+	}
+
+	chunks := chunker.GroupFiles(changedFiles, diff, graphEdges, chunker.DefaultTokenBudget)
+	fmt.Printf("🚀 Starting Review: %d files → %d chunk(s)\n", len(changedFiles), len(chunks))
+
+	// Detailed Chunking Breakdown Logging (enabled if multi-chunk)
+	if len(chunks) > 1 {
+		fmt.Println("\n═══════════════════════════════════════════════════════════════════════════════")
+		fmt.Println("📦 [CodeGraph] Chunking Strategy Breakdown")
+		fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+		for _, chunk := range chunks {
+			fmt.Printf("Chunk %d/%d (%d files):\n", chunk.Index, chunk.Total, len(chunk.Files))
+			fileList := make([]string, 0, len(chunk.Files))
+			for f := range chunk.Files {
+				fileList = append(fileList, filepath.Base(f))
+			}
+			sort.Strings(fileList)
+			fmt.Printf("  Files: %s\n", strings.Join(fileList, ", "))
+			if len(chunk.CrossRefs) > 0 {
+				refList := make([]string, 0, len(chunk.CrossRefs))
+				for _, r := range chunk.CrossRefs {
+					refList = append(refList, filepath.Base(r))
+				}
+				fmt.Printf("  🔗 Cross-chunk refs: %s\n", strings.Join(refList, ", "))
+			}
+			fmt.Println()
+		}
+		fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+	}
+
+	var results []*models.ReviewResult
+	for _, chunk := range chunks {
+		// Scope dependencies to this chunk's files
+		scopedDeps := scopeDependencies(dependencies, chunk, cgService)
+
+		r, err := llm.RunChunkReview(ctx, client,
+			chunk.Index, chunk.Total,
+			chunk.Files, chunk.Diff, chunk.CrossRefs,
+			scopedDeps, settings, repoStructure, apiKey, prContext,
+		)
+		if err != nil {
+			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)
+			continue // Don't abort — review remaining chunks
+		}
+		results = append(results, r)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("❌ All chunks failed")
 		os.Exit(1)
 	}
+
+	result := llm.ConsolidateResults(results)
 
 	// 5. Output Results
 	if *dryRun || githubToken == "" {
@@ -187,4 +276,64 @@ func main() {
 		}
 		fmt.Println("✅ Review posted successfully!")
 	}
+}
+
+// scopeDependencies filters the full dependency map to only include entries
+// relevant to a specific chunk's files.
+//
+// For single-chunk PRs: ALL deps are included (no filtering — the code graph
+// already curated these as relevant).
+//
+// For multi-chunk PRs: deps are included if they share a directory with any
+// chunk file, are cross-refs, or are compact graph summaries.
+func scopeDependencies(allDeps map[string]string, chunk chunker.Chunk, cgService *codegraph.Service) map[string]string {
+	if len(allDeps) == 0 {
+		return allDeps
+	}
+
+	// Single-chunk PR → include ALL deps. The code graph already selected
+	// only the relevant ones; filtering further drops critical context.
+	if chunk.Total == 1 {
+		return allDeps
+	}
+
+	// Multi-chunk: scope to this chunk's needs
+	scoped := make(map[string]string)
+	for depPath, content := range allDeps {
+		// Always include context graph summaries (compact, universal)
+		if strings.HasPrefix(content, "CONTEXT GRAPH") || strings.HasPrefix(content, "DATA FLOW") {
+			scoped[depPath] = content
+			continue
+		}
+
+		// Include dependency if any chunk file is in the same directory
+		depDir := filepath.Dir(depPath)
+		for chunkFile := range chunk.Files {
+			if filepath.Dir(chunkFile) == depDir {
+				scoped[depPath] = content
+				break
+			}
+		}
+
+		// Include if it's a cross-ref dependency
+		for _, ref := range chunk.CrossRefs {
+			if ref == depPath {
+				scoped[depPath] = content
+				break
+			}
+		}
+	}
+
+	// If scoping removed everything, don't fall back to all deps (which blows the budget).
+	// Instead, only return the context graph summaries which are compact.
+	if len(scoped) == 0 {
+		minimal := make(map[string]string)
+		for path, content := range allDeps {
+			if strings.HasPrefix(content, "CONTEXT GRAPH") || strings.HasPrefix(content, "DATA FLOW") {
+				minimal[path] = content
+			}
+		}
+		return minimal
+	}
+	return scoped
 }
