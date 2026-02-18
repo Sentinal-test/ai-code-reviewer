@@ -2,6 +2,7 @@ package main
 
 import (
 	"code-review/backend/internal/action"
+	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/models"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -181,18 +183,67 @@ func main() {
 		ArchitectureEnabled: true,
 	}
 
-	// 4. Run Review
-	fmt.Printf("🚀 Starting Review Pass: Processing %d files...\n", len(changedFiles)+len(dependencies))
-
-	// Action mode execution
+	// 4. Run Review — with token-aware chunking
 	ctx := context.Background()
-	client := &http.Client{} // Standard client
+	client := &http.Client{}
 
-	result, err := llm.RunReview(ctx, client, diff, changedFiles, dependencies, settings, repoStructure, apiKey, prContext)
-	if err != nil {
-		fmt.Printf("❌ Review failed: %v\n", err)
+	// Get graph edges for smart chunk grouping
+	var graphEdges []codegraph.Edge
+	if cgService.Graph != nil {
+		graphEdges = cgService.Graph.Edges
+	}
+
+	chunks := chunker.GroupFiles(changedFiles, diff, graphEdges, chunker.DefaultTokenBudget)
+	fmt.Printf("🚀 Starting Review: %d files → %d chunk(s)\n", len(changedFiles), len(chunks))
+
+	// Detailed Chunking Breakdown Logging
+	if len(chunks) > 1 {
+		fmt.Println("\n═══════════════════════════════════════════════════════════════════════════════")
+		fmt.Println("📦 [CodeGraph] Chunking Strategy Breakdown")
+		fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+		for _, chunk := range chunks {
+			fmt.Printf("Chunk %d/%d (%d files):\n", chunk.Index, chunk.Total, len(chunk.Files))
+			fileList := make([]string, 0, len(chunk.Files))
+			for f := range chunk.Files {
+				fileList = append(fileList, filepath.Base(f))
+			}
+			sort.Strings(fileList)
+			fmt.Printf("  Files: %s\n", strings.Join(fileList, ", "))
+			if len(chunk.CrossRefs) > 0 {
+				refList := make([]string, 0, len(chunk.CrossRefs))
+				for _, r := range chunk.CrossRefs {
+					refList = append(refList, filepath.Base(r))
+				}
+				fmt.Printf("  🔗 Cross-chunk refs: %s\n", strings.Join(refList, ", "))
+			}
+			fmt.Println()
+		}
+		fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+	}
+
+	var results []*models.ReviewResult
+	for _, chunk := range chunks {
+		// Scope dependencies to this chunk's files
+		scopedDeps := scopeDependencies(dependencies, chunk, cgService)
+
+		r, err := llm.RunChunkReview(ctx, client,
+			chunk.Index, chunk.Total,
+			chunk.Files, chunk.Diff, chunk.CrossRefs,
+			scopedDeps, settings, repoStructure, apiKey, prContext,
+		)
+		if err != nil {
+			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)
+			continue // Don't abort — review remaining chunks
+		}
+		results = append(results, r)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("❌ All chunks failed")
 		os.Exit(1)
 	}
+
+	result := llm.ConsolidateResults(results)
 
 	// 5. Output Results
 	if *dryRun || githubToken == "" {
@@ -225,4 +276,45 @@ func main() {
 		}
 		fmt.Println("✅ Review posted successfully!")
 	}
+}
+
+// scopeDependencies filters the full dependency map to only include entries
+// relevant to a specific chunk's files. The context graph (compact) is always included.
+func scopeDependencies(allDeps map[string]string, chunk chunker.Chunk, cgService *codegraph.Service) map[string]string {
+	if len(allDeps) == 0 {
+		return allDeps
+	}
+
+	scoped := make(map[string]string)
+	for depPath, content := range allDeps {
+		// Always include context graph summaries (they're compact and universal)
+		if strings.HasPrefix(content, "CONTEXT GRAPH") || strings.HasPrefix(content, "DATA FLOW") {
+			scoped[depPath] = content
+			continue
+		}
+
+		// Include dependency if any chunk file is in the same directory
+		// or if the dep is listed in chunk's cross-refs
+		depDir := filepath.Dir(depPath)
+		for chunkFile := range chunk.Files {
+			if filepath.Dir(chunkFile) == depDir {
+				scoped[depPath] = content
+				break
+			}
+		}
+
+		// Include if it's a cross-ref dependency
+		for _, ref := range chunk.CrossRefs {
+			if ref == depPath {
+				scoped[depPath] = content
+				break
+			}
+		}
+	}
+
+	// If scoping removed everything, just include all deps (better to have context than none)
+	if len(scoped) == 0 {
+		return allDeps
+	}
+	return scoped
 }

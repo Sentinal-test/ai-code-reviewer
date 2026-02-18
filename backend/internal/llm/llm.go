@@ -673,3 +673,223 @@ func buildPRContextSummary(prContext models.PRContext) string {
 	}
 	return b.String()
 }
+
+// RunChunkReview reviews a single chunk of files with scoped dependencies.
+// It adds chunk metadata and cross-chunk context to the prompt.
+func RunChunkReview(ctx context.Context, client *http.Client, chunkIndex int, chunkTotal int,
+	chunkFiles map[string]string, chunkDiff string, crossRefs []string,
+	dependencies map[string]string, settings models.RepoSettings,
+	repoStructure string, apiKey string, prContext models.PRContext,
+) (*models.ReviewResult, error) {
+
+	// Filter out documentation files
+	reviewableFiles := filterReviewableFiles(chunkFiles)
+	reviewableDeps := filterReviewableFiles(dependencies)
+
+	if len(reviewableFiles) == 0 {
+		return &models.ReviewResult{
+			Summary:  "No reviewable code files in this chunk",
+			Comments: []models.ReviewComment{},
+		}, nil
+	}
+
+	// Build prompt with chunk awareness
+	prompt := buildPrompt(chunkDiff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
+
+	// Inject chunk metadata and cross-chunk context at the start of the prompt
+	var chunkHeader strings.Builder
+	chunkHeader.WriteString(fmt.Sprintf("NOTE: You are reviewing chunk %d of %d.\n", chunkIndex, chunkTotal))
+
+	// Collect directory names for this chunk
+	dirSet := make(map[string]bool)
+	for path := range reviewableFiles {
+		dirSet[filepath.Dir(path)] = true
+	}
+	dirs := make([]string, 0, len(dirSet))
+	for d := range dirSet {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	chunkHeader.WriteString(fmt.Sprintf("This chunk covers: %s\n", strings.Join(dirs, ", ")))
+
+	if len(crossRefs) > 0 {
+		chunkHeader.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
+		chunkHeader.WriteString("ARCHITECTURAL CONTEXT: Cross-Chunk Dependencies\n")
+		chunkHeader.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		chunkHeader.WriteString("Files in THIS chunk depend on files being reviewed in OTHER chunks:\n")
+		for _, ref := range crossRefs {
+			chunkHeader.WriteString(fmt.Sprintf("  - %s\n", ref))
+		}
+		chunkHeader.WriteString("\nIf you detect that changes in this chunk could break or conflict with\n")
+		chunkHeader.WriteString("these external dependencies, flag it as an ARCHITECTURAL issue.\n\n")
+	}
+
+	prompt = chunkHeader.String() + prompt
+
+	// Logging
+	fmt.Println("--------------------------------------------------------------------------------")
+	fmt.Printf("🧩 [CHUNK %d/%d] Processing %d files and %d dependencies\n", chunkIndex, chunkTotal, len(reviewableFiles), len(reviewableDeps))
+	fmt.Printf("  Mode:  %s\n", geminiModel)
+	fmt.Printf("  Size:  %d characters (~%d tokens)\n", len(prompt), len(prompt)/4)
+	if len(crossRefs) > 0 {
+		fmt.Printf("  🔗 Cross-chunk refs: %s\n", strings.Join(crossRefs, ", "))
+	}
+	fmt.Println("--------------------------------------------------------------------------------")
+
+	// Execute LLM call (same API logic as RunReview)
+	reqBody := map[string]interface{}{
+		"contents": []map[string]interface{}{
+			{
+				"parts": []map[string]string{
+					{"text": prompt},
+				},
+			},
+		},
+		"generationConfig": map[string]interface{}{
+			"responseMimeType": "application/json",
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %v", err)
+	}
+
+	url := fmt.Sprintf("%s?key=%s", geminiURL, apiKey)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("chunk %d/%d LLM request failed: %v", chunkIndex, chunkTotal, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("chunk %d/%d LLM returned status %d: %s", chunkIndex, chunkTotal, resp.StatusCode, string(body))
+	}
+
+	var geminiResp struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
+		return nil, fmt.Errorf("failed to decode chunk %d response: %v", chunkIndex, err)
+	}
+
+	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		return nil, fmt.Errorf("chunk %d LLM returned empty response", chunkIndex)
+	}
+
+	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
+
+	var result models.ReviewResult
+	if err := json.Unmarshal([]byte(responseText), &result); err != nil {
+		var comments []models.ReviewComment
+		if errArray := json.Unmarshal([]byte(responseText), &comments); errArray == nil {
+			result.Comments = comments
+			result.Summary = fmt.Sprintf("Chunk %d/%d: Automated review comments", chunkIndex, chunkTotal)
+		} else {
+			return nil, fmt.Errorf("failed to unmarshal chunk %d response: %v", chunkIndex, err)
+		}
+	}
+
+	fmt.Printf("✅ [CHUNK %d/%d] Found %d comments\n", chunkIndex, chunkTotal, len(result.Comments))
+	return &result, nil
+}
+
+// ConsolidateResults merges results from multiple chunks into a single ReviewResult.
+// Deduplicates comments by (file, line, message) to avoid repeats across overlapping context.
+func ConsolidateResults(results []*models.ReviewResult) *models.ReviewResult {
+	if len(results) == 0 {
+		return &models.ReviewResult{
+			Summary:  "No issues detected",
+			Comments: []models.ReviewComment{},
+		}
+	}
+	if len(results) == 1 {
+		return results[0]
+	}
+
+	// Deduplicate by (file, line, truncated message)
+	type commentKey struct {
+		File    string
+		Line    int
+		MsgHash string
+	}
+
+	seen := make(map[commentKey]bool)
+	var allComments []models.ReviewComment
+	var summaries []string
+
+	for _, r := range results {
+		if r == nil {
+			continue
+		}
+		if r.Summary != "" {
+			summaries = append(summaries, r.Summary)
+		}
+		for _, c := range r.Comments {
+			// Use first 80 chars of message as hash to catch near-dupes
+			msgHash := c.Message
+			if len(msgHash) > 80 {
+				msgHash = msgHash[:80]
+			}
+			key := commentKey{File: c.File, Line: c.Line, MsgHash: msgHash}
+			if !seen[key] {
+				seen[key] = true
+				allComments = append(allComments, c)
+			}
+		}
+	}
+
+	// Build consolidated summary
+	critCount, warnCount, infoCount := 0, 0, 0
+	for _, c := range allComments {
+		switch c.Severity {
+		case "critical":
+			critCount++
+		case "warning":
+			warnCount++
+		case "info":
+			infoCount++
+		}
+	}
+
+	summary := fmt.Sprintf("Found %d critical, %d warning, %d info issue(s) across %d chunks",
+		critCount, warnCount, infoCount, len(results))
+	if len(allComments) == 0 {
+		summary = "No issues detected"
+	}
+
+	fmt.Printf("\n🔄 [Consolidation] %d chunks → %d unique comments (deduped from %d total)\n",
+		len(results), len(allComments), countTotalComments(results))
+
+	return &models.ReviewResult{
+		Summary:  summary,
+		Comments: allComments,
+	}
+}
+
+func countTotalComments(results []*models.ReviewResult) int {
+	total := 0
+	for _, r := range results {
+		if r != nil {
+			total += len(r.Comments)
+		}
+	}
+	return total
+}
