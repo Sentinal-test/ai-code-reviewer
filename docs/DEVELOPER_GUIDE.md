@@ -94,3 +94,40 @@ If the review doesn't start, ensure:
 **Reason**: This is often a non-fatal warning from `actions/setup-go` on first run.
 **Fix**: Safe to ignore if the build completes and the review runs.
 
+---
+
+## Code Graph Cache
+
+The AI Reviewer builds a **code graph** on each run to understand cross-file relationships (definitions, references, imports, data flow). This graph is saved to `.ai-reviewer/graph.json` and reused on subsequent PRs for **~2-3x faster** reviews.
+
+### How it works
+
+| Scenario | Behavior |
+|:---|:---|
+| **First run** (no cache) | Full graph is built by parsing all supported files |
+| **Subsequent runs** (cache hit, same commit) | Graph is loaded instantly from cache |
+| **New commits** (cache stale) | Only changed files are re-parsed (delta update) |
+| **`--no-cache` flag** | Skips cache entirely, forces fresh analysis |
+
+### Recommended: Cache across workflow runs
+
+Add an `actions/cache` step **before** the review step in your workflow to persist the graph across CI runs:
+
+```yaml
+- name: Cache Code Graph
+  uses: actions/cache@v4
+  with:
+    path: .ai-reviewer
+    key: code-graph-${{ github.repository }}-${{ github.base_ref }}
+    restore-keys: |
+      code-graph-${{ github.repository }}-
+```
+
+### Add to `.gitignore`
+
+The graph file should not be committed:
+
+```
+# AI Reviewer cache
+.ai-reviewer/
+```

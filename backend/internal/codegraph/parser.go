@@ -206,6 +206,116 @@ func (p *Parser) ExtractDefinitions(root *sitter.Node, content []byte, langName 
 	return uniqueStrings(definitions), nil
 }
 
+// ExtractDefinitionEntries returns definitions with line numbers and kinds for graph persistence.
+func (p *Parser) ExtractDefinitionEntries(root *sitter.Node, content []byte, langName string) ([]Definition, error) {
+	type defQuery struct {
+		Kind  string // "function", "method", "type", "class", "interface"
+		Query string
+	}
+
+	var queries []defQuery
+	switch langName {
+	case "go":
+		queries = []defQuery{
+			{Kind: "function", Query: `(function_declaration name: (identifier) @def)`},
+			{Kind: "method", Query: `(method_declaration name: (field_identifier) @def)`},
+			{Kind: "type", Query: `(type_spec name: (type_identifier) @def)`},
+		}
+	case "python":
+		queries = []defQuery{
+			{Kind: "function", Query: `(function_definition name: (identifier) @def)`},
+			{Kind: "class", Query: `(class_definition name: (identifier) @def)`},
+		}
+	case "javascript":
+		queries = []defQuery{
+			{Kind: "function", Query: `(function_declaration name: (identifier) @def)`},
+			{Kind: "class", Query: `(class_declaration name: (identifier) @def)`},
+			{Kind: "method", Query: `(method_definition name: (property_identifier) @def)`},
+			{Kind: "function", Query: `(variable_declarator name: (identifier) @def)`},
+		}
+	case "typescript":
+		queries = []defQuery{
+			{Kind: "function", Query: `(function_declaration name: (identifier) @def)`},
+			{Kind: "class", Query: `(class_declaration name: (type_identifier) @def)`},
+			{Kind: "method", Query: `(method_definition name: (property_identifier) @def)`},
+			{Kind: "function", Query: `(variable_declarator name: (identifier) @def)`},
+		}
+	case "java":
+		queries = []defQuery{
+			{Kind: "method", Query: `(method_declaration name: (identifier) @def)`},
+			{Kind: "class", Query: `(class_declaration name: (identifier) @def)`},
+			{Kind: "interface", Query: `(interface_declaration name: (identifier) @def)`},
+		}
+	default:
+		return nil, fmt.Errorf("unsupported language for definitions: %s", langName)
+	}
+
+	langConfig, ok := SupportedLanguages[langName]
+	if !ok {
+		return nil, fmt.Errorf("unknown language: %s", langName)
+	}
+
+	var defs []Definition
+	seen := make(map[string]struct{})
+
+	for _, dq := range queries {
+		q, err := sitter.NewQuery([]byte(dq.Query), langConfig.Grammar)
+		if err != nil {
+			return nil, fmt.Errorf("invalid query for %s (%s): %v", langName, dq.Kind, err)
+		}
+
+		qc := sitter.NewQueryCursor()
+		qc.Exec(q, root)
+
+		for {
+			m, ok := qc.NextMatch()
+			if !ok {
+				break
+			}
+			for _, capture := range m.Captures {
+				node := capture.Node
+				symbol := node.Content(content)
+				if symbol == "" {
+					continue
+				}
+				if _, exists := seen[symbol]; exists {
+					continue
+				}
+				seen[symbol] = struct{}{}
+
+				// Get snippet from parent node
+				parent := node.Parent()
+				if parent == nil {
+					parent = node
+				}
+				if langName == "go" && parent.Type() == "type_spec" {
+					grandparent := parent.Parent()
+					if grandparent != nil && grandparent.Type() == "type_declaration" {
+						parent = grandparent
+					}
+				}
+
+				snippet := parent.Content(content)
+				if len(snippet) > 3000 {
+					snippet = snippet[:3000] + "\n// ... (truncated)"
+				}
+
+				defs = append(defs, Definition{
+					Symbol:  symbol,
+					Kind:    dq.Kind,
+					Line:    int(node.StartPoint().Row) + 1, // tree-sitter is 0-indexed
+					Snippet: snippet,
+				})
+			}
+		}
+
+		qc.Close()
+		q.Close()
+	}
+
+	return defs, nil
+}
+
 // ExtractDefinitionSnippet finds the definition of a specific symbol and returns
 // only the source text of that definition (function, type, class, etc.) — not the entire file.
 func (p *Parser) ExtractDefinitionSnippet(root *sitter.Node, content []byte, langName string, targetSymbol string) (string, error) {

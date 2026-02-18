@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -25,6 +26,7 @@ func main() {
 	baseRef := flag.String("base", "main", "Base ref to diff against")
 	headRef := flag.String("head", "HEAD", "Head ref to diff")
 	dryRun := flag.Bool("dry-run", false, "Print results to stdout instead of commenting")
+	noCache := flag.Bool("no-cache", false, "Skip graph cache (force fresh analysis)")
 	flag.Parse()
 
 	// 2. Resolve parameters (Priority: Flag -> Env)
@@ -119,11 +121,40 @@ func main() {
 	fmt.Printf("🚀 Starting Code Graph: Analyzing %d changed files...\n", len(changedFiles))
 
 	// Initialize Code Graph Service
-	// We assume the binary is running from the root or we can derive repo path
-	// For CLI, we are usually in the repo root or provided via args.
-	// We'll use the current working directory as a safe default for now, or the repo path if known.
 	wd, _ := os.Getwd()
 	cgService := codegraph.NewService(wd)
+	graphDir := filepath.Join(wd, ".ai-reviewer")
+
+	// Graph Persistence: Load → Delta Update → Save
+	if !*noCache {
+		cachedGraph, err := codegraph.LoadGraph(graphDir)
+		if err != nil {
+			fmt.Printf("⚠️ Failed to load cached graph: %v\n", err)
+		}
+		if cachedGraph != nil {
+			// Graph found — check if delta update is needed
+			currentSHA := codegraph.GetCurrentCommitSHA(wd)
+			if cachedGraph.CommitSHA == currentSHA {
+				fmt.Println("✅ [CodeGraph] Cache hit — graph is current")
+			} else {
+				fmt.Printf("🔄 [CodeGraph] Cache stale (cached: %.7s, current: %.7s) — running delta update\n",
+					cachedGraph.CommitSHA, currentSHA)
+				if err := codegraph.DeltaUpdate(context.Background(), cachedGraph, wd, changedFilesList); err != nil {
+					fmt.Printf("⚠️ Delta update failed: %v\n", err)
+				}
+			}
+			cgService.SetGraph(cachedGraph)
+		} else {
+			// No cache — build full graph
+			fmt.Println("🔨 [CodeGraph] No cache found — building full graph...")
+			fullGraph, err := codegraph.BuildFull(context.Background(), wd)
+			if err != nil {
+				fmt.Printf("⚠️ Full graph build failed: %v\n", err)
+			} else {
+				cgService.SetGraph(fullGraph)
+			}
+		}
+	}
 
 	cgContext, err := cgService.GetContext(context.Background(), changedFiles)
 	if err != nil {
@@ -131,6 +162,13 @@ func main() {
 	} else {
 		for path, content := range cgContext {
 			dependencies[path] = content
+		}
+	}
+
+	// Save graph after analysis
+	if !*noCache && cgService.Graph != nil {
+		if err := codegraph.SaveGraph(cgService.Graph, graphDir); err != nil {
+			fmt.Printf("⚠️ Failed to save graph: %v\n", err)
 		}
 	}
 
