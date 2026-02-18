@@ -12,7 +12,11 @@ type dependencyInfo struct {
 	References  []Reference
 }
 
+// MaxSnippetCharsPerFile caps total snippet content per dependency to stay within context budget.
+const MaxSnippetCharsPerFile = 2000
+
 // buildDependencySummary creates a compact LLM-readable summary for a single dependency file.
+// It includes actual code snippets (not just symbol names) so the LLM can reason about implementations.
 func buildDependencySummary(path string, dep *dependencyInfo, definitionIndex map[string]string) string {
 	if dep == nil {
 		return ""
@@ -22,37 +26,43 @@ func buildDependencySummary(path string, dep *dependencyInfo, definitionIndex ma
 	if len(resolvedSymbols) == 0 {
 		return ""
 	}
-	definedSymbols := sortedSymbolSlice(dep.Definitions)
-	downstreamDeps := collectDownstreamDependencies(path, dep, definitionIndex)
-	signals := inferBehaviorSignals(dep.Snippets)
 
 	var b strings.Builder
-	b.WriteString("DEPENDENCY SUMMARY")
-	b.WriteString("\n")
-	b.WriteString("- File: ")
+	b.WriteString("DEPENDENCY: ")
 	b.WriteString(path)
-	b.WriteString("\n")
-	b.WriteString("- Resolves symbols: ")
+	b.WriteString(" (resolves: ")
 	b.WriteString(displayList(resolvedSymbols, MaxSymbolsPerSummary))
-	b.WriteString("\n")
+	b.WriteString(")\n")
 
-	if len(definedSymbols) > 0 {
-		b.WriteString("- Local definitions observed: ")
-		b.WriteString(displayList(definedSymbols, MaxSymbolsPerSummary))
-		b.WriteString("\n")
+	// Include actual code snippets — this is what makes context useful
+	totalSnippetChars := 0
+	for _, snippet := range dep.Snippets {
+		trimmed := strings.TrimSpace(snippet)
+		if trimmed == "" {
+			continue
+		}
+		// Truncate individual snippets that are too long
+		if len(trimmed) > 500 {
+			trimmed = trimmed[:497] + "..."
+		}
+		if totalSnippetChars+len(trimmed) > MaxSnippetCharsPerFile {
+			b.WriteString("// ... (remaining snippets omitted for context budget)\n")
+			break
+		}
+		b.WriteString(trimmed)
+		b.WriteString("\n\n")
+		totalSnippetChars += len(trimmed)
 	}
+
+	// Downstream dependencies — the LLM benefits from knowing the chain
+	downstreamDeps := collectDownstreamDependencies(path, dep, definitionIndex)
 	if len(downstreamDeps) > 0 {
 		nodeLabels := make([]string, 0, len(downstreamDeps))
 		for _, depPath := range downstreamDeps {
 			nodeLabels = append(nodeLabels, graphNodeLabel(depPath))
 		}
-		b.WriteString("- Depends on components: ")
+		b.WriteString("// depends on: ")
 		b.WriteString(displayList(nodeLabels, MaxSymbolsPerSummary))
-		b.WriteString("\n")
-	}
-	if len(signals) > 0 {
-		b.WriteString("- Behavior signals: ")
-		b.WriteString(strings.Join(signals, "; "))
 		b.WriteString("\n")
 	}
 

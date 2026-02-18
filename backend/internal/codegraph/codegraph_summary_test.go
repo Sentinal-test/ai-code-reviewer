@@ -35,8 +35,13 @@ func TestBuildDependencySummary_Generic(t *testing.T) {
 			{Symbol: "Config", Kind: "type_ref"},
 		},
 		Snippets: []string{
-			`client := http.Client{}
-body, _ := json.Marshal(payload)`,
+			`func CreateClient() *http.Client {
+	return &http.Client{}
+}`,
+			`func DoRequest(url string) (*http.Response, error) {
+	client := CreateClient()
+	return client.Get(url)
+}`,
 		},
 	}
 	definitionIndex := map[string]string{
@@ -45,12 +50,13 @@ body, _ := json.Marshal(payload)`,
 
 	summary := buildDependencySummary("pkg/net/client.go", dep, definitionIndex)
 
-	assert.Contains(t, summary, "DEPENDENCY SUMMARY")
-	assert.Contains(t, summary, "File: pkg/net/client.go")
-	assert.Contains(t, summary, "Resolves symbols: CreateClient, DoRequest")
-	assert.Contains(t, summary, "Local definitions observed:")
-	assert.Contains(t, summary, "Depends on components:")
-	assert.Contains(t, summary, "Behavior signals:")
+	assert.Contains(t, summary, "DEPENDENCY: pkg/net/client.go")
+	assert.Contains(t, summary, "resolves: CreateClient, DoRequest")
+	// Should contain actual code snippets, not just names
+	assert.Contains(t, summary, "func CreateClient()")
+	assert.Contains(t, summary, "func DoRequest(url string)")
+	// Should show downstream dependencies
+	assert.Contains(t, summary, "depends on:")
 }
 
 func TestBuildContextGraphSummary_Generic(t *testing.T) {
