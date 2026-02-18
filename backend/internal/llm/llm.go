@@ -741,6 +741,13 @@ func RunChunkReview(ctx context.Context, client *http.Client, chunkIndex int, ch
 	}
 	fmt.Println("--------------------------------------------------------------------------------")
 
+	// RAW PROMPT LOGGING (requested by user for full transparency)
+	fmt.Println("\n📜 [RAW LLM PROMPT START]")
+	fmt.Println(prompt)
+	fmt.Println("📜 [RAW LLM PROMPT END]")
+
+	fmt.Println("--------------------------------------------------------------------------------")
+
 	// Execute LLM call (same API logic as RunReview)
 	reqBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
