@@ -717,24 +717,28 @@ func RunChunkReview(ctx context.Context, client *http.Client, chunkIndex int, ch
 
 	prompt = chunkHeader.String() + prompt
 
-	// Logging
-	fmt.Println("--------------------------------------------------------------------------------")
-	fmt.Printf("🧩 [CHUNK %d/%d] Processing %d files and %d dependencies\n", chunkIndex, chunkTotal, len(reviewableFiles), len(reviewableDeps))
-	fmt.Printf("  Mode:  %s\n", geminiModel)
-	fmt.Printf("  Size:  %d characters (~%d tokens)\n", len(prompt), len(prompt)/4)
+	// Simplified Prompt Summary Logging (shows exactly what context is being used)
+	fmt.Printf("🔍 [Chunk Context] Processing %d changed files:\n", len(reviewableFiles))
+	for _, f := range getFileKeys(reviewableFiles) {
+		fmt.Printf("   + %s (%d chars)\n", f, len(reviewableFiles[f]))
+	}
+	if len(reviewableDeps) > 0 {
+		fmt.Printf("🔍 [Code Graph] Including %d project dependencies:\n", len(reviewableDeps))
+		for _, d := range getFileKeys(reviewableDeps) {
+			// Show a tiny preview of the dependency summary/code
+			preview := "Graph Context"
+			if !strings.HasPrefix(reviewableDeps[d], "CONTEXT GRAPH") {
+				lines := strings.Split(reviewableDeps[d], "\n")
+				if len(lines) > 2 {
+					preview = lines[1] // Usually shows "resolves: ..." or First line of snippet
+				}
+			}
+			fmt.Printf("   🔗 %s (%s)\n", d, preview)
+		}
+	}
 	if len(crossRefs) > 0 {
-		fmt.Printf("  🔗 Cross-chunk refs: %s\n", strings.Join(crossRefs, ", "))
+		fmt.Printf("🔗 [Cross-Chunk] Known boundaries: %s\n", strings.Join(crossRefs, ", "))
 	}
-
-	// FULL PROMPT LOGGING (requested by user)
-	if settings.VerbosePrompt {
-		fmt.Println("\n📜 [VERBOSE] FULL LLM PROMPT DATA:")
-		fmt.Println("--------------------------------------------------------------------------------")
-		fmt.Println(prompt)
-		fmt.Println("--------------------------------------------------------------------------------")
-		fmt.Println("📜 [VERBOSE] END OF PROMPT DATA")
-	}
-
 	fmt.Println("--------------------------------------------------------------------------------")
 
 	// Execute LLM call (same API logic as RunReview)

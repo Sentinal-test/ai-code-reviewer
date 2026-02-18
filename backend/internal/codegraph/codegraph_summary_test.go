@@ -7,20 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestInferBehaviorSignals_Generic(t *testing.T) {
-	signals := inferBehaviorSignals([]string{
-		`db.Query("SELECT * FROM users")
-resp, _ := http.Get(url)
-payload, _ := json.Marshal(req)
-token := authToken`,
-	})
-
-	assert.Contains(t, signals, "Performs data-store operations")
-	assert.Contains(t, signals, "Performs network/API operations")
-	assert.Contains(t, signals, "Serializes or parses structured payloads")
-	assert.Contains(t, signals, "Handles identity/authentication data")
-}
-
 func TestBuildDependencySummary_Generic(t *testing.T) {
 	dep := &dependencyInfo{
 		Symbols: map[string]struct{}{

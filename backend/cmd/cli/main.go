@@ -29,7 +29,6 @@ func main() {
 	headRef := flag.String("head", "HEAD", "Head ref to diff")
 	dryRun := flag.Bool("dry-run", false, "Print results to stdout instead of commenting")
 	noCache := flag.Bool("no-cache", false, "Skip graph cache (force fresh analysis)")
-	verbosePrompt := flag.Bool("verbose-prompt", false, "Log the full prompt sent to LLM")
 	flag.Parse()
 
 	// 2. Resolve parameters (Priority: Flag -> Env)
@@ -182,7 +181,6 @@ func main() {
 		LintEnabled:         true,
 		PerformanceEnabled:  true,
 		ArchitectureEnabled: true,
-		VerbosePrompt:       *verbosePrompt,
 	}
 
 	// 4. Run Review — with token-aware chunking
@@ -198,8 +196,8 @@ func main() {
 	chunks := chunker.GroupFiles(changedFiles, diff, graphEdges, chunker.DefaultTokenBudget)
 	fmt.Printf("🚀 Starting Review: %d files → %d chunk(s)\n", len(changedFiles), len(chunks))
 
-	// Detailed Chunking Breakdown Logging (enabled if multi-chunk OR verbose)
-	if len(chunks) > 1 || settings.VerbosePrompt {
+	// Detailed Chunking Breakdown Logging (enabled if multi-chunk)
+	if len(chunks) > 1 {
 		fmt.Println("\n═══════════════════════════════════════════════════════════════════════════════")
 		fmt.Println("📦 [CodeGraph] Chunking Strategy Breakdown")
 		fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
@@ -326,9 +324,16 @@ func scopeDependencies(allDeps map[string]string, chunk chunker.Chunk, cgService
 		}
 	}
 
-	// If scoping removed everything, include all deps (better context than none)
+	// If scoping removed everything, don't fall back to all deps (which blows the budget).
+	// Instead, only return the context graph summaries which are compact.
 	if len(scoped) == 0 {
-		return allDeps
+		minimal := make(map[string]string)
+		for path, content := range allDeps {
+			if strings.HasPrefix(content, "CONTEXT GRAPH") || strings.HasPrefix(content, "DATA FLOW") {
+				minimal[path] = content
+			}
+		}
+		return minimal
 	}
 	return scoped
 }
