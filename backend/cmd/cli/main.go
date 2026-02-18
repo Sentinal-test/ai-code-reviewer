@@ -279,22 +279,34 @@ func main() {
 }
 
 // scopeDependencies filters the full dependency map to only include entries
-// relevant to a specific chunk's files. The context graph (compact) is always included.
+// relevant to a specific chunk's files.
+//
+// For single-chunk PRs: ALL deps are included (no filtering — the code graph
+// already curated these as relevant).
+//
+// For multi-chunk PRs: deps are included if they share a directory with any
+// chunk file, are cross-refs, or are compact graph summaries.
 func scopeDependencies(allDeps map[string]string, chunk chunker.Chunk, cgService *codegraph.Service) map[string]string {
 	if len(allDeps) == 0 {
 		return allDeps
 	}
 
+	// Single-chunk PR → include ALL deps. The code graph already selected
+	// only the relevant ones; filtering further drops critical context.
+	if chunk.Total == 1 {
+		return allDeps
+	}
+
+	// Multi-chunk: scope to this chunk's needs
 	scoped := make(map[string]string)
 	for depPath, content := range allDeps {
-		// Always include context graph summaries (they're compact and universal)
+		// Always include context graph summaries (compact, universal)
 		if strings.HasPrefix(content, "CONTEXT GRAPH") || strings.HasPrefix(content, "DATA FLOW") {
 			scoped[depPath] = content
 			continue
 		}
 
 		// Include dependency if any chunk file is in the same directory
-		// or if the dep is listed in chunk's cross-refs
 		depDir := filepath.Dir(depPath)
 		for chunkFile := range chunk.Files {
 			if filepath.Dir(chunkFile) == depDir {
@@ -312,7 +324,7 @@ func scopeDependencies(allDeps map[string]string, chunk chunker.Chunk, cgService
 		}
 	}
 
-	// If scoping removed everything, just include all deps (better to have context than none)
+	// If scoping removed everything, include all deps (better context than none)
 	if len(scoped) == 0 {
 		return allDeps
 	}

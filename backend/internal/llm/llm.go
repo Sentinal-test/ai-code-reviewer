@@ -304,9 +304,10 @@ func getFileKeys(m map[string]string) []string {
 
 func buildPrompt(diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, prContext models.PRContext) string {
 	// Context Window Management
-	// Priority: Complete Files with Diff Annotations > Dependencies > Repo Structure
-	// Target Max Chars: ~3,500,000 (approx 875k tokens safety for Gemini 2.5 Flash)
-	const MaxContextChars = 3500000
+	// Priority order: Changed Files (highest) > Dependencies > Repo Structure (lowest)
+	// When over budget, drop the LARGEST dependency files first — never cut mid-file.
+	// Budget: 720K chars ≈ 180K tokens, aligned with chunker's DefaultTokenBudget
+	const MaxContextChars = 720_000
 
 	// Helper to format changed files with diff annotations — NO full file duplication.
 	// Sends: imports/package header + diff hunks only.
@@ -357,52 +358,63 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 		return b.String()
 	}
 
-	// Helper for dependencies (no diff annotations)
-	formatFiles := func(files map[string]string) string {
-		var b strings.Builder
-		for _, path := range getFileKeys(files) {
-			content := files[path]
-			b.WriteString(fmt.Sprintf("\n--- FILE: %s ---\n%s\n", path, content))
-		}
-		return b.String()
-	}
-
 	// Extract changed lines from diff
 	diffMap := extractChangedLinesFromDiff(diff)
 
-	// Build annotated changed files section
+	// Build annotated changed files section (always included in full — highest priority)
 	currentSize := 0
 	changedContent := formatFilesWithDiff(changedFiles, diffMap)
-
-	// FIX #4: Use UTF-8 safe truncation
-	if len(changedContent) > MaxContextChars {
-		changedContent = truncateUTF8(changedContent, MaxContextChars)
-	}
 	currentSize += len(changedContent)
 
-	// Add dependencies
-	depsContent := formatFiles(dependencies)
-	if currentSize+len(depsContent) > MaxContextChars {
-		available := MaxContextChars - currentSize
-		if available > 0 {
-			if len(depsContent) > available {
-				depsContent = truncateUTF8(depsContent, available)
-			}
-		} else {
-			depsContent = ""
+	// Priority-based dependency inclusion:
+	// Include deps by ascending size (smallest first). When budget is exhausted,
+	// drop remaining deps instead of cutting mid-file.
+	type depEntry struct {
+		Path    string
+		Content string
+		Size    int
+	}
+
+	depKeys := getFileKeys(dependencies)
+	depEntries := make([]depEntry, 0, len(depKeys))
+	for _, path := range depKeys {
+		formatted := fmt.Sprintf("\n--- FILE: %s ---\n%s\n", path, dependencies[path])
+		depEntries = append(depEntries, depEntry{Path: path, Content: formatted, Size: len(formatted)})
+	}
+
+	// Sort by size ascending — smallest (most critical / compact) deps survive
+	sort.Slice(depEntries, func(i, j int) bool {
+		return depEntries[i].Size < depEntries[j].Size
+	})
+
+	var depsBuilder strings.Builder
+	var droppedDeps []string
+	for _, dep := range depEntries {
+		if currentSize+dep.Size > MaxContextChars {
+			droppedDeps = append(droppedDeps, dep.Path)
+			continue
+		}
+		depsBuilder.WriteString(dep.Content)
+		currentSize += dep.Size
+	}
+	depsContent := depsBuilder.String()
+
+	if len(droppedDeps) > 0 {
+		fmt.Printf("⚠️  [Context Budget] Dropped %d large dependency files to fit within %dK token limit:\n", len(droppedDeps), MaxContextChars/4/1000)
+		for _, d := range droppedDeps {
+			fmt.Printf("    - %s\n", d)
 		}
 	}
-	currentSize += len(depsContent)
 
-	// Repo structure
+	// Repo structure (lowest priority — truncate or omit if needed)
 	if currentSize+len(repoStructure) > MaxContextChars {
 		available := MaxContextChars - currentSize
-		if available > 0 {
-			if len(repoStructure) > available {
-				repoStructure = truncateUTF8(repoStructure, available)
-			}
+		if available > 1000 { // Only include if there's meaningful space
+			repoStructure = truncateUTF8(repoStructure, available)
+			fmt.Printf("⚠️  [Context Budget] Repo structure truncated to %d chars\n", available)
 		} else {
 			repoStructure = ""
+			fmt.Println("⚠️  [Context Budget] Repo structure omitted (no space)")
 		}
 	}
 
