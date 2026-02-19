@@ -89,6 +89,11 @@ func RunAgentReview(
 
 	// Agentic loop: send → maybe tool call → send result → repeat
 	for iteration := 0; iteration <= maxToolIterations; iteration++ {
+		genConfig := map[string]interface{}{
+			"temperature":     0.2,
+			"maxOutputTokens": 65536,
+		}
+
 		reqBody := map[string]interface{}{
 			"contents": messages,
 			"system_instruction": map[string]interface{}{
@@ -96,12 +101,7 @@ func RunAgentReview(
 					{"text": config.SystemPrompt},
 				},
 			},
-			"generationConfig": map[string]interface{}{
-				"temperature":      0.2,
-				"maxOutputTokens":  65536,
-				"responseMimeType": "application/json",
-				"responseSchema":   responseSchema,
-			},
+			"generationConfig": genConfig,
 		}
 
 		// Add tool declarations if we have a tool executor
@@ -117,6 +117,12 @@ func RunAgentReview(
 					"mode": "AUTO",
 				},
 			}
+			// NOTE: Gemini does NOT support responseMimeType with function calling.
+			// JSON output is enforced via the hardened system prompt instead.
+		} else {
+			// No tools — we can enforce JSON schema on the response
+			genConfig["responseMimeType"] = "application/json"
+			genConfig["responseSchema"] = responseSchema
 		}
 
 		bodyJSON, err := json.Marshal(reqBody)
