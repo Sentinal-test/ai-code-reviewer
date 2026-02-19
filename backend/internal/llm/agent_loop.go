@@ -33,6 +33,10 @@ func RunAgentReview(
 	fmt.Printf("🤖 [%s] Starting review (%d files, %d deps)\n",
 		config.Type, len(config.ChangedFiles), len(config.Dependencies))
 
+	// Log prompt size for debugging
+	fmt.Printf("  📏 [%s] Prompt size: %d chars (~%d tokens)\n",
+		config.Type, len(prompt), len(prompt)/4)
+
 	// Build the request with tool declarations
 	messages := []map[string]interface{}{
 		{
@@ -54,7 +58,7 @@ func RunAgentReview(
 			},
 			"generationConfig": map[string]interface{}{
 				"temperature":     0.2,
-				"maxOutputTokens": 8192,
+				"maxOutputTokens": 65536,
 			},
 		}
 
@@ -105,14 +109,9 @@ func RunAgentReview(
 		var geminiResp struct {
 			Candidates []struct {
 				Content struct {
-					Parts []struct {
-						Text         string `json:"text"`
-						FunctionCall *struct {
-							Name string                 `json:"name"`
-							Args map[string]interface{} `json:"args"`
-						} `json:"functionCall"`
-					} `json:"parts"`
+					Parts []json.RawMessage `json:"parts"`
 				} `json:"content"`
+				FinishReason string `json:"finishReason"`
 			} `json:"candidates"`
 			UsageMetadata struct {
 				PromptTokenCount     int `json:"promptTokenCount"`
@@ -135,9 +134,27 @@ func RunAgentReview(
 
 		candidate := geminiResp.Candidates[0]
 
-		// Check if response contains a function call
+		// Check finish reason for truncation
+		if candidate.FinishReason == "MAX_TOKENS" {
+			fmt.Printf("  ⚠️ [%s] Response truncated (MAX_TOKENS) at iteration %d\n", config.Type, iteration+1)
+		}
+
+		// Parse parts — each part can be either text or functionCall
 		var hasFunctionCall bool
-		for _, part := range candidate.Content.Parts {
+		var textParts []string
+
+		for _, rawPart := range candidate.Content.Parts {
+			var part struct {
+				Text         string `json:"text"`
+				FunctionCall *struct {
+					Name string                 `json:"name"`
+					Args map[string]interface{} `json:"args"`
+				} `json:"functionCall"`
+			}
+			if err := json.Unmarshal(rawPart, &part); err != nil {
+				continue
+			}
+
 			if part.FunctionCall != nil {
 				hasFunctionCall = true
 				toolCall := agents.ToolCallRequest{
@@ -151,6 +168,18 @@ func RunAgentReview(
 				// Execute the tool
 				toolResult := toolExecutor.Execute(ctx, toolCall)
 				result.ToolCalls++
+
+				// Log the tool response for transparency
+				fmt.Printf("  📨 [%s] Tool response (%s): %d chars\n",
+					config.Type, toolCall.Name, len(toolResult.Content))
+				fmt.Println("  ────────────────────────────────────────")
+				// Print first 2000 chars of tool response
+				responsePreview := toolResult.Content
+				if len(responsePreview) > 2000 {
+					responsePreview = responsePreview[:2000] + "\n  ...(truncated for display)"
+				}
+				fmt.Println(responsePreview)
+				fmt.Println("  ────────────────────────────────────────")
 
 				// Append the assistant's function call and the tool result to messages
 				messages = append(messages,
@@ -179,22 +208,34 @@ func RunAgentReview(
 						},
 					},
 				)
+			} else if part.Text != "" {
+				textParts = append(textParts, part.Text)
 			}
 		}
 
-		// If no function call, we have the final text response
-		if !hasFunctionCall {
-			for _, part := range candidate.Content.Parts {
-				if part.Text != "" {
-					parsed := parseAgentResponse(part.Text)
-					result.Comments = parsed.Comments
-					result.Summary = parsed.Summary
-					fmt.Printf("  ✅ [%s] Done: %d comments (%.1fs, %d tool calls)\n",
-						config.Type, len(result.Comments), elapsed.Seconds(), result.ToolCalls)
-					return result
-				}
-			}
-			result.Error = fmt.Errorf("no text in final response")
+		// If we have text parts (final response), parse them
+		if len(textParts) > 0 && !hasFunctionCall {
+			fullText := strings.Join(textParts, "\n")
+			parsed := parseAgentResponse(fullText)
+			result.Comments = parsed.Comments
+			result.Summary = parsed.Summary
+			fmt.Printf("  ✅ [%s] Done: %d comments (%.1fs, %d tool calls)\n",
+				config.Type, len(result.Comments), elapsed.Seconds(), result.ToolCalls)
+			return result
+		}
+
+		// If we got text AND function calls, store text for later
+		// (Gemini sometimes returns partial text + function call)
+		if len(textParts) > 0 && hasFunctionCall {
+			fmt.Printf("  📝 [%s] Got partial text + function call, continuing loop\n", config.Type)
+		}
+
+		// If we only got function calls, loop continues
+		if !hasFunctionCall && len(textParts) == 0 {
+			// No function call and no text — check if this is a safety/empty response
+			fmt.Printf("  ⚠️ [%s] Empty response (no text, no function call) at iteration %d\n",
+				config.Type, iteration+1)
+			result.Summary = fmt.Sprintf("No findings from %s agent (empty response)", config.Type)
 			return result
 		}
 	}
@@ -222,8 +263,8 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 		b.WriteString(fmt.Sprintf("Title: %s\n", config.PRContext.Title))
 		if config.PRContext.Body != "" {
 			body := config.PRContext.Body
-			if len(body) > 500 {
-				body = body[:500] + "..."
+			if len(body) > 2000 {
+				body = body[:2000] + "..."
 			}
 			b.WriteString(fmt.Sprintf("Description: %s\n", body))
 		}
@@ -277,9 +318,13 @@ func parseAgentResponse(text string) models.ReviewResult {
 
 	var result models.ReviewResult
 	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
-		// If parsing fails, return the raw text as the summary
+		// Log the raw response for debugging (no truncation warning)
+		preview := cleaned
+		if len(preview) > 1000 {
+			preview = preview[:1000] + "\n...[RESPONSE TRUNCATED FOR DISPLAY]..."
+		}
 		return models.ReviewResult{
-			Summary: fmt.Sprintf("Agent response parse error: %v\nRaw: %s", err, truncateUTF8(cleaned, 500)),
+			Summary: fmt.Sprintf("Agent response parse error: %v\nRaw: %s", err, preview),
 		}
 	}
 	return result
