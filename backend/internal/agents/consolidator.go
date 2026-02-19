@@ -9,10 +9,11 @@ import (
 
 const DefaultMaxComments = 15
 
-// Consolidate merges results from all specialist agents into a single ReviewResult.
+// DeterministicConsolidate merges results from all specialist agents into a single ReviewResult.
 // It deduplicates by (file, line, message hash), keeps higher severity on conflicts,
 // and caps total comments at maxComments.
-func Consolidate(results []AgentResult, maxComments int) *models.ReviewResult {
+// This is the deterministic fallback used when LLM-based consolidation fails.
+func DeterministicConsolidate(results []AgentResult, maxComments int) *models.ReviewResult {
 	if maxComments <= 0 {
 		maxComments = DefaultMaxComments
 	}
