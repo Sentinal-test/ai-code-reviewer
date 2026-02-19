@@ -1,158 +1,113 @@
- Running AI Reviewer...
-📂 Fetching diff between 1f415daade818f890b62ab01438bc9998d73a000 and 5fcde45d5fc847e274d3322b74ff124f8bb2ea60...
-Error: ⚠️ Warning: Could not read backend/internal/codegraph/codegraph.go: failed to read file backend/internal/codegraph/codegraph.go: open backend/internal/codegraph/codegraph.go: no such file or directory
-✅ Fetched PR Context: Added chunking to the code
-🚀 Starting Code Graph: Analyzing 21 changed files...
-🔨 [CodeGraph] No cache found — building full graph...
-🔨 [CodeGraph] Building full graph for /home/runner/work/ai-code-reviewer/ai-code-reviewer...
-  📄 backend/cmd/benchmark/main.go — 7 defs, 13 refs
-  📄 backend/cmd/cli/main.go — 2 defs, 30 refs
-  📄 backend/internal/action/git.go — 4 defs, 2 refs
-  📄 backend/internal/action/github.go — 7 defs, 20 refs
-  📄 backend/internal/api/api.go — 6 defs, 12 refs
-  📄 backend/internal/api/api_test.go — 2 defs, 10 refs
-  📄 backend/internal/auth/auth.go — 5 defs, 10 refs
-  📄 backend/internal/auth/auth_test.go — 3 defs, 12 refs
-  📄 backend/internal/chunker/chunker.go — 11 defs, 15 refs
-  📄 backend/internal/chunker/chunker_test.go — 8 defs, 5 refs
-  📄 backend/internal/codegraph/codegraph_summary_test.go — 3 defs, 5 refs
-  📄 backend/internal/codegraph/context.go — 7 defs, 15 refs
-  📄 backend/internal/codegraph/graph.go — 10 defs, 6 refs
-  📄 backend/internal/codegraph/graph_store.go — 7 defs, 30 refs
-  📄 backend/internal/codegraph/graph_store_test.go — 6 defs, 18 refs
-  📄 backend/internal/codegraph/helpers.go — 7 defs, 3 refs
-  📄 backend/internal/codegraph/languages.go — 2 defs, 3 refs
-  📄 backend/internal/codegraph/logger.go — 2 defs, 3 refs
-  📄 backend/internal/codegraph/parser.go — 12 defs, 20 refs
-  📄 backend/internal/codegraph/parser_test.go — 3 defs, 4 refs
-  📄 backend/internal/codegraph/scanner.go — 3 defs, 1 refs
-  📄 backend/internal/codegraph/service.go — 5 defs, 26 refs
-  📄 backend/internal/codegraph/summary.go — 5 defs, 8 refs
-  📄 backend/internal/database/database.go — 1 defs, 1 refs
-  📄 backend/internal/database/database_test.go — 1 defs, 2 refs
-  📄 backend/internal/github/client.go — 10 defs, 38 refs
-  📄 backend/internal/github/client_test.go — 5 defs, 13 refs
-  📄 backend/internal/llm/llm.go — 13 defs, 18 refs
-  📄 backend/internal/llm/llm_test.go — 6 defs, 11 refs
-  📄 backend/internal/models/models.go — 5 defs, 5 refs
-  📄 backend/main.go — 7 defs, 57 refs
-  📄 dashboard/eslint.config.mjs — 1 defs, 2 refs
-  📄 dashboard/next.config.ts — 1 defs, 1 refs
-  📄 dashboard/postcss.config.mjs — 1 defs, 0 refs
-  📄 dashboard/src/app/layout.tsx — 4 defs, 8 refs
-  📄 dashboard/src/app/page.tsx — 16 defs, 37 refs
-
-═══════════════════════════════════════════════════════
-📊 [Code Graph] Build Summary
-═══════════════════════════════════════════════════════
-  Mode:           full_build
-  Cache:          miss
-  Files parsed:   36 (42 skipped)
-  Definitions:    198
-  References:     464
-  Edges:          166
-  Duration:       353ms
-═══════════════════════════════════════════════════════
-
-🔍 [CodeGraph] Starting deterministic context analysis...
-📝 [CodeGraph] Input: Analyzing the following changed files:
-  - .gitignore
-  - backend/.gitignore
-  - backend/cmd/cli/main.go
-  - backend/go.mod
-  - backend/internal/chunker/chunker.go
-  - backend/internal/chunker/chunker_test.go
-  - backend/internal/codegraph/codegraph_summary_test.go
-  - backend/internal/codegraph/context.go
-  - backend/internal/codegraph/graph.go
-  - backend/internal/codegraph/graph_store.go
-  - backend/internal/codegraph/graph_store_test.go
-  - backend/internal/codegraph/helpers.go
-  - backend/internal/codegraph/logger.go
-  - backend/internal/codegraph/parser.go
-  - backend/internal/codegraph/service.go
-  - backend/internal/codegraph/summary.go
-  - backend/internal/llm/llm.go
-  - docs/CHUNKING_STRATEGY.md
-  - docs/DEVELOPER_GUIDE.md
-  - docs/PRODUCTION_PLAN.md
-  - text.txt
-   -> Found 5 references in backend/internal/codegraph/codegraph_summary_test.go (5 builtin filtered)
-   -> Found 15 references in backend/internal/codegraph/context.go (15 builtin filtered)
-   -> Found 3 references in backend/internal/codegraph/logger.go (4 builtin filtered)
-   -> Found 20 references in backend/internal/codegraph/parser.go (12 builtin filtered)
-   -> Found 8 references in backend/internal/codegraph/summary.go (11 builtin filtered)
-   -> Found 30 references in backend/cmd/cli/main.go (17 builtin filtered)
-   -> Found 15 references in backend/internal/chunker/chunker.go (13 builtin filtered)
-   -> Found 18 references in backend/internal/llm/llm.go (43 builtin filtered)
-   -> Found 18 references in backend/internal/codegraph/graph_store_test.go (15 builtin filtered)
-   -> Found 3 references in backend/internal/codegraph/helpers.go (10 builtin filtered)
-   -> Found 5 references in backend/internal/chunker/chunker_test.go (8 builtin filtered)
-   -> Found 6 references in backend/internal/codegraph/graph.go (6 builtin filtered)
-   -> Found 30 references in backend/internal/codegraph/graph_store.go (23 builtin filtered)
-   -> Found 26 references in backend/internal/codegraph/service.go (22 builtin filtered)
-🔍 [CodeGraph] Searching for 131 unique project symbols...
-   Symbols: [Round uniqueStrings Content ReviewResult packChunks parseFileEntry buildChunkDiff sortedEdgeKeys TempDir RemoveFile buildEdges NewScanner enrichDependencyMetadata displayList symbol collectDownstreamDependencies NewGitHubClient commentKey ExtractDefinitionEntries containsString edgeKey GetCurrentCommitSHA chunkDirs Output Scanner buildDataFlowLines Parser FileCount FileEntry ToSlash Type NewGraph FindCandidates ParseCtx buildPrompt NewParser isDocumentationFile DefinitionCount Node Parse DeltaUpdate MkdirAll IsNotExist inferBehaviorSignals sortedSymbolSlice referenceQuery GetRepoStructure Edge sortedKeys Now buildContextGraphSummary RootNode LanguageConfig scopeDependencies SetGraph GetContext Client filterReviewableFiles graphNodeLabel defQuery truncateUTF8 ParseFile Command addReferenceUnique Getwd signalRule ConsolidateResults NewQuery relationForReferenceKind SetLanguage StartPoint GetDiff BuildFull PostReview buildComponents PRContext Chunk union countTotalComments RunChunkReview Time GetLanguageForFile sortedDependencyKeys countGraphNodes buildPRContextSummary extractChangedLinesFromDiff Reference SaveGraph computeCrossRefs Graph ExtractDefinitions edges Parent GetChangedFiles NewService LoadGraph depEntry MarshalIndent ReplaceAll NextMatch Bool RepoSettings Service singleChunk getFileKeys dependencyInfo ExtractReferenceDetails FindDefinition sortedMapKeys ExtractDefinitionSnippet buildDependencySummary GetFileContent GetPullRequest GroupFiles splitDiffByFile Stat Slice BuildStats NewQueryCursor EstimateTokens FileInfo addEdge Duration Definition ReviewComment Strings formatFilesWithDiff isBuiltinSymbol Since FindAllStringIndex Sum256]
-✅ [CodeGraph] Found definition for 'GetRepoStructure' in backend/internal/action/git.go
-   Snippet: func GetRepoStructure() (string, error) { 	cmd := exec.Co...
-✅ [CodeGraph] Found definition for 'GetFileContent' in backend/internal/action/git.go
-   Snippet: func GetFileContent(path string) (string, error) { 	// Us...
-✅ [CodeGraph] Found definition for 'LanguageConfig' in backend/internal/codegraph/languages.go
-   Snippet: type LanguageConfig struct { 	Name       string 	Extensio...
-✅ [CodeGraph] Found definition for 'GetPullRequest' in backend/internal/action/github.go
-   Snippet: func (g *GitHubClient) GetPullRequest(ctx context.Context...
-✅ [CodeGraph] Found definition for 'ReviewComment' in backend/internal/models/models.go
-   Snippet: type ReviewComment struct { 	File     string `json:"file"...
-✅ [CodeGraph] Found definition for 'NewScanner' in backend/internal/codegraph/scanner.go
-   Snippet: func NewScanner(repoPath string) *Scanner { 	return &Scan...
-✅ [CodeGraph] Found definition for 'NewGitHubClient' in backend/internal/action/github.go
-   Snippet: func NewGitHubClient(ctx context.Context, token, owner, r...
-✅ [CodeGraph] Found definition for 'ReviewResult' in backend/internal/models/models.go
-   Snippet: type ReviewResult struct { 	Summary  string          `jso...
-✅ [CodeGraph] Found definition for 'FindCandidates' in backend/internal/codegraph/scanner.go
-   Snippet: func (s *Scanner) FindCandidates(ctx context.Context, sym...
-✅ [CodeGraph] Found definition for 'Scanner' in backend/internal/codegraph/scanner.go
-   Snippet: type Scanner struct { 	RepoPath string }
-✅ [CodeGraph] Found definition for 'GetDiff' in backend/internal/action/git.go
-   Snippet: func GetDiff(base, head string) (string, error) { 	// git...
-✅ [CodeGraph] Found definition for 'PostReview' in backend/internal/action/github.go
-   Snippet: func (g *GitHubClient) PostReview(ctx context.Context, pr...
-✅ [CodeGraph] Found definition for 'PRContext' in backend/cmd/benchmark/main.go
-   Snippet: type PRContext struct { 	Title   string   `json:"title"` ...
-✅ [CodeGraph] Found definition for 'GetLanguageForFile' in backend/internal/codegraph/languages.go
-   Snippet: func GetLanguageForFile(path string) (*LanguageConfig, bo...
-✅ [CodeGraph] Found definition for 'GetChangedFiles' in backend/internal/action/git.go
-   Snippet: func GetChangedFiles(base, head string) ([]string, error)...
-✅ [CodeGraph] Found definition for 'RepoSettings' in backend/internal/models/models.go
-   Snippet: type RepoSettings struct { 	ID                  int    `j...
-
-═══════════════════════════════════════════════════════
-📊 [Code Graph] Build Summary
-═══════════════════════════════════════════════════════
-  Mode:           analysis
-  Files parsed:   14 (7 skipped)
-  Definitions:    16
-  References:     202
-  Edges:          16
-  Duration:       452ms
-═══════════════════════════════════════════════════════
-
-✅ [CodeGraph] Analysis complete. Found summaries for 7 files (7088 chars of context).
-📂 [CodeGraph] Output: Added the following files to context:
-  + _codegraph/context_graph
-  + backend/cmd/benchmark/main.go
-  + backend/internal/action/git.go
-  + backend/internal/action/github.go
-  + backend/internal/codegraph/languages.go
-  + backend/internal/codegraph/scanner.go
-  + backend/internal/models/models.go
-💾 [CodeGraph] Saved graph to /home/runner/work/ai-code-reviewer/ai-code-reviewer/.ai-reviewer/graph.json (36 files, 198 definitions, 166 edges, 269758 bytes)
-🚀 Starting Review: 21 files → 1 chunk(s)
---------------------------------------------------------------------------------
-🧩 [CHUNK 1/1] Processing 14 files and 7 dependencies
-  Mode:  gemini-2.5-flash
-  Size:  118253 characters (~29563 tokens)
---------------------------------------------------------------------------------
-✅ [CHUNK 1/1] Found 1 comments
-🚀 Posting comments to tegveer-work/ai-code-reviewer PR #63...
+💾 [CodeGraph] Saved graph to /home/runner/work/ai-code-reviewer/ai-code-reviewer/.ai-reviewer/graph.json (45 files, 222 definitions, 198 edges, 332270 bytes)
+🚀 Starting Review: 13 files → 1 chunk(s)
+  📄 [Orchestrator] Filtered 1 non-code files (kept 12 reviewable)
+🚀 [Orchestrator] Chunk 1/1 — launching 3 specialist agents in parallel
+   📁 Files: 13 | 🔗 Dependencies: 8 | 📝 Diff: 78948 chars
+🤖 [correctness] Starting review (12 files, 8 deps)
+  📏 [correctness] Prompt size: 183163 chars (~45790 tokens)
+🤖 [structure] Starting review (12 files, 8 deps)
+  📏 [structure] Prompt size: 183163 chars (~45790 tokens)
+🤖 [security] Starting review (12 files, 8 deps)
+  📏 [security] Prompt size: 183163 chars (~45790 tokens)
+  ⚠️ [structure] Empty response — retrying with nudge
+  ✅ [security] Done: 0 comments (17.1s, 0 tool calls)
+  ⚠️ [correctness] Empty response — retrying with nudge
+  🔧 [correctness] Tool call: get_symbol_definition(map[symbol:ReviewChunk]) [iter 2, 2.3s]
+  📨 [correctness] Tool response (get_symbol_definition): 3032 chars
+  ────────────────────────────────────────
+Symbol: ReviewChunk
+File: backend/internal/orchestrator/orchestrator.go
+Kind: function
+Line: 59
+Source:
+func ReviewChunk(
+	ctx context.Context,
+	client *http.Client,
+	chunkFiles map[string]string,
+	chunkDiff string,
+	chunkIndex, chunkTotal int,
+	crossRefs []string,
+	dependencies map[string]string,
+	repoStructure string,
+	apiKey string,
+	prContext models.PRContext,
+	graph *codegraph.Graph,
+	repoPath string,
+) (*models.ReviewResult, error) {
+	start := time.Now()
+	// Filter out documentation and config files — agents should only review code
+	reviewableFiles := filterReviewableFiles(chunkFiles)
+	if len(reviewableFiles) == 0 {
+		return &models.ReviewResult{
+			Summary: "No reviewable code files in this chunk (only documentation/config files)",
+		}, nil
+	}
+	if len(reviewableFiles) < len(chunkFiles) {
+		fmt.Printf("  📄 [Orchestrator] Filtered %d non-code files (kept %d reviewable)\n",
+			len(chunkFiles)-len(reviewableFiles), len(reviewableFiles))
+	}
+	// Build the base config shared by all agents
+	base := agents.AgentConfig{
+		ChangedFiles:  reviewableFiles,
+		Diff:          chunkDiff,
+		Dependencies:  dependencies,
+		RepoStructure: repoStructure,
+		PRContext:     prContext,
+		CrossRefs:     crossRefs,
+		ChunkIndex:    chunkIndex,
+		ChunkTotal:    chunkTotal,
+		APIKey:        apiKey,
+		RepoPath:      repoPath,
+	}
+	// Create tool executor for agent tool calls
+	toolExecutor := llm.NewToolExecutor(repoPath, graph)
+	// Prepare the 3 specialist configs
+	configs := []agents.AgentConfig{
+		agents.CorrectnessAgent(base),
+		agents.SecurityAgent(base),
+		agents.StructureAgent(base),
+	}
+	fmt.Printf("\n🚀 [Orchestrator] Chunk %d/%d — launching 3 specialist agents in parallel\n", chunkIndex, chunkTotal)
+	fmt.Printf("   📁 Files: %d | 🔗 Dependencies: %d | 📝 Diff: %d chars\n",
+		len(chunkFiles), len(dependencies), len(chunkDiff))
+	// Fan-out: launch all 3 agents in parallel goroutines
+	results := make([]agents.AgentResult, len(configs))
+	var wg sync.WaitGroup
+	f
+  ...(truncated for display)
+  ────────────────────────────────────────
+  ✅ [correctness] Done: 0 comments (1.1s, 1 tool calls)
+  ⚠️ [structure] Empty response after retry at iteration 2
+   ✅ [correctness] 0 comments, 1 tool calls
+   ✅ [security] 0 comments, 0 tool calls
+   ✅ [structure] 0 comments, 0 tool calls
+🔄 [Orchestrator] Consolidating 0 comments from 3 agents (31.4s total, 1 tool calls)
+✅ [Orchestrator] Final: 0 comments after dedup + cap
+🚀 Posting comments to tegveer-work/ai-code-reviewer PR #69...
 ✅ Review posted successfully!
+
+this is coming in AI code review summary
+
+AI Code Review Summary
+[correctness] No issues detected
+[security] Agent response parse error: invalid character 'g' looking for beginning of value
+Raw: go
+// backend/internal/llm/tools.go
+// Line 141
+// critical: Path traversal via unvalidated file path. The 'path' argument from the LLM is used directly to read files, allowing access to arbitrary files outside the repository. Validate 'path' to ensure it is within the repository and does not contain '..' segments.
+// Line 200
+// critical: Command injection via unsanitized git grep query. The 'query' argument from the LLM is passed directly to 'git grep', enabling arbitrary command execution. Sanitize or escape the 'query' argument before execution.
+[structure] No findings from structure agent
+
+another run second PR
+AI Code Review Summary
+[correctness] Agent response parse error: invalid character 'b' looking for beginning of value
+Raw: backend/internal/orchestrator/orchestrator.go:20: warning: Inconsistent file filtering logic. The isDocOrConfigFile function is less comprehensive than llm.isDocumentationFile, which could lead to specialist agents reviewing files (e.g., tsconfig.json, makefile) that were previously intended to be skipped. Update isDocOrConfigFile to match the comprehensive list of documentation and configuration files from llm.isDocumentationFile.
+[security] Agent response parse error: invalid character 'g' looking for beginning of value
+Raw: go
+// backend/internal/llm/tools.go
+// Line 200
+// critical: Command injection via unsanitized query parameter. Sanitize the query parameter before passing it to exec.Command, or use a library that handles argument escaping for git grep.
+[structure] Agent response parse error: invalid character 'b' looking for beginning of value
+Raw: backend/internal/llm/llm.go:668: info: Dead code detected. The RunChunkReview function is no longer called by any part of the codebase. Remove the RunChunkReview function.
+
