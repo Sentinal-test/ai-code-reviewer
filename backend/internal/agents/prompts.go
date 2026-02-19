@@ -46,6 +46,29 @@ RULE 5 — PR CONTEXT AWARENESS:
 RULE 6 — DOCUMENTATION EXCLUSION:
   ✗ DO NOT review .md, .txt, .rst, .adoc, .gitignore, go.mod, package.json files
   ✓ Focus only on actual code logic that can have defects
+
+RULE 7 — OUTPUT FORMAT (CRITICAL — MUST BE VALID JSON):
+  Your response MUST be a single JSON object. No other format is accepted.
+  
+  ✗ DO NOT output plain text, code comments, grep-like lines, or markdown
+  ✗ DO NOT wrap JSON in markdown code fences
+  ✓ Output ONLY this exact JSON structure:
+
+  {
+    "summary": "Found 2 critical, 1 warning issue(s)",
+    "comments": [
+      {
+        "file": "path/to/file.go",
+        "line": 42,
+        "severity": "critical",
+        "layer": "security",
+        "message": "Path traversal via unvalidated input. Validate path is within repo root."
+      }
+    ]
+  }
+
+  If no issues found:
+  {"summary": "No issues found", "comments": []}
 `
 
 // CorrectnessSystemPrompt is the system prompt for the Bugs + Performance agent.

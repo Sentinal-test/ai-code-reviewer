@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -401,11 +402,14 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 	b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
 	b.WriteString("BEGIN ANALYSIS NOW.\n")
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+	b.WriteString("REMINDER: Your response MUST be a valid JSON object with \"summary\" and \"comments\" keys.\n")
+	b.WriteString("Do NOT output plain text, code comments, or markdown. Output ONLY JSON.\n")
 
 	return b.String()
 }
 
 // parseAgentResponse parses the JSON response from an agent into ReviewResult.
+// Falls back to text extraction if JSON parsing fails.
 func parseAgentResponse(text string) models.ReviewResult {
 	// Clean up the response — strip markdown fences if present
 	cleaned := strings.TrimSpace(text)
@@ -424,6 +428,17 @@ func parseAgentResponse(text string) models.ReviewResult {
 			return result
 		}
 
+		// Fallback: extract findings from plain text formats
+		// Gemini sometimes outputs grep-like or code-comment formats
+		extracted := parseTextFallback(cleaned)
+		if len(extracted) > 0 {
+			fmt.Printf("  🔄 JSON parse failed, extracted %d comments from text fallback\n", len(extracted))
+			return models.ReviewResult{
+				Summary:  fmt.Sprintf("Extracted %d findings from text response", len(extracted)),
+				Comments: extracted,
+			}
+		}
+
 		preview := cleaned
 		if len(preview) > 1000 {
 			preview = preview[:1000] + "\n...[RESPONSE TRUNCATED FOR DISPLAY]..."
@@ -433,4 +448,113 @@ func parseAgentResponse(text string) models.ReviewResult {
 		}
 	}
 	return result
+}
+
+// grepLinePattern matches: file/path.go:42: severity: message
+var grepLinePattern = regexp.MustCompile(`^([^\s:]+\.\w+):(\d+):\s*(critical|warning|info):\s*(.+)`)
+
+// commentLinePattern matches: // Line 42
+var commentLinePattern = regexp.MustCompile(`(?i)//\s*Line\s+(\d+)`)
+
+// commentSeverityPattern matches: // critical: message or // warning: message
+var commentSeverityPattern = regexp.MustCompile(`(?i)//\s*(critical|warning|info):\s*(.+)`)
+
+// commentFilePattern matches: // path/to/file.go
+var commentFilePattern = regexp.MustCompile(`^//\s*([^\s]+\.\w+)\s*$`)
+
+// parseTextFallback extracts review comments from non-JSON text responses.
+// Handles two formats seen in production:
+//  1. Grep-like: "file.go:42: warning: Message here"
+//  2. Code-comment: "// file.go\n// Line 42\n// critical: Message"
+func parseTextFallback(text string) []models.ReviewComment {
+	var comments []models.ReviewComment
+
+	lines := strings.Split(text, "\n")
+
+	// Try grep-like format first: file:line: severity: message
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if matches := grepLinePattern.FindStringSubmatch(line); len(matches) == 5 {
+			lineNum := 0
+			fmt.Sscanf(matches[2], "%d", &lineNum)
+			severity := strings.ToLower(matches[3])
+			layer := inferLayer(severity, matches[4])
+			comments = append(comments, models.ReviewComment{
+				File:     matches[1],
+				Line:     lineNum,
+				Severity: severity,
+				Layer:    layer,
+				Message:  strings.TrimSpace(matches[4]),
+			})
+		}
+	}
+
+	if len(comments) > 0 {
+		return comments
+	}
+
+	// Try code-comment format: // file\n// Line N\n// severity: message
+	var currentFile string
+	var currentLine int
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Match file path: // path/to/file.go
+		if matches := commentFilePattern.FindStringSubmatch(line); len(matches) == 2 {
+			currentFile = matches[1]
+			currentLine = 0
+			continue
+		}
+
+		// Match line number: // Line 42
+		if matches := commentLinePattern.FindStringSubmatch(line); len(matches) == 2 {
+			fmt.Sscanf(matches[1], "%d", &currentLine)
+			continue
+		}
+
+		// Match severity + message: // critical: Path traversal...
+		if matches := commentSeverityPattern.FindStringSubmatch(line); len(matches) == 3 && currentFile != "" {
+			severity := strings.ToLower(matches[1])
+			layer := inferLayer(severity, matches[2])
+			comments = append(comments, models.ReviewComment{
+				File:     currentFile,
+				Line:     currentLine,
+				Severity: severity,
+				Layer:    layer,
+				Message:  strings.TrimSpace(matches[2]),
+			})
+		}
+	}
+
+	return comments
+}
+
+// inferLayer guesses the review layer from severity and message content.
+func inferLayer(severity, message string) string {
+	lower := strings.ToLower(message)
+
+	if strings.Contains(lower, "injection") || strings.Contains(lower, "traversal") ||
+		strings.Contains(lower, "xss") || strings.Contains(lower, "auth") ||
+		strings.Contains(lower, "secret") || strings.Contains(lower, "credential") ||
+		strings.Contains(lower, "ssrf") || strings.Contains(lower, "csrf") {
+		return "security"
+	}
+
+	if strings.Contains(lower, "dead code") || strings.Contains(lower, "organization") ||
+		strings.Contains(lower, "architecture") || strings.Contains(lower, "circular") ||
+		strings.Contains(lower, "pattern") || strings.Contains(lower, "package") {
+		return "architecture"
+	}
+
+	if strings.Contains(lower, "performance") || strings.Contains(lower, "allocation") ||
+		strings.Contains(lower, "o(n") || strings.Contains(lower, "cache") {
+		return "performance"
+	}
+
+	if severity == "critical" && (strings.Contains(lower, "security") || strings.Contains(lower, "vuln")) {
+		return "security"
+	}
+
+	return "bug"
 }
