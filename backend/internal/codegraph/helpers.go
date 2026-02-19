@@ -61,6 +61,25 @@ func isBuiltinSymbol(symbol string) bool {
 		"System": true, "Integer": true, "Long": true, "Double": true, "Float": true,
 		"Boolean": true, "Character": true, "Byte": true, "Short": true,
 		"Override": true, "Deprecated": true, "SuppressWarnings": true,
+		"ArrayList": true, "HashMap": true, "HashSet": true, "LinkedList": true,
+		"Collections": true, "Arrays": true, "Objects": true, "Optional": true,
+		"Collectors": true, "Stream": true,
+
+		// Go stdlib method/type names (extremely common noise)
+		"String": true, "Error": true, "Close": true, "Read": true, "Write": true,
+		"Scan": true, "Query": true, "QueryRow": true, "Exec": true,
+		"Get": true, "Set": true, "Add": true, "Do": true, "Put": true,
+		"Now": true, "Since": true, "After": true, "Sleep": true,
+		"Split": true, "Join": true, "Contains": true, "TrimSpace": true,
+		"HasPrefix": true, "HasSuffix": true, "Replace": true,
+		"ToLower": true, "ToUpper": true, "Trim": true,
+		"Marshal": true, "Unmarshal": true, "Encode": true, "Decode": true,
+		"NewReader": true, "NewWriter": true, "NewRequest": true,
+		"ReadAll": true, "WriteFile": true, "ReadFile": true, "MkdirAll": true,
+		"Handle": true, "HandleFunc": true, "ListenAndServe": true,
+		"Header": true, "ResponseWriter": true, "Request": true,
+		"DB": true, "Prepare": true, "Begin": true, "Commit": true, "Rollback": true,
+		"Context": true, "Client": true,
 	}
 
 	return builtins[symbol]

@@ -23,10 +23,10 @@ type FileEntry struct {
 
 // Definition represents a symbol defined in a source file.
 type Definition struct {
-	Symbol  string `json:"symbol"`            // e.g. "ProcessPR", "AuthService"
-	Kind    string `json:"kind"`              // "function", "method", "type", "class", "interface"
-	Line    int    `json:"line"`              // 1-indexed line number
-	Snippet string `json:"snippet,omitempty"` // source text of the definition
+	Symbol  string `json:"symbol"`             // e.g. "ProcessPR", "AuthService"
+	Kind    string `json:"kind"`               // "function", "method", "type", "class", "interface"
+	Line    int    `json:"line"`               // 1-indexed start line number
+	EndLine int    `json:"end_line,omitempty"` // 1-indexed end line number
 }
 
 // Edge represents a cross-file relationship between two files.
@@ -40,7 +40,7 @@ type Edge struct {
 // NewGraph creates a new empty graph with the current schema version.
 func NewGraph() *Graph {
 	return &Graph{
-		Version: 1,
+		Version: 2,
 		Files:   make(map[string]FileEntry),
 	}
 }

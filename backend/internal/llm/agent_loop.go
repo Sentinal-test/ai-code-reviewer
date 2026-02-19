@@ -380,6 +380,7 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 
 	// Dependencies (from code graph)
 	if len(config.Dependencies) > 0 {
+		depStart := b.Len()
 		b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
 		b.WriteString("SUPPORTING CONTEXT: Code Graph Dependencies\n")
 		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
@@ -388,6 +389,9 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 		for _, path := range getFileKeys(config.Dependencies) {
 			b.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", path, config.Dependencies[path]))
 		}
+		depEnd := b.Len()
+		fmt.Printf("   📝 [%s] Code-Graph Context: %d chars (~%d tokens)\n",
+			config.Type, depEnd-depStart, (depEnd-depStart)/4)
 	}
 
 	// Repo structure (mainly for Structure agent)

@@ -87,10 +87,28 @@ func ReviewChunk(
 	}
 
 	// Build SLIM dependency index for Correctness and Security agents.
-	// Instead of full code snippets (~2000 chars/file), they get just symbol
-	// names + paths (~50 chars/file). They can use get_symbol_definition tool
-	// to fetch actual code when needed.
 	slimDeps := codegraph.BuildSlimDependencyIndex(dependencies)
+
+	// Logging: Show exactly what was built for the code-graph context
+	fmt.Printf("\n🔍 [CodeGraph] Differentiated Context Summary:\n")
+	fmt.Printf("   ├─ Full Dependencies: %d files\n", len(dependencies))
+	fmt.Printf("   └─ Slim Index: %d entries\n", len(slimDeps))
+	for k, v := range slimDeps {
+		if strings.HasPrefix(k, "_codegraph/") {
+			fmt.Printf("      📎 %s (%d chars)\n", k, len(v))
+			if k == "_codegraph/dependency_index" {
+				// Show the first few lines of the index
+				lines := strings.Split(v, "\n")
+				for i, line := range lines {
+					if i > 5 {
+						fmt.Printf("         ... (%d more lines)\n", len(lines)-i)
+						break
+					}
+					fmt.Printf("         %s\n", line)
+				}
+			}
+		}
+	}
 
 	// Build shared fields
 	shared := agents.AgentConfig{

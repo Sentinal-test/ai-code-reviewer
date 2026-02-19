@@ -283,7 +283,7 @@ func (p *Parser) ExtractDefinitionEntries(root *sitter.Node, content []byte, lan
 				}
 				seen[symbol] = struct{}{}
 
-				// Get snippet from parent node
+				// Get the parent node to compute the end line of the full definition
 				parent := node.Parent()
 				if parent == nil {
 					parent = node
@@ -295,16 +295,13 @@ func (p *Parser) ExtractDefinitionEntries(root *sitter.Node, content []byte, lan
 					}
 				}
 
-				snippet := parent.Content(content)
-				if len(snippet) > 3000 {
-					snippet = snippet[:3000] + "\n// ... (truncated)"
-				}
+				endLine := int(parent.EndPoint().Row) + 1 // tree-sitter is 0-indexed
 
 				defs = append(defs, Definition{
 					Symbol:  symbol,
 					Kind:    dq.Kind,
-					Line:    int(node.StartPoint().Row) + 1, // tree-sitter is 0-indexed
-					Snippet: snippet,
+					Line:    int(node.StartPoint().Row) + 1,
+					EndLine: endLine,
 				})
 			}
 		}
