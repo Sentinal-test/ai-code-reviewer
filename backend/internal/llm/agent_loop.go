@@ -13,7 +13,49 @@ import (
 	"time"
 )
 
-const maxToolIterations = 5
+const maxToolIterations = 8
+
+// responseSchema is the JSON schema enforced on Gemini's output.
+// Using responseMimeType + responseSchema guarantees valid JSON.
+var responseSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"summary": map[string]interface{}{
+			"type":        "string",
+			"description": "Brief overview of issues found, or 'No issues found' if clean",
+		},
+		"comments": map[string]interface{}{
+			"type": "array",
+			"items": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"file": map[string]interface{}{
+						"type":        "string",
+						"description": "Relative file path from repo root",
+					},
+					"line": map[string]interface{}{
+						"type":        "integer",
+						"description": "Line number from the '+' lines in the diff",
+					},
+					"severity": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"critical", "warning", "info"},
+					},
+					"layer": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"bug", "performance", "security", "architecture", "lint"},
+					},
+					"message": map[string]interface{}{
+						"type":        "string",
+						"description": "Problem description followed by fix suggestion. Max 2 sentences.",
+					},
+				},
+				"required": []string{"file", "line", "severity", "layer", "message"},
+			},
+		},
+	},
+	"required": []string{"summary", "comments"},
+}
 
 // RunAgentReview executes a single specialist agent with the agentic loop.
 // It sends the initial prompt, handles tool calls, and returns the agent's findings.
@@ -26,14 +68,12 @@ func RunAgentReview(
 
 	result := agents.AgentResult{Agent: config.Type}
 
-	// Build the initial prompt
+	// Build the initial prompt with diff-anchored context
 	prompt := buildAgentPrompt(config)
 	apiKey := config.APIKey
 
 	fmt.Printf("🤖 [%s] Starting review (%d files, %d deps)\n",
 		config.Type, len(config.ChangedFiles), len(config.Dependencies))
-
-	// Log prompt size for debugging
 	fmt.Printf("  📏 [%s] Prompt size: %d chars (~%d tokens)\n",
 		config.Type, len(prompt), len(prompt)/4)
 
@@ -57,8 +97,10 @@ func RunAgentReview(
 				},
 			},
 			"generationConfig": map[string]interface{}{
-				"temperature":     0.2,
-				"maxOutputTokens": 65536,
+				"temperature":      0.2,
+				"maxOutputTokens":  65536,
+				"responseMimeType": "application/json",
+				"responseSchema":   responseSchema,
 			},
 		}
 
@@ -67,6 +109,12 @@ func RunAgentReview(
 			reqBody["tools"] = []map[string]interface{}{
 				{
 					"function_declarations": AgentToolDeclarations(),
+				},
+			}
+			// Allow the model to decide between text and tool calls
+			reqBody["tool_config"] = map[string]interface{}{
+				"function_calling_config": map[string]interface{}{
+					"mode": "AUTO",
 				},
 			}
 		}
@@ -128,7 +176,18 @@ func RunAgentReview(
 		result.OutputTokens += geminiResp.UsageMetadata.CandidatesTokenCount
 
 		if len(geminiResp.Candidates) == 0 {
-			result.Error = fmt.Errorf("no candidates in response")
+			// Retry once on empty candidates (Gemini safety filter)
+			if iteration == 0 {
+				fmt.Printf("  ⚠️ [%s] No candidates — retrying with nudge\n", config.Type)
+				messages = append(messages, map[string]interface{}{
+					"role": "user",
+					"parts": []map[string]interface{}{
+						{"text": "Please analyze the code changes and respond with a JSON object containing your findings. If you find no issues, respond with {\"summary\": \"No issues found\", \"comments\": []}."},
+					},
+				})
+				continue
+			}
+			result.Summary = fmt.Sprintf("No findings from %s agent", config.Type)
 			return result
 		}
 
@@ -173,7 +232,6 @@ func RunAgentReview(
 				fmt.Printf("  📨 [%s] Tool response (%s): %d chars\n",
 					config.Type, toolCall.Name, len(toolResult.Content))
 				fmt.Println("  ────────────────────────────────────────")
-				// Print first 2000 chars of tool response
 				responsePreview := toolResult.Content
 				if len(responsePreview) > 2000 {
 					responsePreview = responsePreview[:2000] + "\n  ...(truncated for display)"
@@ -225,17 +283,24 @@ func RunAgentReview(
 		}
 
 		// If we got text AND function calls, store text for later
-		// (Gemini sometimes returns partial text + function call)
 		if len(textParts) > 0 && hasFunctionCall {
 			fmt.Printf("  📝 [%s] Got partial text + function call, continuing loop\n", config.Type)
 		}
 
-		// If we only got function calls, loop continues
+		// Empty response — retry once with a nudge
 		if !hasFunctionCall && len(textParts) == 0 {
-			// No function call and no text — check if this is a safety/empty response
-			fmt.Printf("  ⚠️ [%s] Empty response (no text, no function call) at iteration %d\n",
-				config.Type, iteration+1)
-			result.Summary = fmt.Sprintf("No findings from %s agent (empty response)", config.Type)
+			if iteration == 0 {
+				fmt.Printf("  ⚠️ [%s] Empty response — retrying with nudge\n", config.Type)
+				messages = append(messages, map[string]interface{}{
+					"role": "user",
+					"parts": []map[string]interface{}{
+						{"text": "Your previous response was empty. Please analyze the code changes shown above and respond with a JSON object. Focus on the diff hunks marked with '+'. If no issues found, respond with {\"summary\": \"No issues found\", \"comments\": []}."},
+					},
+				})
+				continue
+			}
+			fmt.Printf("  ⚠️ [%s] Empty response after retry at iteration %d\n", config.Type, iteration+1)
+			result.Summary = fmt.Sprintf("No findings from %s agent", config.Type)
 			return result
 		}
 	}
@@ -245,6 +310,8 @@ func RunAgentReview(
 }
 
 // buildAgentPrompt constructs the user prompt for a specialist agent.
+// Key improvement: diff hunks are shown INLINE with each file so agents
+// know exactly which lines changed (marked with '+').
 func buildAgentPrompt(config agents.AgentConfig) string {
 	var b strings.Builder
 
@@ -259,7 +326,9 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 
 	// PR Context
 	if config.PRContext.Title != "" {
-		b.WriteString("== PR CONTEXT ==\n")
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("PR CONTEXT (Developer Intent)\n")
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 		b.WriteString(fmt.Sprintf("Title: %s\n", config.PRContext.Title))
 		if config.PRContext.Body != "" {
 			body := config.PRContext.Body
@@ -271,38 +340,61 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 		b.WriteString("\n")
 	}
 
-	// Changed files with full content and line numbers
-	b.WriteString("== CHANGED FILES (Full Content) ==\n")
+	// Extract per-file diff hunks
+	diffMap := extractChangedLinesFromDiff(config.Diff)
+
+	// Changed files with full content, line numbers, AND inline diff hunks
+	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+	b.WriteString("PRIMARY ANALYSIS TARGET: Changed Code Files\n")
+	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+	b.WriteString("INSTRUCTION: Analyze ONLY the lines marked with '+' in the DIFF HUNKS below.\n")
+	b.WriteString("Use the full file content for context, but flag issues ONLY in changed lines.\n\n")
+
 	for _, path := range getFileKeys(config.ChangedFiles) {
 		content := config.ChangedFiles[path]
 		b.WriteString(fmt.Sprintf("\n═══ FILE: %s ═══\n", path))
+
+		// Full file content with line numbers (for context)
 		lines := strings.Split(content, "\n")
 		for i, line := range lines {
 			b.WriteString(fmt.Sprintf("%d: %s\n", i+1, line))
 		}
-	}
 
-	// Diff hunks
-	if config.Diff != "" {
-		b.WriteString("\n== RECENT CHANGES (Diff) ==\n")
-		b.WriteString(config.Diff)
-		b.WriteString("\n")
+		// Inline diff hunks for this file (shows what actually changed)
+		if diffSections, hasDiff := diffMap[path]; hasDiff && len(diffSections) > 0 {
+			b.WriteString("\n────────────────────────────────────────\n")
+			b.WriteString(fmt.Sprintf("DIFF HUNKS FOR: %s (ANALYZE THESE CHANGES)\n", path))
+			b.WriteString("────────────────────────────────────────\n")
+			for i, section := range diffSections {
+				b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s\n*/\n\n", i+1, section))
+			}
+		}
 	}
 
 	// Dependencies (from code graph)
 	if len(config.Dependencies) > 0 {
-		b.WriteString("\n== CODE GRAPH DEPENDENCIES ==\n")
+		b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("SUPPORTING CONTEXT: Code Graph Dependencies\n")
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("These files are NOT being reviewed. They provide context for understanding\n")
+		b.WriteString("the changed code's dependencies, types, and function signatures.\n\n")
 		for _, path := range getFileKeys(config.Dependencies) {
-			b.WriteString(fmt.Sprintf("\n--- %s ---\n%s\n", path, config.Dependencies[path]))
+			b.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", path, config.Dependencies[path]))
 		}
 	}
 
 	// Repo structure (mainly for Structure agent)
 	if config.RepoStructure != "" {
-		b.WriteString("\n== REPOSITORY STRUCTURE ==\n")
+		b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("SUPPORTING CONTEXT: Repository Structure\n")
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 		b.WriteString(config.RepoStructure)
 		b.WriteString("\n")
 	}
+
+	b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
+	b.WriteString("BEGIN ANALYSIS NOW.\n")
+	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 
 	return b.String()
 }
@@ -318,7 +410,14 @@ func parseAgentResponse(text string) models.ReviewResult {
 
 	var result models.ReviewResult
 	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
-		// Log the raw response for debugging (no truncation warning)
+		// Try fallback: maybe it's a naked array of comments
+		var comments []models.ReviewComment
+		if errArray := json.Unmarshal([]byte(cleaned), &comments); errArray == nil {
+			result.Comments = comments
+			result.Summary = "Review comments"
+			return result
+		}
+
 		preview := cleaned
 		if len(preview) > 1000 {
 			preview = preview[:1000] + "\n...[RESPONSE TRUNCATED FOR DISPLAY]..."

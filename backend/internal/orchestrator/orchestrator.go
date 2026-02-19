@@ -8,9 +8,51 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
+
+// isDocOrConfigFile checks if a file is documentation/config and shouldn't be reviewed.
+func isDocOrConfigFile(path string) bool {
+	lower := strings.ToLower(path)
+	base := strings.ToLower(filepath.Base(path))
+
+	// Skip by extension
+	skipExts := []string{".md", ".txt", ".rst", ".adoc", ".gitignore", ".dockerignore"}
+	for _, ext := range skipExts {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+
+	// Skip known config files
+	skipFiles := []string{
+		"go.mod", "go.sum", "package.json", "package-lock.json",
+		"yarn.lock", "pnpm-lock.yaml", "tsconfig.json",
+		"license", "changelog", "readme",
+	}
+	baseNoExt := strings.TrimSuffix(base, filepath.Ext(base))
+	for _, skip := range skipFiles {
+		if base == skip || baseNoExt == skip {
+			return true
+		}
+	}
+
+	return false
+}
+
+// filterReviewableFiles removes documentation and config files from the map.
+func filterReviewableFiles(files map[string]string) map[string]string {
+	filtered := make(map[string]string)
+	for path, content := range files {
+		if !isDocOrConfigFile(path) {
+			filtered[path] = content
+		}
+	}
+	return filtered
+}
 
 // ReviewChunk runs 3 specialist agents in parallel on a single chunk,
 // then consolidates their results.
@@ -31,9 +73,22 @@ func ReviewChunk(
 
 	start := time.Now()
 
+	// Filter out documentation and config files — agents should only review code
+	reviewableFiles := filterReviewableFiles(chunkFiles)
+	if len(reviewableFiles) == 0 {
+		return &models.ReviewResult{
+			Summary: "No reviewable code files in this chunk (only documentation/config files)",
+		}, nil
+	}
+
+	if len(reviewableFiles) < len(chunkFiles) {
+		fmt.Printf("  📄 [Orchestrator] Filtered %d non-code files (kept %d reviewable)\n",
+			len(chunkFiles)-len(reviewableFiles), len(reviewableFiles))
+	}
+
 	// Build the base config shared by all agents
 	base := agents.AgentConfig{
-		ChangedFiles:  chunkFiles,
+		ChangedFiles:  reviewableFiles,
 		Diff:          chunkDiff,
 		Dependencies:  dependencies,
 		RepoStructure: repoStructure,
