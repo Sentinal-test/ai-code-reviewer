@@ -274,7 +274,7 @@ max_comments: 15
 
 ```
 For each PR:
-  1. Group changed files into "Review Units" (max ~100K tokens each)
+  1. Group changed files into "Review Units" (max ~10K tokens each)
   2. Each unit = related files (same package/directory)
   3. Each unit gets its own LLM call with:
      - The chunk's changed files + their diff
