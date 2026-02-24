@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"code-review/backend/internal/agents"
+	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/models"
 	"context"
 	"encoding/json"
@@ -359,12 +360,24 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 
 	for _, path := range getFileKeys(config.ChangedFiles) {
 		content := config.ChangedFiles[path]
+		fileTokens := len(content) / 4
 		b.WriteString(fmt.Sprintf("\n═══ FILE: %s ═══\n", path))
 
-		// Full file content with line numbers (for context)
-		lines := strings.Split(content, "\n")
-		for i, line := range lines {
-			b.WriteString(fmt.Sprintf("%d: %s\n", i+1, line))
+		if fileTokens > chunker.DefaultTokenBudget {
+			// OVERSIZED FILE: Send imports + diff context only
+			fmt.Printf("  ⚠️ [%s] Oversized file detected: %s (%d tokens > %d budget). Using diff-only mode.\n",
+				config.Type, path, fileTokens, chunker.DefaultTokenBudget)
+			b.WriteString(fmt.Sprintf("[OVERSIZED FILE — %d tokens, showing imports + ±50 lines around each change]\n", fileTokens))
+			b.WriteString("[Use get_file_content tool to inspect other sections if needed]\n\n")
+			diffSections := diffMap[path]
+			focused := extractDiffWithContext(content, diffSections, 50)
+			b.WriteString(focused)
+		} else {
+			// Normal: Full file content with line numbers (for context)
+			lines := strings.Split(content, "\n")
+			for i, line := range lines {
+				b.WriteString(fmt.Sprintf("%d: %s\n", i+1, line))
+			}
 		}
 
 		// Inline diff hunks for this file (shows what actually changed)
