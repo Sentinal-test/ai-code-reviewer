@@ -6,41 +6,40 @@ An automated, hyper-critical code defect detection system. It leverages a Go bac
 
 ```mermaid
 flowchart TD
-    A[Pull Request Event] -->|GitHub Webhook| B[Go Backend]
+    A[Pull Request Trigger] -->|GitHub Actions| B[AI Reviewer Action]
 
-    B --> C{Scout Pass}
+    B --> C{Context Gathering}
 
-    subgraph Scout Pass
-        C1[Analyze Diff]
-        C2[Parse File Tree]
+    subgraph Context Gathering
+        C1[Extract Git Diff]
+        C2[CodeGraph: Parse AST]
+        C3[CodeGraph: Resolve Dependencies]
+        C1 --> C2
+        C2 --> C3
     end
 
-    C --> C1
-    C --> C2
+    C --> D[Assemble Review Context]
 
-    C1 --> D[Identify Dependencies]
-    C2 --> D
+    D --> E{Multi-Agent Review}
 
-    D --> E[Fetch Files from GitHub]
-
-    E --> F{Reviewer Pass}
-
-    subgraph Reviewer Pass
-        F1[Context Analysis]
-        F2[Diff Review]
+    subgraph Multi-Agent Review
+        E1[Correctness Agent]
+        E2[Security Agent]
+        E3[Structure Agent]
     end
 
-    F --> F1
-    F --> F2
+    D --> E1
+    D --> E2
+    D --> E3
 
-    F1 --> G[Detect Defects]
-    F2 --> G
+    E1 --> F[Consolidator]
+    E2 --> F
+    E3 --> F
 
-    G --> H[Post Comments]
+    F --> G{Post Comments}
 
-    H --> I[Inline Comment - Valid Line]
-    H --> J[General Comment - Context Line]
-
+    G --> H[Inline PR Comments]
+    G --> I[General PR Feedback]
 ```
 
 
@@ -50,7 +49,7 @@ flowchart TD
 
 Want AI code reviews on your repo? It takes less than a minute.
 
-👉 **[Company Deployment Guide](./docs/ENTERPRISE_SETUP.md)** — *Follow this for private company-wide setup.*
+👉 **[Company Rollout Guide](./docs/COMPANY_ROLLOUT_GUIDE.md)** — *Follow this for private company-wide setup.*
 
 1.  **[Install the GitHub App](https://github.com/settings/apps/sentinal-review/installations)** on your repository.
 2.  **Add `GEMINI_API_KEY`** to your repository secrets (Settings > Secrets > Actions).
@@ -89,10 +88,13 @@ jobs:
 
 ## 🛠️ How it Works
 
-1.  **Intent Discovery**: The system reads your PR title, description, and last 10 commits to understand *what* you are trying to build.
-2.  **Breadcrumb Strategy (Scout)**: An LLM analyzes the file structure and the changed code to find "missing pieces" (e.g., if you changed a model call, it asks to read the model definition).
-3.  **Audit Mode**: The Reviewer LLM is placed in a "Security & Reliability Audit" mode. It is forbidden from praising your code and focuses entirely on finding bugs, security flaws, and performance leaks using the **Full File Context**.
-4.  **Resilient Feedback**: If the AI finds a bug in a related file (not the one you edited), it will still tell you via a general PR comment.
+1.  **CodeGraph Deterministic Context**: Instead of guessing context or passing the entire repo, the system parses the Abstract Syntax Tree (AST) of the changed files to extract precise dependencies (functions, types, methods), scanning the repository for their definitions.
+2.  **Multi-Agent Ecosystem**: PR chunks are analyzed in parallel by three specialized "Senior Engineer" personas:
+    - **Correctness**: Hunts for business logic flaws, nil pointers, concurrency issues.
+    - **Security**: Acts as an attacker hunting for injection, missing auth, sensitive data leaks.
+    - **Structure**: Audits for architectural decay, God classes, circular dependencies.
+3.  **Consolidation**: A meta-agent deduplicates reports, sorts them by severity, and caps comments to avoid overwhelming the PR author.
+4.  **Resilient Feedback**: If a comment applies to a line outside the GitHub diff context limit, the reviewer automatically posts it as a general PR comment to ensure the feedback is never lost.
 
 ---
 
@@ -210,7 +212,7 @@ If you make the AI Reviewer repository **Public**, anyone can use it with a sing
 
 ---
 
-- [Enterprise/Private Setup](./docs/ENTERPRISE_SETUP.md) - **Start Here for Company Setup**
+- [Company Rollout Guide](./docs/COMPANY_ROLLOUT_GUIDE.md) - **Start Here for Company Setup**
 - [Team Usage Guide](./docs/TEAM_USAGE.md)
 - [Project Overview](./docs/PROJECT_OVERVIEW.md)
 - [Architectural Decision Records](./docs/ARCHITECTURAL_DECISION_RECORDS.md)

@@ -3,7 +3,7 @@ description: 'AI-powered code review running entirely within GitHub Actions'
 inputs:
   gemini_api_key:
     description: 'Google Gemini API Key'
-    required: true
+    required: false
   github_token:
     description: 'GitHub Token for posting comments'
     required: true
@@ -52,6 +52,7 @@ runs:
       shell: bash
       env:
         GEMINI_API_KEY_INPUT: ${{ inputs.gemini_api_key }}
+        ORG_DEFAULT_GEMINI_KEY: ${{ secrets.ORG_DEFAULT_GEMINI_KEY }} # Optional Org-wide default
         GITHUB_TOKEN_INPUT: ${{ inputs.github_token }}
         PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         BASE_REF_INPUT: ${{ inputs.base_ref }}
@@ -59,17 +60,17 @@ runs:
       run: |
         echo "🔍 Validating inputs..."
         
-        # Priority: Input -> Environment Variable
-        RESOLVED_API_KEY="${GEMINI_API_KEY_INPUT:-$GEMINI_API_KEY}"
+        # Priority: explicit input -> org-wide default -> environment variable
+        RESOLVED_API_KEY="${GEMINI_API_KEY_INPUT:-${ORG_DEFAULT_GEMINI_KEY:-$GEMINI_API_KEY}}"
         RESOLVED_TOKEN="${GITHUB_TOKEN_INPUT:-$GITHUB_TOKEN}"
         
         if [ -n "$RESOLVED_API_KEY" ]; then
           echo "✅ API Key detected (starts with: ${RESOLVED_API_KEY:0:4}...)"
         else
           echo "❌ Error: GEMINI_API_KEY is missing."
-          echo "Please ensure you pass it in the 'with:' block:"
-          echo "  with:"
-          echo "    gemini_api_key: \${{ secrets.GEMINI_API_KEY }}"
+          echo "Please ensure you either:"
+          echo "1. Pass it explicitly in the 'with:' block (gemini_api_key: \${{ secrets.GEMINI_API_KEY }})"
+          echo "2. Set a default ORG_DEFAULT_GEMINI_KEY secret in the action repository"
           exit 1
         fi
 

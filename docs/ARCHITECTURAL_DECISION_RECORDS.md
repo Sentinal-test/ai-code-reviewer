@@ -17,19 +17,20 @@ Rewrite the core logic in Go as a standalone backend service.
 
 ---
 
-## ADR 2: Multi-Pass Review Strategy (Scout & Reviewer)
+## ADR 2: Deterministic Code Graph Context (Replacing LLM Scout)
 **Context**:  
-Single-pass reviews often miss context. The LLM only sees the diff and might guess incorrectly about used types or function signatures defined in other files.
+Single-pass reviews often miss context. The LLM only sees the diff and might guess incorrectly about used types or function signatures defined in other files. Initially, an LLM "Scout" was used to predict which files were needed, but this was slow, non-deterministic, and prone to hallucination.
 
 **Decision**:  
-Implement a two-pass review system.
-1.  **Pass 1 (Scout)**: The LLM analyzes the diff and repo structure to identify *additional* files it needs to read.
-2.  **Fetch Pass**: The backend fetches those specific file contents.
-3.  **Pass 2 (Reviewer)**: The LLM performs the actual review with all context in hand.
+Implement a `CodeGraph` engine using tree-sitter.
+1.  **AST Parsing**: Parse all changed files to extract precise symbols (function calls, type references) using tree-sitter grammar.
+2.  **Definition Resolution**: Scan the repository to find exactly where those symbols are defined.
+3.  **Context Assembly**: Extract small snippets of the actual definitions (max 500 chars) and build a deterministic context graph indicating caller-callee relationships and data flow.
 
 **Rationale**:  
-- **Accuracy**: Significantly reduces "hallucinations" about missing functions/types by providing their actual definitions.
-- **Precision**: The model only requests what it needs, keeping the context window focused.
+- **Accuracy**: Eliminates LLM hallucinations. Context is guaranteed to be real code.
+- **Speed**: Processing ASTs locally in Go takes milliseconds compared to LLM latency which took tens of seconds.
+- **Context Economy**: Precisely extracts only the definition snippets (not full files), conserving the LLM context window for actual analysis.
 
 ---
 
