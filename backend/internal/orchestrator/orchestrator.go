@@ -104,7 +104,7 @@ func ReviewChunk(
 						fmt.Printf("         ... (%d more lines)\n", len(lines)-i)
 						break
 					}
-					fmt.Printf("         %s\n", line)
+					fmt.Printf("       | %s\n", line)
 				}
 			}
 		}

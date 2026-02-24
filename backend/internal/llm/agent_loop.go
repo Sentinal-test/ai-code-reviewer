@@ -260,7 +260,7 @@ func RunAgentReview(
 						},
 					},
 					map[string]interface{}{
-						"role": "user",
+						"role": "function",
 						"parts": []map[string]interface{}{
 							{
 								"functionResponse": map[string]interface{}{

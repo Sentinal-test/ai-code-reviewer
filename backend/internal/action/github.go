@@ -4,13 +4,116 @@ import (
 	"code-review/backend/internal/models"
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
+	"math"
 	"time"
 
 	"github.com/google/go-github/v60/github"
 	"golang.org/x/oauth2"
 )
+
+// hunkHeaderRegex matches unified diff hunk headers like @@ -10,5 +12,8 @@
+var hunkHeaderRegex = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
+
+// extractValidDiffLines parses a unified diff and returns a map of
+// file path → sorted slice of valid line numbers on the new-file (RIGHT) side.
+// Only lines that appear as added (+) or context (unchanged) within hunks are valid
+// for GitHub inline comments.
+func extractValidDiffLines(diff string) map[string][]int {
+	result := make(map[string][]int)
+	lines := strings.Split(diff, "\n")
+
+	var currentFile string
+	var lineNum int
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "diff --git") {
+			// Extract file path from "diff --git a/path b/path"
+			parts := strings.Fields(line)
+			if len(parts) >= 4 {
+				currentFile = strings.TrimPrefix(parts[3], "b/")
+				currentFile = strings.Trim(currentFile, "\"")
+			}
+			continue
+		}
+
+		if strings.HasPrefix(line, "@@") && currentFile != "" {
+			matches := hunkHeaderRegex.FindStringSubmatch(line)
+			if len(matches) >= 2 {
+				lineNum, _ = strconv.Atoi(matches[1])
+			}
+			continue
+		}
+
+		if currentFile == "" || lineNum == 0 {
+			continue
+		}
+
+		if strings.HasPrefix(line, "+") {
+			// Added line — valid for inline comment
+			result[currentFile] = append(result[currentFile], lineNum)
+			lineNum++
+		} else if strings.HasPrefix(line, "-") {
+			// Deleted line — no new-file line number, skip
+			continue
+		} else if strings.HasPrefix(line, "\\") {
+			// "No newline at end of file" — skip
+			continue
+		} else if strings.HasPrefix(line, "diff ") || strings.HasPrefix(line, "index ") ||
+			strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
+			// Diff metadata — skip
+			continue
+		} else {
+			// Context (unchanged) line — valid for inline comment
+			result[currentFile] = append(result[currentFile], lineNum)
+			lineNum++
+		}
+	}
+
+	// Sort each file's lines for binary search
+	for f := range result {
+		sort.Ints(result[f])
+	}
+	return result
+}
+
+// snapToValidLine finds the nearest valid diff line for a given line number.
+// Returns 0 if no valid lines exist for the file.
+func snapToValidLine(line int, validLines []int) int {
+	if len(validLines) == 0 {
+		return 0
+	}
+
+	// Check if exact match exists
+	idx := sort.SearchInts(validLines, line)
+	if idx < len(validLines) && validLines[idx] == line {
+		return line
+	}
+
+	// Find nearest
+	best := validLines[0]
+	bestDist := int(math.Abs(float64(line - best)))
+
+	if idx < len(validLines) {
+		d := int(math.Abs(float64(line - validLines[idx])))
+		if d < bestDist {
+			best = validLines[idx]
+			bestDist = d
+		}
+	}
+	if idx > 0 {
+		d := int(math.Abs(float64(line - validLines[idx-1])))
+		if d < bestDist {
+			best = validLines[idx-1]
+		}
+	}
+
+	return best
+}
 
 type GitHubClient struct {
 	client *github.Client
@@ -35,13 +138,16 @@ func NewGitHubClient(ctx context.Context, token, owner, repo string) *GitHubClie
 // It tries to group them into a single review if possible, or posts individual comments.
 // PostReview posts the review comments to the PR.
 // It matches the robustness of the SaaS backend by implementing a fallback strategy.
-func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string) error {
+func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string, diff string) error {
 	if result == nil {
 		return nil
 	}
 
+	// Pre-compute valid diff lines for line snapping
+	validLines := extractValidDiffLines(diff)
+
 	// 1. Try Batched Review (Best for UI/Noise)
-	err := g.postBatchedReview(ctx, prNumber, result, commitSHA)
+	err := g.postBatchedReview(ctx, prNumber, result, commitSHA, validLines)
 	if err == nil {
 		return nil
 	}
@@ -84,12 +190,31 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 			continue
 		}
 
+		// Snap line number to nearest valid diff line
+		snappedLine := c.Line
+		if fileLines, ok := validLines[c.File]; ok {
+			snappedLine = snapToValidLine(c.Line, fileLines)
+			if snappedLine == 0 {
+				fmt.Printf("  ⚠️ No valid diff lines for %s — posting as general comment\n", c.File)
+				fallbackMsg := fmt.Sprintf("⚠️ **Review comment for %s:L%d** (line not in diff)\n\n**[%s]** %s\n\n%s",
+					c.File, c.Line, strings.ToUpper(c.Severity), c.Layer, c.Message)
+				genErr := g.postGeneralComment(ctx, prNumber, fallbackMsg)
+				if genErr == nil {
+					successCount++
+				}
+				continue
+			}
+			if snappedLine != c.Line {
+				fmt.Printf("  📌 Snapped %s:L%d → L%d (nearest valid diff line)\n", c.File, c.Line, snappedLine)
+			}
+		}
+
 		msg := fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
 
 		comment := &github.PullRequestComment{
 			Body:     github.String(msg),
 			Path:     github.String(c.File),
-			Line:     github.Int(c.Line),
+			Line:     github.Int(snappedLine),
 			Side:     github.String("RIGHT"),
 			CommitID: github.String(commitSHA),
 		}
@@ -142,7 +267,7 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 	return nil
 }
 
-func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string) error {
+func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string, validLines map[string][]int) error {
 	var comments []*github.DraftReviewComment
 	var generalComments []models.ReviewComment
 	for _, c := range result.Comments {
@@ -151,10 +276,22 @@ func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, resu
 			generalComments = append(generalComments, c)
 			continue
 		}
+
+		// Validate and snap line to nearest valid diff line
+		snappedLine := c.Line
+		if fileLines, ok := validLines[c.File]; ok {
+			snappedLine = snapToValidLine(c.Line, fileLines)
+			if snappedLine == 0 {
+				// No valid diff lines for this file — post as general
+				generalComments = append(generalComments, c)
+				continue
+			}
+		}
+
 		msg := fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
 		comments = append(comments, &github.DraftReviewComment{
 			Path: github.String(c.File),
-			Line: github.Int(c.Line),
+			Line: github.Int(snappedLine),
 			Body: github.String(msg),
 		})
 	}
