@@ -385,6 +385,8 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 			b.WriteString("\n────────────────────────────────────────\n")
 			b.WriteString(fmt.Sprintf("DIFF HUNKS FOR: %s (ANALYZE THESE CHANGES)\n", path))
 			b.WriteString("────────────────────────────────────────\n")
+			b.WriteString("LEGEND: '-' = DELETED (old code, gone). '+' = ADDED (new code, review this).\n")
+			b.WriteString("Do NOT flag a '+' line for a problem that only existed in its '-' counterpart.\n\n")
 			for i, section := range diffSections {
 				b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s\n*/\n\n", i+1, section))
 			}

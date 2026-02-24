@@ -60,17 +60,23 @@ runs:
       run: |
         echo "🔍 Validating inputs..."
         
-        # Priority: explicit input -> org-wide default -> environment variable
+        # Multi-level API key resolution (this is why gemini_api_key is required: false):
+        #   1st: Explicit input via 'with: gemini_api_key' (per-repo override)
+        #   2nd: ORG_DEFAULT_GEMINI_KEY secret (org-wide default, set on this action's repo)
+        #   3rd: GEMINI_API_KEY env var (legacy fallback)
+        # We only fail if ALL THREE are missing.
         RESOLVED_API_KEY="${GEMINI_API_KEY_INPUT:-${ORG_DEFAULT_GEMINI_KEY:-$GEMINI_API_KEY}}"
         RESOLVED_TOKEN="${GITHUB_TOKEN_INPUT:-$GITHUB_TOKEN}"
         
         if [ -n "$RESOLVED_API_KEY" ]; then
-          echo "✅ API Key detected (starts with: ${RESOLVED_API_KEY:0:4}...)"
+          echo "✅ API Key resolved (starts with: ${RESOLVED_API_KEY:0:4}...)"
         else
-          echo "❌ Error: GEMINI_API_KEY is missing."
-          echo "Please ensure you either:"
-          echo "1. Pass it explicitly in the 'with:' block (gemini_api_key: \${{ secrets.GEMINI_API_KEY }})"
-          echo "2. Set a default ORG_DEFAULT_GEMINI_KEY secret in the action repository"
+          echo "❌ Error: No Gemini API key found in any of the 3 sources."
+          echo "Checked (in order): inputs.gemini_api_key → secrets.ORG_DEFAULT_GEMINI_KEY → env.GEMINI_API_KEY"
+          echo ""
+          echo "Fix: Set one of the following:"
+          echo "  Option A: Add ORG_DEFAULT_GEMINI_KEY secret to this action's repository (recommended)"
+          echo "  Option B: Pass gemini_api_key explicitly: gemini_api_key: \${{ secrets.GEMINI_API_KEY }}"
           exit 1
         fi
 
