@@ -73,6 +73,17 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 			time.Sleep(2 * time.Second)
 		}
 
+		// Skip comments with invalid line numbers — post as general comment instead
+		if c.Line <= 0 {
+			fmt.Printf("  ⚠️ Skipping inline comment on %s:L%d (invalid line) — posting as general comment\n", c.File, c.Line)
+			fallbackMsg := fmt.Sprintf("⚠️ **Review comment for %s** (could not resolve line number)\n\n**[%s]** %s\n\n%s", c.File, strings.ToUpper(c.Severity), c.Layer, c.Message)
+			genErr := g.postGeneralComment(ctx, prNumber, fallbackMsg)
+			if genErr == nil {
+				successCount++
+			}
+			continue
+		}
+
 		msg := fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
 
 		comment := &github.PullRequestComment{
@@ -133,13 +144,26 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 
 func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string) error {
 	var comments []*github.DraftReviewComment
+	var generalComments []models.ReviewComment
 	for _, c := range result.Comments {
+		// Skip invalid lines — collect for general comment posting
+		if c.Line <= 0 {
+			generalComments = append(generalComments, c)
+			continue
+		}
 		msg := fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
 		comments = append(comments, &github.DraftReviewComment{
 			Path: github.String(c.File),
 			Line: github.Int(c.Line),
 			Body: github.String(msg),
 		})
+	}
+
+	// Post L0 comments as general comments
+	for _, c := range generalComments {
+		msg := fmt.Sprintf("⚠️ **Review comment for %s** (could not resolve line number)\n\n**[%s]** %s\n\n%s",
+			c.File, strings.ToUpper(c.Severity), c.Layer, c.Message)
+		g.postGeneralComment(ctx, prNumber, msg)
 	}
 
 	if len(comments) == 0 && result.Summary == "" {
