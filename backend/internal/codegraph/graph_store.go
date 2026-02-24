@@ -104,6 +104,7 @@ func BuildFull(ctx context.Context, repoPath string) (*Graph, error) {
 
 	parser := NewParser()
 	g := NewGraph()
+	g.Version = 3
 	g.CommitSHA = GetCurrentCommitSHA(repoPath)
 	g.IndexedAt = time.Now()
 
@@ -155,6 +156,12 @@ func BuildFull(ctx context.Context, repoPath string) (*Graph, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to walk repo: %w", err)
+	}
+
+	// Prune references that don't match any definition in the repo
+	pruned := pruneUnresolvedReferences(g)
+	if pruned > 0 {
+		fmt.Printf("  🧹 [CodeGraph] Pruned %d unresolved references (stdlib/external)\n", pruned)
 	}
 
 	// Build cross-file edges
@@ -210,10 +217,17 @@ func DeltaUpdate(ctx context.Context, g *Graph, repoPath string, changedFiles []
 		fmt.Printf("  📄 %s — %d defs, %d refs (re-parsed)\n", relPath, len(entry.Definitions), len(entry.References))
 	}
 
-	// 4. Rebuild all edges
+	// 4. Prune unresolved references
+	pruned := pruneUnresolvedReferences(g)
+	if pruned > 0 {
+		fmt.Printf("  🧹 [CodeGraph] Pruned %d unresolved references (stdlib/external)\n", pruned)
+	}
+
+	// 5. Rebuild all edges
 	g.Edges = buildEdges(g)
 	g.CommitSHA = GetCurrentCommitSHA(repoPath)
 	g.IndexedAt = time.Now()
+	g.Version = 3
 
 	stats.Edges = len(g.Edges)
 	stats.Duration = time.Since(startTime)
@@ -243,12 +257,21 @@ func parseFileEntry(ctx context.Context, parser *Parser, content []byte, langCon
 		refs = nil
 	}
 
+	// Extract imports for stdlib-aware filtering
+	imports := parser.ExtractImports(root, content, langName)
+
 	// Filter out builtins from references
 	filteredRefs := make([]Reference, 0, len(refs))
 	for _, ref := range refs {
-		if !isBuiltinSymbol(ref.Symbol) {
-			filteredRefs = append(filteredRefs, ref)
+		if isBuiltinSymbol(ref.Symbol) {
+			continue
 		}
+		// Filter method calls that match stdlib package names
+		// e.g., if "fmt" is imported and we see a method_call for "Sprintf", it's likely stdlib
+		if ref.Kind == "method_call" && isLikelyStdlibMethodCall(ref.Symbol, imports, langName) {
+			continue
+		}
+		filteredRefs = append(filteredRefs, ref)
 	}
 
 	// Compute content hash
@@ -259,7 +282,38 @@ func parseFileEntry(ctx context.Context, parser *Parser, content []byte, langCon
 		Language:    langName,
 		Definitions: defs,
 		References:  filteredRefs,
+		Imports:     imports,
 	}, nil
+}
+
+// pruneUnresolvedReferences removes references from the graph that don't match
+// any definition in any file. This eliminates stdlib/external references that
+// slipped past the builtin filter, keeping graph.json clean and compact.
+func pruneUnresolvedReferences(g *Graph) int {
+	// Build global definition index
+	allDefs := make(map[string]struct{})
+	for _, entry := range g.Files {
+		for _, def := range entry.Definitions {
+			allDefs[def.Symbol] = struct{}{}
+		}
+	}
+
+	totalPruned := 0
+	for path, entry := range g.Files {
+		filtered := make([]Reference, 0, len(entry.References))
+		for _, ref := range entry.References {
+			if _, exists := allDefs[ref.Symbol]; exists {
+				filtered = append(filtered, ref)
+			} else {
+				totalPruned++
+			}
+		}
+		if len(filtered) != len(entry.References) {
+			entry.References = filtered
+			g.Files[path] = entry
+		}
+	}
+	return totalPruned
 }
 
 // buildEdges creates cross-file edges by matching references to definitions.

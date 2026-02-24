@@ -85,6 +85,112 @@ func isBuiltinSymbol(symbol string) bool {
 	return builtins[symbol]
 }
 
+// isLikelyStdlibMethodCall checks if a method_call reference is likely calling a
+// stdlib/external function rather than a project-defined function. It cross-references
+// the symbol name against known exports of imported stdlib packages.
+func isLikelyStdlibMethodCall(symbol string, imports []string, langName string) bool {
+	if len(imports) == 0 {
+		return false
+	}
+
+	// Build a set of imported packages for fast lookup
+	importSet := make(map[string]bool, len(imports))
+	for _, imp := range imports {
+		importSet[imp] = true
+		// Also store the package name (last segment) for Go - e.g., "path/filepath" → "filepath"
+		if langName == "go" {
+			parts := strings.Split(imp, "/")
+			importSet[parts[len(parts)-1]] = true
+		}
+	}
+
+	// Map of symbol → packages that export it (Go stdlib).
+	// We only need to check if ANY of the listed packages are imported.
+	goStdlibExports := map[string][]string{
+		// os package
+		"Stat": {"os"}, "Open": {"os"}, "OpenFile": {"os"},
+		"ReadFile": {"os"}, "WriteFile": {"os"}, "MkdirAll": {"os"},
+		"RemoveAll": {"os"}, "Remove": {"os"}, "Rename": {"os"},
+		"MkdirTemp": {"os"}, "CreateTemp": {"os"}, "Getwd": {"os"},
+		"Chdir": {"os"}, "Chmod": {"os"}, "Mkdir": {"os"},
+		"Stdin": {"os"}, "Stdout": {"os"}, "Stderr": {"os"},
+		"IsNotExist": {"os"}, "IsExist": {"os"},
+		// filepath package
+		"Abs": {"filepath"}, "Base": {"filepath"}, "Dir": {"filepath"},
+		"Ext": {"filepath"}, "Walk": {"filepath"}, "Rel": {"filepath"},
+		"ToSlash": {"filepath"}, "FromSlash": {"filepath"},
+		"Match": {"filepath"},
+		// strings package
+		"Fields": {"strings"}, "Repeat": {"strings"},
+		"Index": {"strings"}, "Count": {"strings"}, "Title": {"strings"},
+		"EqualFold": {"strings"}, "Map": {"strings"},
+		"NewReplacer": {"strings"}, "TrimRight": {"strings"},
+		"TrimLeft": {"strings"}, "ReplaceAll": {"strings"},
+		"TrimSuffix": {"strings"}, "TrimPrefix": {"strings"},
+		"Builder": {"strings"},
+		// fmt package
+		"Sscanf": {"fmt"}, "Sscan": {"fmt"},
+		// exec package
+		"Command": {"exec"}, "CommandContext": {"exec"},
+		"CombinedOutput": {"exec"},
+		// io package
+		"Copy": {"io"}, "ReadAll": {"io"}, "NopCloser": {"io"},
+		"Pipe": {"io"}, "LimitReader": {"io"},
+		// net/http package
+		"NewRequest": {"http"}, "StatusText": {"http"},
+		// encoding/json
+		"NewDecoder": {"json"}, "NewEncoder": {"json"},
+		"MarshalIndent": {"json"},
+		// regexp
+		"MustCompile": {"regexp"}, "Compile": {"regexp"},
+		"FindAllStringIndex": {"regexp"}, "FindStringSubmatch": {"regexp"},
+		// sort
+		"Slice": {"sort"}, "SliceStable": {"sort"},
+		// sync
+		"WaitGroup": {"sync"}, "Mutex": {"sync"}, "RWMutex": {"sync"},
+		"Once": {"sync"},
+		// time
+		"Duration": {"time"}, "Ticker": {"time"}, "Timer": {"time"},
+		"Parse": {"time"},
+		// bytes
+		"Buffer": {"bytes"},
+		// encoding/pem
+		"EncodeToMemory": {"pem"}, "Block": {"pem"},
+		// crypto
+		"GenerateKey": {"rsa", "ecdsa", "ed25519"},
+		// context
+		"CancelFunc": {"context"},
+		// strconv
+		"Atoi": {"strconv"}, "Itoa": {"strconv"},
+		"FormatInt": {"strconv"}, "ParseInt": {"strconv"},
+		// reflect
+		"TypeOf": {"reflect"}, "ValueOf": {"reflect"},
+		// errors
+		"As": {"errors"}, "Is": {"errors"}, "Unwrap": {"errors"},
+		// testing
+		"Errorf": {"testing"},
+		// Common interface methods on stdlib types
+		"Mode": {"os"}, "Name": {"os"}, "IsDir": {"os"},
+		"IsRegular": {"os"}, "Size": {"os"}, "ModTime": {"os"},
+		// Misc
+		"Bool": {"flag"}, "IntVar": {"flag"}, "StringVar": {"flag"},
+		"Int":    {"github"}, // also flag
+		"String": {"github"}, // also flag, github.String()
+	}
+
+	if langName == "go" {
+		if pkgs, ok := goStdlibExports[symbol]; ok {
+			for _, pkg := range pkgs {
+				if importSet[pkg] {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 // --- Sort / collection helpers ---
 
 func sortedMapKeys[V any](m map[string]V) []string {
