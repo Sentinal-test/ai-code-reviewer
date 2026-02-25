@@ -1,102 +1,73 @@
 # Cost Analysis (AI Code Reviewer)
 
-This document provides a detailed financial breakdown for operating the AI Code Review system using **Google Gemini 2.5 Flash**.
+This document provides a detailed financial breakdown for operating the AI Code Review system using **Google Gemini 1.5/2.0 Flash**.
 
-## Pricing Model (Gemini 2.5 Flash)
+## Pricing Model (Gemini Flash)
 
-Google's latest efficient model offers high performance at a significantly lower cost point.
+The system is optimized for "Flash" models, which provide a balance of deep reasoning and cost efficiency.
 
 | Model | Input (per 1M tokens) | Output (per 1M tokens) | INR Cost (₹90 per $1) |
 | :--- | :--- | :--- | :--- |
-| **Gemini 2.5 Flash** | $0.10 | $0.40 | ₹9.00 - ₹36.00 |
-
-> [!NOTE]
-> Pricing is calculated based on standard pay-as-you-go rates. Context caching (planned) can further reduce input costs by up to 50% for repetitive codebases.
+| **Gemini 1.5 Flash** | $0.075 | $0.30 | ₹6.75 - ₹27.00 |
+| **Gemini 2.0 Flash** | $0.10 | $0.40 | ₹9.00 - ₹36.00 |
 
 ---
 
-## Token-to-Line Conversion (Heuristics)
+## The Efficiency Stack (How we save tokens)
 
-To make costs more relatable, we use the following standard conversion for source code:
-**1 Line of Code (LOC) ≈ 12 Tokens (Average)**
+Unlike simple review tools, this system uses several optimization layers to keep costs low even for complex PRs.
 
-| Code Volume | Approx. Tokens | USD Cost (Input) | INR Cost (Input) |
-| :--- | :--- | :--- | :--- |
-| 100 Lines | 1,200 | $0.00012 | ₹0.01 |
-| 1,000 Lines | 12,000 | $0.0012 | ₹0.11 |
-| 10,000 Lines | 120,000 | $0.012 | ₹1.08 |
-| 50,000 Lines | 600,000 | $0.06 | ₹5.40 |
-
----
-
-## Understanding "Total Context"
-
-The cost of a review is determined by the "Total Context" sent to the LLM. This is **not limited to changed lines**; it is a cumulative package that includes:
-
-| Context Component | Description | Avg. Token Weight |
+| Strategy | Token Saving | Description |
 | :--- | :--- | :--- |
-| **System Prompt** | Core analysis rules and defect detection logic. | 2,000 - 3,000 |
-| **Repo Structure** | Complete file tree of the project for architecture context. | 1,000 - 5,000 |
-| **PR Metadata** | Title, description, and recent commit messages. | 500 - 1,500 |
-| **Git Diff** | The raw code changes being reviewed. | Variable |
-| **Changed Files** | Entire content of modified files (to provide full context). | High |
-| **Scout Dependencies** | External files identified by the Scout Pass as relevant. | Variable |
+| **Code Graph (Slim Deps)** | **~90%** | Instead of full files, we send a compact symbol index. Agents only fetch code via tools IF needed. |
+| **Diff-Only Mode** | **Critical** | For files >180k tokens, we only send imports + ±50 lines around changes, preventing "Out of Memory" errors and massive bills. |
+| **Smart Chunking** | **~30%** | Groups related files together to avoid redundant system prompt overhead. |
 
 ---
 
-## Two-Pass Analysis Architecture (Additive Model)
+## Multi-Agent Cost Multiplier
 
-The system operates in two distinct phases. Note that the **Review Pass** context is significantly larger because it inherits the findings from the Scout Pass.
+The system uses a **Parallel Specialist Architecture**. Every review involves 4 LLM calls:
+1.  **🐛 Correctness Agent**: Focuses on bugs and performance.
+2.  **🔐 Security Agent**: Focuses on vulnerabilities and secrets.
+3.  **🏗️ Structure Agent**: Focuses on patterns and architecture.
+4.  **🔄 Consolidator**: Intelligent LLM merge to remove noise and false positives.
 
-1.  **Scout Pass (Context Gathering)**:
-    - Scans the Diff + Repo Structure + Metadata.
-    - **Goal**: Identify which 5-10 external files (dependencies/interfaces) are needed for a perfect review.
-2.  **Review Pass (Deep Analysis)**:
-    - Scans everything from the Scout Pass **PLUS** the full content of all identified dependencies.
-    - **Goal**: Generate high-precision feedback based on complete cross-file understanding.
+**Heuristic**: Total PR Cost = `(3 * Specialist_Context) + Consolidator_Context`.
 
 ---
 
 ## Cost Scenarios (Per Pull Request)
 
-These scenarios reflect the **inclusive** nature of the context (Prompts + Metadata + Files).
+Prices below are calculated using **Gemini 2.0 Flash** rates (higher bound).
 
-### Scenario A: Small PR (Hotfix/Refactor)
-*   **Description**: 1-3 files changed, minimal dependencies.
-*   **Total Context Volume**: ~15,000 Tokens (~1,250 Lines)
-*   **Breakdown**:
-    *   **Scout**: 5k In (Prompts + Structure + Diff)
-    *   **Review**: 10k In (Scout Context + Full Modified Files)
-*   **Cost**: $0.0015 (In) + $0.00024 (Out) = **$0.00174 (₹0.16)**
+### Scenario A: Small PR (Hotfix/Minor Change)
+*   **Description**: < 5 files changed, minimal dependencies.
+*   **Context Volume**: ~5k tokens per agent.
+*   **Total Cost**: **₹0.20 per PR**
 
 ### Scenario B: Medium PR (New Feature)
-*   **Description**: 5-15 files changed, requires cross-file type validation.
-*   **Total Context Volume**: ~80,000 Tokens (~6,600 Lines)
-*   **Breakdown**:
-    *   **Scout**: 20k In (Larger Structure + Complex Diff)
-    *   **Review**: 60k In (Scout Context + 8-10 Dependency Files identified by Scout)
-*   **Cost**: $0.008 (In) + $0.00048 (Out) = **$0.00848 (₹0.76)**
+*   **Description**: 5-15 files, cross-file logic.
+*   **Context Volume**: ~20k tokens per agent + Code Graph usage.
+*   **Total Cost**: **₹1.80 per PR**
 
-### Scenario C: Large PR (Architecture Update)
-*   **Description**: 30+ files, heavy framework utilization.
-*   **Total Context Volume**: ~400,000 Tokens (~33,000 Lines)
-*   **Breakdown**:
-    *   **Scout**: 100k In (Extensive structure + Deep metadata)
-    *   **Review**: 300k In (Scout Context + Full System Specs + Heavy Dependencies)
-*   **Cost**: $0.04 (In) + $0.0012 (Out) = **$0.0412 (₹3.71)**
+### Scenario C: Large / Oversized PR (Architecture Shift)
+*   **Description**: 30+ files or massive generated files.
+*   **Context Volume**: ~100k tokens (capped by Diff-Only mode).
+*   **Total Cost**: **₹8.50 per PR**
 
 ---
 
-## Estimated Monthly Budget
+## Monthly Budget Projection
 
-Based on a team of **10 developers** performing **1000 PRs per month**.
+Based on a team of **10 developers** performing **1,000 PRs per month** (Mix: 60% Small, 30% Medium, 10% Large).
 
-| PR Complexity | Volume (Mix) | Cost per PR (INR) | Monthly Total (INR) |
+| PR Mix | Count | Cost per PR (INR) | Monthly Total (INR) |
 | :--- | :--- | :--- | :--- |
-| **Small** | 600 (60%) | ₹0.16 | ₹96 |
-| **Medium** | 300 (30%) | ₹0.76 | ₹228 |
-| **Large** | 100 (10%) | ₹3.71 | ₹371 |
-| **TOTAL** | **1000 PRs** | -- | **₹695** |
+| **Small** | 600 | ₹0.20 | ₹120 |
+| **Medium** | 300 | ₹1.80 | ₹540 |
+| **Large** | 100 | ₹8.50 | ₹850 |
+| **TOTAL** | **1,000 PRs** | -- | **₹1,510** |
 
 > [!IMPORTANT]
-> **Operational Efficiency**: The total cost to support a 10-person dev team is approximately **₹700 per month**. This covers the entire system overhead, including dependency analysis and full repository context mapping.
+> **Operational ROI**: Supporting a 10-person dev team costs approximately **₹1,500/month**. Compared to the manual time spent catching duplicate bugs or security flaws, the system pays for itself in just minutes of human-time saved.
