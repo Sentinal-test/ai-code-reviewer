@@ -52,7 +52,8 @@ runs:
       shell: bash
       env:
         GEMINI_API_KEY_INPUT: ${{ inputs.gemini_api_key }}
-        ORG_DEFAULT_GEMINI_KEY: ${{ secrets.ORG_DEFAULT_GEMINI_KEY }} # Optional Org-wide default
+        # Map the Org-level secret (named GEMINI_API_KEY by user) to an internal name
+        ORG_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         GITHUB_TOKEN_INPUT: ${{ inputs.github_token }}
         PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         BASE_REF_INPUT: ${{ inputs.base_ref }}
@@ -60,23 +61,19 @@ runs:
       run: |
         echo "🔍 Validating inputs..."
         
-        # Multi-level API key resolution (this is why gemini_api_key is required: false):
-        #   1st: Explicit input via 'with: gemini_api_key' (per-repo override)
-        #   2nd: ORG_DEFAULT_GEMINI_KEY secret (org-wide default, set on this action's repo)
-        #   3rd: GEMINI_API_KEY env var (legacy fallback)
-        # We only fail if ALL THREE are missing.
-        RESOLVED_API_KEY="${GEMINI_API_KEY_INPUT:-${ORG_DEFAULT_GEMINI_KEY:-$GEMINI_API_KEY}}"
+        # Multi-level API key resolution:
+        #   1st: Explicit input via 'with: gemini_api_key'
+        #   2nd: Organization-level GEMINI_API_KEY secret
+        #   3rd: Runner's GEMINI_API_KEY environment variable
+        
+        RESOLVED_API_KEY="${GEMINI_API_KEY_INPUT:-${ORG_GEMINI_API_KEY:-$GEMINI_API_KEY}}"
         RESOLVED_TOKEN="${GITHUB_TOKEN_INPUT:-$GITHUB_TOKEN}"
         
         if [ -n "$RESOLVED_API_KEY" ]; then
           echo "✅ API Key resolved (starts with: ${RESOLVED_API_KEY:0:4}...)"
         else
-          echo "❌ Error: No Gemini API key found in any of the 3 sources."
-          echo "Checked (in order): inputs.gemini_api_key → secrets.ORG_DEFAULT_GEMINI_KEY → env.GEMINI_API_KEY"
-          echo ""
-          echo "Fix: Set one of the following:"
-          echo "  Option A: Add ORG_DEFAULT_GEMINI_KEY secret to this action's repository (recommended)"
-          echo "  Option B: Pass gemini_api_key explicitly: gemini_api_key: \${{ secrets.GEMINI_API_KEY }}"
+          echo "❌ Error: No Gemini API key found."
+          echo "Checked: inputs.gemini_api_key -> secrets.GEMINI_API_KEY -> env.GEMINI_API_KEY"
           exit 1
         fi
 
