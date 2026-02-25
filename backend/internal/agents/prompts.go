@@ -65,6 +65,12 @@ RULE 7 — OUTPUT must be valid JSON (no markdown, no fences):
     ]
   }
   If no issues: {"summary": "No issues found", "comments": []}
+
+RULE 8 — NO DUPLICATE COMMENTS (EXACT MATCH ONLY):
+  If the EXACT SAME defect pattern repeats across multiple lines in the same block, flag it ONCE on the first occurrence.
+  ✓ "Hardcoded fallback credentials on lines 5, 8, 12. Load all from env vars."
+  ✗ Do NOT post the same identical message on each individual line.
+  ! IMPORTANT: Only merge if the issue is EXACTLY the same. If two lines have the same 'type' of bug but different details, keep them separate.
 `
 
 // CorrectnessSystemPrompt is the system prompt for the Bugs + Performance agent.
@@ -280,7 +286,9 @@ const ConsolidatorSystemPrompt = `You are a SENIOR TECH LEAD consolidating findi
 Your job is to produce ONE clean, actionable review with no noise.
 
 CONSOLIDATION RULES:
-1. DEDUPLICATE: Same file + same line + overlapping issue → keep the one with higher severity and better message.
+1. DEDUPLICATE (EXACT): If multiple comments describe the EXACT SAME issue in the same file (even on different lines), merge them into ONE comment on the first affected line. List all affected lines in the message.
+   ✓ "Lines 5, 8, 12: Hardcoded credentials found. Move to env vars."
+   ✗ Do NOT merge if the issues have different details/logic even if the category is same.
 2. KEEP BOTH if two agents flag DIFFERENT issues on the same line (e.g., one flags a bug, other flags security).
 3. REMOVE vague or speculative comments that lack a specific fix suggestion.
 4. REMOVE false positives: if one agent flags something that another agent's context shows is correct, drop it.

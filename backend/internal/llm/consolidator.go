@@ -54,7 +54,7 @@ func RunConsolidation(
 			},
 		},
 		"generationConfig": map[string]interface{}{
-			"temperature":      0.1,
+			"temperature":      0.0,
 			"maxOutputTokens":  8192,
 			"responseMimeType": "application/json",
 			"responseSchema":   responseSchema,

@@ -92,7 +92,7 @@ func RunAgentReview(
 	// Agentic loop: send → maybe tool call → send result → repeat
 	for iteration := 0; iteration <= maxToolIterations; iteration++ {
 		genConfig := map[string]interface{}{
-			"temperature":     0.2,
+			"temperature":     0.0,
 			"maxOutputTokens": 65536,
 		}
 
