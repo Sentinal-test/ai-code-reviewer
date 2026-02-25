@@ -271,7 +271,7 @@ func main() {
 		fmt.Sscanf(prNumber, "%d", &prNum)
 
 		ghClient := action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
-		if err := ghClient.PostReview(ctx, prNum, result, commitSHA); err != nil {
+		if err := ghClient.PostReview(ctx, prNum, result, commitSHA, diff); err != nil {
 			fmt.Printf("❌ Failed to post review: %v\n", err)
 			os.Exit(1)
 		}

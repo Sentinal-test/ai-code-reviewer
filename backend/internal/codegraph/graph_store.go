@@ -14,6 +14,35 @@ import (
 
 const graphFileName = "graph.json"
 
+// skipDirs contains directories to exclude from graph indexing.
+// Covers common non-project directories across all supported languages:
+//   - Go:      vendor, testdata
+//   - Python:  __pycache__, .venv, venv, site-packages
+//   - JS/TS:   node_modules, dist, build, .next, coverage
+//   - Java:    target, .gradle, .mvn, out
+//   - General: datasets, fixtures, test_data, examples
+var skipDirs = map[string]bool{
+	// General build/dependency dirs
+	"vendor": true, "node_modules": true, "dist": true, "build": true,
+
+	// Go
+	"testdata": true,
+
+	// Python
+	"__pycache__": true, "venv": true, "site-packages": true,
+	".eggs": true, ".tox": true,
+
+	// JavaScript / TypeScript
+	".next": true, "coverage": true, ".nuxt": true, ".output": true,
+
+	// Java
+	"target": true, "out": true,
+
+	// Test/fixture data (all langs)
+	"datasets": true, "fixtures": true, "test_data": true,
+	"__tests__": true, "__mocks__": true, "__snapshots__": true,
+}
+
 // SaveGraph serializes the graph to a JSON file in the given directory.
 func SaveGraph(g *Graph, dir string) error {
 	if g == nil {
@@ -75,6 +104,7 @@ func BuildFull(ctx context.Context, repoPath string) (*Graph, error) {
 
 	parser := NewParser()
 	g := NewGraph()
+	g.Version = 3
 	g.CommitSHA = GetCurrentCommitSHA(repoPath)
 	g.IndexedAt = time.Now()
 
@@ -83,10 +113,10 @@ func BuildFull(ctx context.Context, repoPath string) (*Graph, error) {
 			return nil // skip errors
 		}
 
-		// Skip hidden dirs, vendor, node_modules, .git
+		// Skip hidden dirs and common non-project directories across all supported languages
 		if info.IsDir() {
 			name := info.Name()
-			if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "dist" || name == "build" {
+			if strings.HasPrefix(name, ".") || skipDirs[name] {
 				return filepath.SkipDir
 			}
 			return nil
@@ -126,6 +156,12 @@ func BuildFull(ctx context.Context, repoPath string) (*Graph, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to walk repo: %w", err)
+	}
+
+	// Prune references that don't match any definition in the repo
+	pruned := pruneUnresolvedReferences(g)
+	if pruned > 0 {
+		fmt.Printf("  🧹 [CodeGraph] Pruned %d unresolved references (stdlib/external)\n", pruned)
 	}
 
 	// Build cross-file edges
@@ -181,10 +217,17 @@ func DeltaUpdate(ctx context.Context, g *Graph, repoPath string, changedFiles []
 		fmt.Printf("  📄 %s — %d defs, %d refs (re-parsed)\n", relPath, len(entry.Definitions), len(entry.References))
 	}
 
-	// 4. Rebuild all edges
+	// 4. Prune unresolved references
+	pruned := pruneUnresolvedReferences(g)
+	if pruned > 0 {
+		fmt.Printf("  🧹 [CodeGraph] Pruned %d unresolved references (stdlib/external)\n", pruned)
+	}
+
+	// 5. Rebuild all edges
 	g.Edges = buildEdges(g)
 	g.CommitSHA = GetCurrentCommitSHA(repoPath)
 	g.IndexedAt = time.Now()
+	g.Version = 3
 
 	stats.Edges = len(g.Edges)
 	stats.Duration = time.Since(startTime)
@@ -214,12 +257,21 @@ func parseFileEntry(ctx context.Context, parser *Parser, content []byte, langCon
 		refs = nil
 	}
 
+	// Extract imports for stdlib-aware filtering
+	imports := parser.ExtractImports(root, content, langName)
+
 	// Filter out builtins from references
 	filteredRefs := make([]Reference, 0, len(refs))
 	for _, ref := range refs {
-		if !isBuiltinSymbol(ref.Symbol) {
-			filteredRefs = append(filteredRefs, ref)
+		if isBuiltinSymbol(ref.Symbol) {
+			continue
 		}
+		// Filter method calls that match stdlib package names
+		// e.g., if "fmt" is imported and we see a method_call for "Sprintf", it's likely stdlib
+		if ref.Kind == "method_call" && isLikelyStdlibMethodCall(ref.Symbol, imports, langName) {
+			continue
+		}
+		filteredRefs = append(filteredRefs, ref)
 	}
 
 	// Compute content hash
@@ -230,20 +282,62 @@ func parseFileEntry(ctx context.Context, parser *Parser, content []byte, langCon
 		Language:    langName,
 		Definitions: defs,
 		References:  filteredRefs,
+		Imports:     imports,
 	}, nil
 }
 
+// pruneUnresolvedReferences removes references from the graph that don't match
+// any definition in any file. This eliminates stdlib/external references that
+// slipped past the builtin filter, keeping graph.json clean and compact.
+func pruneUnresolvedReferences(g *Graph) int {
+	// Build global definition index
+	allDefs := make(map[string]struct{})
+	for _, entry := range g.Files {
+		for _, def := range entry.Definitions {
+			allDefs[def.Symbol] = struct{}{}
+		}
+	}
+
+	totalPruned := 0
+	for path, entry := range g.Files {
+		filtered := make([]Reference, 0, len(entry.References))
+		for _, ref := range entry.References {
+			if _, exists := allDefs[ref.Symbol]; exists {
+				filtered = append(filtered, ref)
+			} else {
+				totalPruned++
+			}
+		}
+		if len(filtered) != len(entry.References) {
+			entry.References = filtered
+			g.Files[path] = entry
+		}
+	}
+	return totalPruned
+}
+
 // buildEdges creates cross-file edges by matching references to definitions.
+// Uses an automatic frequency-based filter to skip generic symbol names:
+// if a symbol is defined in 3+ files, it's too generic to create meaningful edges.
 func buildEdges(g *Graph) []Edge {
 	// Build definition index: symbol -> file path
+	// Also count how many files define each symbol (frequency filter).
 	defIndex := make(map[string]string)
+	defFrequency := make(map[string]int) // symbol -> number of files defining it
 	for path, entry := range g.Files {
 		for _, def := range entry.Definitions {
+			defFrequency[def.Symbol]++
 			if _, exists := defIndex[def.Symbol]; !exists {
 				defIndex[def.Symbol] = path
 			}
 		}
 	}
+
+	// Automatic noise filter: skip symbols defined in 3+ files.
+	// These are generic names like "String", "Close", "Error", "main"
+	// that create meaningless cross-file edges.
+	const maxDefFrequency = 3
+	var skippedNoisy int
 
 	// Build edges: for each file's references, find the definition file
 	var edges []Edge
@@ -254,6 +348,13 @@ func buildEdges(g *Graph) []Edge {
 			if !ok || toPath == fromPath {
 				continue
 			}
+
+			// Skip generic symbols defined in many files
+			if defFrequency[ref.Symbol] >= maxDefFrequency {
+				skippedNoisy++
+				continue
+			}
+
 			key := fromPath + "\x00" + toPath + "\x00" + ref.Symbol
 			if _, exists := seen[key]; exists {
 				continue
@@ -266,6 +367,11 @@ func buildEdges(g *Graph) []Edge {
 				Relation: relationForReferenceKind(ref.Kind),
 			})
 		}
+	}
+
+	if skippedNoisy > 0 {
+		fmt.Printf("  🔇 [CodeGraph] Filtered %d noisy edges (symbols defined in %d+ files)\n",
+			skippedNoisy, maxDefFrequency)
 	}
 	return edges
 }

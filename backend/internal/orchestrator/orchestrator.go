@@ -55,7 +55,7 @@ func filterReviewableFiles(files map[string]string) map[string]string {
 }
 
 // ReviewChunk runs 3 specialist agents in parallel on a single chunk,
-// then consolidates their results.
+// then consolidates their results using LLM-based consolidation.
 func ReviewChunk(
 	ctx context.Context,
 	client *http.Client,
@@ -86,33 +86,73 @@ func ReviewChunk(
 			len(chunkFiles)-len(reviewableFiles), len(reviewableFiles))
 	}
 
-	// Build the base config shared by all agents
-	base := agents.AgentConfig{
-		ChangedFiles:  reviewableFiles,
-		Diff:          chunkDiff,
-		Dependencies:  dependencies,
-		RepoStructure: repoStructure,
-		PRContext:     prContext,
-		CrossRefs:     crossRefs,
-		ChunkIndex:    chunkIndex,
-		ChunkTotal:    chunkTotal,
-		APIKey:        apiKey,
-		RepoPath:      repoPath,
+	// Build SLIM dependency index for Correctness and Security agents.
+	slimDeps := codegraph.BuildSlimDependencyIndex(dependencies)
+
+	// Logging: Show exactly what was built for the code-graph context
+	fmt.Printf("\n🔍 [CodeGraph] Differentiated Context Summary:\n")
+	fmt.Printf("   ├─ Full Dependencies: %d files\n", len(dependencies))
+	fmt.Printf("   └─ Slim Index: %d entries\n", len(slimDeps))
+	for k, v := range slimDeps {
+		if strings.HasPrefix(k, "_codegraph/") {
+			fmt.Printf("      📎 %s (%d chars)\n", k, len(v))
+			if k == "_codegraph/dependency_index" {
+				// Show the first few lines of the index
+				lines := strings.Split(v, "\n")
+				for i, line := range lines {
+					if i > 5 {
+						fmt.Printf("         ... (%d more lines)\n", len(lines)-i)
+						break
+					}
+					fmt.Printf("       | %s\n", line)
+				}
+			}
+		}
 	}
+
+	// Build shared fields
+	shared := agents.AgentConfig{
+		ChangedFiles: reviewableFiles,
+		Diff:         chunkDiff,
+		PRContext:    prContext,
+		CrossRefs:    crossRefs,
+		ChunkIndex:   chunkIndex,
+		ChunkTotal:   chunkTotal,
+		APIKey:       apiKey,
+		RepoPath:     repoPath,
+	}
+
+	// Build per-agent configs with DIFFERENTIATED context:
+	//   🐛 Correctness: slim deps (encourages tool usage), NO repo structure
+	//   🔐 Security:    slim deps (encourages tool usage), NO repo structure
+	//   🏗️ Structure:   NO deps (uses tools), FULL repo structure
+	correctnessConfig := shared
+	correctnessConfig.Dependencies = slimDeps
+	correctnessConfig.RepoStructure = "" // Correctness doesn't need repo tree
+
+	securityConfig := shared
+	securityConfig.Dependencies = slimDeps
+	securityConfig.RepoStructure = "" // Security doesn't need repo tree
+
+	structureConfig := shared
+	structureConfig.Dependencies = nil            // Structure uses tools for code details
+	structureConfig.RepoStructure = repoStructure // Structure needs the repo tree
 
 	// Create tool executor for agent tool calls
 	toolExecutor := llm.NewToolExecutor(repoPath, graph)
 
 	// Prepare the 3 specialist configs
 	configs := []agents.AgentConfig{
-		agents.CorrectnessAgent(base),
-		agents.SecurityAgent(base),
-		agents.StructureAgent(base),
+		agents.CorrectnessAgent(correctnessConfig),
+		agents.SecurityAgent(securityConfig),
+		agents.StructureAgent(structureConfig),
 	}
 
 	fmt.Printf("\n🚀 [Orchestrator] Chunk %d/%d — launching 3 specialist agents in parallel\n", chunkIndex, chunkTotal)
-	fmt.Printf("   📁 Files: %d | 🔗 Dependencies: %d | 📝 Diff: %d chars\n",
+	fmt.Printf("   📁 Files: %d | 🔗 Full Deps: %d | 📝 Diff: %d chars\n",
 		len(chunkFiles), len(dependencies), len(chunkDiff))
+	fmt.Printf("   🐛 Correctness: slim deps (%d entries) | 🔐 Security: slim deps (%d entries) | 🏗️ Structure: repo tree (%d chars)\n",
+		len(slimDeps), len(slimDeps), len(repoStructure))
 
 	// Fan-out: launch all 3 agents in parallel goroutines
 	results := make([]agents.AgentResult, len(configs))
@@ -147,10 +187,10 @@ func ReviewChunk(
 	fmt.Printf("🔄 [Orchestrator] Consolidating %d comments from 3 agents (%.1fs total, %d tool calls)\n",
 		totalComments, elapsed.Seconds(), totalToolCalls)
 
-	// Consolidate all agent results
-	consolidated := agents.Consolidate(results, agents.DefaultMaxComments)
+	// LLM-based consolidation (falls back to deterministic on failure)
+	consolidated := llm.RunConsolidation(ctx, client, results, agents.DefaultMaxComments, apiKey)
 
-	fmt.Printf("✅ [Orchestrator] Final: %d comments after dedup + cap\n", len(consolidated.Comments))
+	fmt.Printf("✅ [Orchestrator] Final: %d comments after consolidation\n", len(consolidated.Comments))
 
 	return consolidated, nil
 }

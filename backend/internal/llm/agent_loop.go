@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"code-review/backend/internal/agents"
+	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/models"
 	"context"
 	"encoding/json"
@@ -91,7 +92,7 @@ func RunAgentReview(
 	// Agentic loop: send → maybe tool call → send result → repeat
 	for iteration := 0; iteration <= maxToolIterations; iteration++ {
 		genConfig := map[string]interface{}{
-			"temperature":     0.2,
+			"temperature":     0.0,
 			"maxOutputTokens": 65536,
 		}
 
@@ -260,7 +261,7 @@ func RunAgentReview(
 						},
 					},
 					map[string]interface{}{
-						"role": "user",
+						"role": "function",
 						"parts": []map[string]interface{}{
 							{
 								"functionResponse": map[string]interface{}{
@@ -359,12 +360,24 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 
 	for _, path := range getFileKeys(config.ChangedFiles) {
 		content := config.ChangedFiles[path]
+		fileTokens := len(content) / 4
 		b.WriteString(fmt.Sprintf("\n═══ FILE: %s ═══\n", path))
 
-		// Full file content with line numbers (for context)
-		lines := strings.Split(content, "\n")
-		for i, line := range lines {
-			b.WriteString(fmt.Sprintf("%d: %s\n", i+1, line))
+		if fileTokens > chunker.DefaultTokenBudget {
+			// OVERSIZED FILE: Send imports + diff context only
+			fmt.Printf("  ⚠️ [%s] Oversized file detected: %s (%d tokens > %d budget). Using diff-only mode.\n",
+				config.Type, path, fileTokens, chunker.DefaultTokenBudget)
+			b.WriteString(fmt.Sprintf("[OVERSIZED FILE — %d tokens, showing imports + ±50 lines around each change]\n", fileTokens))
+			b.WriteString("[Use get_file_content tool to inspect other sections if needed]\n\n")
+			diffSections := diffMap[path]
+			focused := extractDiffWithContext(content, diffSections, 50)
+			b.WriteString(focused)
+		} else {
+			// Normal: Full file content with line numbers (for context)
+			lines := strings.Split(content, "\n")
+			for i, line := range lines {
+				b.WriteString(fmt.Sprintf("%d: %s\n", i+1, line))
+			}
 		}
 
 		// Inline diff hunks for this file (shows what actually changed)
@@ -372,6 +385,8 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 			b.WriteString("\n────────────────────────────────────────\n")
 			b.WriteString(fmt.Sprintf("DIFF HUNKS FOR: %s (ANALYZE THESE CHANGES)\n", path))
 			b.WriteString("────────────────────────────────────────\n")
+			b.WriteString("LEGEND: '-' = DELETED (old code, gone). '+' = ADDED (new code, review this).\n")
+			b.WriteString("Do NOT flag a '+' line for a problem that only existed in its '-' counterpart.\n\n")
 			for i, section := range diffSections {
 				b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s\n*/\n\n", i+1, section))
 			}
@@ -380,6 +395,7 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 
 	// Dependencies (from code graph)
 	if len(config.Dependencies) > 0 {
+		depStart := b.Len()
 		b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
 		b.WriteString("SUPPORTING CONTEXT: Code Graph Dependencies\n")
 		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
@@ -388,6 +404,9 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 		for _, path := range getFileKeys(config.Dependencies) {
 			b.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", path, config.Dependencies[path]))
 		}
+		depEnd := b.Len()
+		fmt.Printf("   📝 [%s] Code-Graph Context: %d chars (~%d tokens)\n",
+			config.Type, depEnd-depStart, (depEnd-depStart)/4)
 	}
 
 	// Repo structure (mainly for Structure agent)

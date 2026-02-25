@@ -3,6 +3,7 @@ package codegraph
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
 )
@@ -13,8 +14,8 @@ type Parser struct {
 }
 
 type Reference struct {
-	Symbol string
-	Kind   string
+	Symbol string `json:"symbol"`
+	Kind   string `json:"kind"`
 }
 
 func NewParser() *Parser {
@@ -283,7 +284,7 @@ func (p *Parser) ExtractDefinitionEntries(root *sitter.Node, content []byte, lan
 				}
 				seen[symbol] = struct{}{}
 
-				// Get snippet from parent node
+				// Get the parent node to compute the end line of the full definition
 				parent := node.Parent()
 				if parent == nil {
 					parent = node
@@ -295,16 +296,13 @@ func (p *Parser) ExtractDefinitionEntries(root *sitter.Node, content []byte, lan
 					}
 				}
 
-				snippet := parent.Content(content)
-				if len(snippet) > 3000 {
-					snippet = snippet[:3000] + "\n// ... (truncated)"
-				}
+				endLine := int(parent.EndPoint().Row) + 1 // tree-sitter is 0-indexed
 
 				defs = append(defs, Definition{
 					Symbol:  symbol,
 					Kind:    dq.Kind,
-					Line:    int(node.StartPoint().Row) + 1, // tree-sitter is 0-indexed
-					Snippet: snippet,
+					Line:    int(node.StartPoint().Row) + 1,
+					EndLine: endLine,
 				})
 			}
 		}
@@ -407,6 +405,62 @@ func (p *Parser) ExtractDefinitionSnippet(root *sitter.Node, content []byte, lan
 	}
 
 	return "", nil // Not found
+}
+
+// ExtractImports extracts import paths from a source file's AST.
+// Returns a list of import path strings (e.g., "fmt", "os/exec", "code-review/backend/internal/llm").
+func (p *Parser) ExtractImports(root *sitter.Node, content []byte, langName string) []string {
+	var queryStr string
+	switch langName {
+	case "go":
+		queryStr = `(import_spec path: (interpreted_string_literal) @import_path)`
+	case "python":
+		queryStr = `(import_from_statement module_name: (dotted_name) @import_path)`
+	case "javascript", "typescript":
+		queryStr = `(import_statement source: (string) @import_path)`
+	case "java":
+		queryStr = `(import_declaration (scoped_identifier) @import_path)`
+	default:
+		return nil
+	}
+
+	langConfig, ok := SupportedLanguages[langName]
+	if !ok {
+		return nil
+	}
+
+	q, err := sitter.NewQuery([]byte(queryStr), langConfig.Grammar)
+	if err != nil {
+		return nil
+	}
+	defer q.Close()
+
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
+	qc.Exec(q, root)
+
+	var imports []string
+	seen := make(map[string]struct{})
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+		for _, capture := range m.Captures {
+			importPath := capture.Node.Content(content)
+			// Strip quotes from Go/JS/TS imports: "fmt" -> fmt
+			importPath = strings.Trim(importPath, "\"'`")
+			if importPath == "" {
+				continue
+			}
+			if _, exists := seen[importPath]; exists {
+				continue
+			}
+			seen[importPath] = struct{}{}
+			imports = append(imports, importPath)
+		}
+	}
+	return imports
 }
 
 func uniqueStrings(slice []string) []string {

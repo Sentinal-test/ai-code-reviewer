@@ -29,3 +29,5 @@ backend/*.pem
 # Datasets
 datasets/
 docs/prompts
+
+.ai-reviewer/

@@ -18,8 +18,8 @@ func TestSaveAndLoadGraph(t *testing.T) {
 		Hash:     "deadbeef",
 		Language: "go",
 		Definitions: []Definition{
-			{Symbol: "main", Kind: "function", Line: 5, Snippet: "func main() {}"},
-			{Symbol: "Helper", Kind: "function", Line: 10, Snippet: "func Helper() {}"},
+			{Symbol: "main", Kind: "function", Line: 5, EndLine: 5},
+			{Symbol: "Helper", Kind: "function", Line: 10, EndLine: 10},
 		},
 		References: []Reference{
 			{Symbol: "Helper", Kind: "call"},
@@ -240,11 +240,11 @@ func (c *Config) Validate() error {
 
 	assert.Equal(t, "function", defMap["add"].Kind)
 	assert.True(t, defMap["add"].Line > 0)
-	assert.Contains(t, defMap["add"].Snippet, "func add")
+	assert.True(t, defMap["add"].EndLine >= defMap["add"].Line, "EndLine should be >= Line")
 
 	assert.Equal(t, "type", defMap["Config"].Kind)
-	assert.Contains(t, defMap["Config"].Snippet, "Config struct")
+	assert.True(t, defMap["Config"].EndLine > defMap["Config"].Line, "Multi-line type should have EndLine > Line")
 
 	assert.Equal(t, "method", defMap["Validate"].Kind)
-	assert.Contains(t, defMap["Validate"].Snippet, "Validate")
+	assert.True(t, defMap["Validate"].EndLine >= defMap["Validate"].Line)
 }

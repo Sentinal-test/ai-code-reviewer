@@ -125,8 +125,26 @@ func (te *ToolExecutor) getSymbolDefinition(args map[string]interface{}) agents.
 	}
 
 	result := fmt.Sprintf("Symbol: %s\nFile: %s\nKind: %s\nLine: %d\n", symbol, path, def.Kind, def.Line)
-	if def.Snippet != "" {
-		result += fmt.Sprintf("\nSource:\n%s", def.Snippet)
+
+	// Read the actual source from the file using line ranges
+	if def.EndLine > 0 && te.RepoPath != "" {
+		fullPath := filepath.Join(te.RepoPath, path)
+		if content, err := os.ReadFile(fullPath); err == nil {
+			lines := strings.Split(string(content), "\n")
+			startIdx := def.Line - 1
+			endIdx := def.EndLine
+			if startIdx < 0 {
+				startIdx = 0
+			}
+			if endIdx > len(lines) {
+				endIdx = len(lines)
+			}
+			snippet := strings.Join(lines[startIdx:endIdx], "\n")
+			if len(snippet) > 3000 {
+				snippet = snippet[:3000] + "\n// ... (truncated)"
+			}
+			result += fmt.Sprintf("\nSource:\n%s", snippet)
+		}
 	}
 
 	return agents.ToolCallResponse{Name: "get_symbol_definition", Content: result}

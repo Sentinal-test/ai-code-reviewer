@@ -98,30 +98,18 @@ If the review doesn't start, ensure:
 
 ## Code Graph Cache
 
-The AI Reviewer builds a **code graph** on each run to understand cross-file relationships (definitions, references, imports, data flow). This graph is saved to `.ai-reviewer/graph.json` and reused on subsequent PRs for **~2-3x faster** reviews.
+The AI Reviewer builds a **code graph** on each run to understand cross-file relationships (definitions, references, imports, data flow). This graph is saved to `.ai-reviewer/graph.json`.
 
-### How it works
+### Automatic caching (built-in)
 
-| Scenario | Behavior |
-|:---|:---|
-| **First run** (no cache) | Full graph is built by parsing all supported files |
-| **Subsequent runs** (cache hit, same commit) | Graph is loaded instantly from cache |
-| **New commits** (cache stale) | Only changed files are re-parsed (delta update) |
-| **`--no-cache` flag** | Skips cache entirely, forces fresh analysis |
+The graph is **automatically cached** across workflow runs — no setup required. The `action.yml` handles this with `actions/cache`, so on subsequent PRs the reviewer loads the cached graph instead of rebuilding it.
 
-### Recommended: Cache across workflow runs
-
-Add an `actions/cache` step **before** the review step in your workflow to persist the graph across CI runs:
-
-```yaml
-- name: Cache Code Graph
-  uses: actions/cache@v4
-  with:
-    path: .ai-reviewer
-    key: code-graph-${{ github.repository }}-${{ github.base_ref }}
-    restore-keys: |
-      code-graph-${{ github.repository }}-
-```
+| Scenario | Behavior | Speed |
+|:---|:---|:---|
+| **First run** (no cache) | Full graph is built by parsing all files | ~300ms |
+| **Subsequent runs** (cache hit) | Graph is loaded from cache | ~5ms |
+| **New commits** (cache stale) | Only changed files are re-parsed (delta update) | ~50ms |
+| **`--no-cache` flag** | Skips cache entirely, forces fresh analysis | ~300ms |
 
 ### Add to `.gitignore`
 
@@ -131,3 +119,4 @@ The graph file should not be committed:
 # AI Reviewer cache
 .ai-reviewer/
 ```
+

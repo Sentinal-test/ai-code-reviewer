@@ -3,7 +3,7 @@ description: 'AI-powered code review running entirely within GitHub Actions'
 inputs:
   gemini_api_key:
     description: 'Google Gemini API Key'
-    required: true
+    required: false
   github_token:
     description: 'GitHub Token for posting comments'
     required: true
@@ -27,13 +27,32 @@ runs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.24' # Matching go.mod
-        cache-dependency-path: ${{ github.action_path }}/backend/go.sum
+        go-version: '1.24'
+        cache: false
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          go-mod-${{ runner.os }}-
+
+    - name: Cache Code Graph
+      uses: actions/cache@v4
+      with:
+        path: .ai-reviewer
+        key: code-graph-${{ github.repository }}-${{ github.event.pull_request.base.sha }}
+        restore-keys: |
+          code-graph-${{ github.repository }}-
 
     - name: Run AI Reviewer
       shell: bash
       env:
         GEMINI_API_KEY_INPUT: ${{ inputs.gemini_api_key }}
+        ORG_DEFAULT_GEMINI_KEY: ${{ secrets.ORG_DEFAULT_GEMINI_KEY }} # Optional Org-wide default
         GITHUB_TOKEN_INPUT: ${{ inputs.github_token }}
         PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         BASE_REF_INPUT: ${{ inputs.base_ref }}
@@ -41,17 +60,23 @@ runs:
       run: |
         echo "🔍 Validating inputs..."
         
-        # Priority: Input -> Environment Variable
-        RESOLVED_API_KEY="${GEMINI_API_KEY_INPUT:-$GEMINI_API_KEY}"
+        # Multi-level API key resolution (this is why gemini_api_key is required: false):
+        #   1st: Explicit input via 'with: gemini_api_key' (per-repo override)
+        #   2nd: ORG_DEFAULT_GEMINI_KEY secret (org-wide default, set on this action's repo)
+        #   3rd: GEMINI_API_KEY env var (legacy fallback)
+        # We only fail if ALL THREE are missing.
+        RESOLVED_API_KEY="${GEMINI_API_KEY_INPUT:-${ORG_DEFAULT_GEMINI_KEY:-$GEMINI_API_KEY}}"
         RESOLVED_TOKEN="${GITHUB_TOKEN_INPUT:-$GITHUB_TOKEN}"
         
         if [ -n "$RESOLVED_API_KEY" ]; then
-          echo "✅ API Key detected (starts with: ${RESOLVED_API_KEY:0:4}...)"
+          echo "✅ API Key resolved (starts with: ${RESOLVED_API_KEY:0:4}...)"
         else
-          echo "❌ Error: GEMINI_API_KEY is missing."
-          echo "Please ensure you pass it in the 'with:' block:"
-          echo "  with:"
-          echo "    gemini_api_key: \${{ secrets.GEMINI_API_KEY }}"
+          echo "❌ Error: No Gemini API key found in any of the 3 sources."
+          echo "Checked (in order): inputs.gemini_api_key → secrets.ORG_DEFAULT_GEMINI_KEY → env.GEMINI_API_KEY"
+          echo ""
+          echo "Fix: Set one of the following:"
+          echo "  Option A: Add ORG_DEFAULT_GEMINI_KEY secret to this action's repository (recommended)"
+          echo "  Option B: Pass gemini_api_key explicitly: gemini_api_key: \${{ secrets.GEMINI_API_KEY }}"
           exit 1
         fi
 
@@ -61,7 +86,7 @@ runs:
 
         echo "🏗️ Building AI Reviewer..."
         cd "${{ github.action_path }}/backend"
-        go build -v -o ../ai-reviewer cmd/cli/main.go
+        go build -o ../ai-reviewer cmd/cli/main.go
         
         echo "🚀 Running AI Reviewer..."
         cd "${{ github.workspace }}"
@@ -74,5 +99,3 @@ runs:
           --sha "$GITHUB_SHA" \
           --base "$BASE_REF_INPUT" \
           --head "$HEAD_REF_INPUT"
-
-

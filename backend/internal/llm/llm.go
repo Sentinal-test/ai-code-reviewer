@@ -101,6 +101,23 @@ func isDocumentationFile(path string) bool {
 		}
 	}
 
+	// New: Ignore common dependency, build, and meta directories
+	ignoredDirs := []string{
+		"node_modules", "vendor",
+		"dist", "build", "bin", "out", "target",
+		".git", ".ai-reviewer", ".idea", ".vscode",
+	}
+
+	// Check if any part of the path is an ignored directory
+	pathParts := strings.Split(lowerPath, string(filepath.Separator))
+	for _, part := range pathParts {
+		for _, ignored := range ignoredDirs {
+			if part == ignored {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
@@ -171,6 +188,149 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 	}
 
 	return result
+}
+
+// hunkLineRegex extracts the new-file start line and count from a unified diff hunk header.
+var hunkLineRegex = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
+
+// extractDiffWithContext produces a focused view of an oversized file.
+// It includes: (1) the import/package header, (2) ±contextLines around each diff hunk,
+// and (3) "... (lines X-Y omitted) ..." markers between windows.
+func extractDiffWithContext(content string, diffSections []string, contextLines int) string {
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+
+	if totalLines == 0 {
+		return ""
+	}
+
+	// Step 1: Find the end of the import block (package + imports).
+	// We always include this regardless of where changes are.
+	importEnd := 0
+	inImportBlock := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "package ") {
+			importEnd = i
+			continue
+		}
+		if strings.HasPrefix(trimmed, "import (") {
+			inImportBlock = true
+			continue
+		}
+		if inImportBlock {
+			if trimmed == ")" {
+				importEnd = i
+				inImportBlock = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "import ") && !inImportBlock {
+			importEnd = i
+			continue
+		}
+		// Stop scanning after we've passed the header area (first non-blank, non-import line)
+		if importEnd > 0 && trimmed != "" {
+			break
+		}
+	}
+
+	// Step 2: Parse diff sections to find which line ranges changed.
+	type lineRange struct {
+		start, end int // 0-indexed
+	}
+	var changedRanges []lineRange
+
+	for _, section := range diffSections {
+		sectionLines := strings.Split(section, "\n")
+		for _, sl := range sectionLines {
+			matches := hunkLineRegex.FindStringSubmatch(sl)
+			if len(matches) >= 2 {
+				startLine := 0
+				count := 1
+				fmt.Sscanf(matches[1], "%d", &startLine)
+				if len(matches) >= 3 && matches[2] != "" {
+					fmt.Sscanf(matches[2], "%d", &count)
+				}
+				// Convert to 0-indexed and add context window
+				rangeStart := startLine - 1 - contextLines
+				rangeEnd := startLine - 1 + count + contextLines
+				if rangeStart < 0 {
+					rangeStart = 0
+				}
+				if rangeEnd > totalLines {
+					rangeEnd = totalLines
+				}
+				changedRanges = append(changedRanges, lineRange{rangeStart, rangeEnd})
+			}
+		}
+	}
+
+	// If no diff sections found, just return the import block
+	if len(changedRanges) == 0 {
+		var b strings.Builder
+		for i := 0; i <= importEnd && i < totalLines; i++ {
+			b.WriteString(fmt.Sprintf("%d: %s\n", i+1, lines[i]))
+		}
+		b.WriteString(fmt.Sprintf("\n... (lines %d-%d omitted — no diff hunks found) ...\n", importEnd+2, totalLines))
+		return b.String()
+	}
+
+	// Step 3: Sort and merge overlapping ranges.
+	sort.Slice(changedRanges, func(i, j int) bool {
+		return changedRanges[i].start < changedRanges[j].start
+	})
+
+	var merged []lineRange
+	current := changedRanges[0]
+	for _, r := range changedRanges[1:] {
+		if r.start <= current.end {
+			if r.end > current.end {
+				current.end = r.end
+			}
+		} else {
+			merged = append(merged, current)
+			current = r
+		}
+	}
+	merged = append(merged, current)
+
+	// Step 4: Build the focused output.
+	var b strings.Builder
+
+	// Always include import block first (if it's not already covered by a range)
+	importCovered := false
+	if len(merged) > 0 && merged[0].start <= importEnd {
+		importCovered = true
+	}
+
+	if !importCovered && importEnd > 0 {
+		for i := 0; i <= importEnd && i < totalLines; i++ {
+			b.WriteString(fmt.Sprintf("%d: %s\n", i+1, lines[i]))
+		}
+		b.WriteString(fmt.Sprintf("\n... (lines %d-%d omitted) ...\n\n", importEnd+2, merged[0].start))
+	}
+
+	lastEnd := 0
+	if !importCovered && importEnd > 0 {
+		lastEnd = importEnd + 1
+	}
+
+	for _, r := range merged {
+		if r.start > lastEnd {
+			b.WriteString(fmt.Sprintf("\n... (lines %d-%d omitted) ...\n\n", lastEnd+1, r.start))
+		}
+		for i := r.start; i < r.end && i < totalLines; i++ {
+			b.WriteString(fmt.Sprintf("%d: %s\n", i+1, lines[i]))
+		}
+		lastEnd = r.end
+	}
+
+	if lastEnd < totalLines {
+		b.WriteString(fmt.Sprintf("\n... (lines %d-%d omitted) ...\n", lastEnd+1, totalLines))
+	}
+
+	return b.String()
 }
 
 // RunReview analyzes the diff using the provided API key, settings, and PR context.
