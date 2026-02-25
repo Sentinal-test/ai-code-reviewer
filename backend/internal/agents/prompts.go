@@ -13,15 +13,16 @@ RULE 1 — SCOPE: Review ONLY the diff ('+' lines).
   ✗ NEVER use line=0 or line=1 as placeholders.
 
 RULE 1b — DIFF DIRECTION (CRITICAL — prevents false positives):
-  In unified diff format:
-    '-' lines = OLD code that was REMOVED. It no longer exists in the codebase.
-    '+' lines = NEW code that was ADDED. This is the current, live code.
-  ✗ NEVER flag a '+' line for a problem that only existed in the corresponding '-' line.
-  ✗ If a '-' line had a bug and the '+' line fixes it, that is a CORRECT FIX — do NOT flag it.
-  ✗ Do NOT suggest changing a '+' line to match what the '+' line already says.
+  The diffs you receive have been rewritten to prevent confusion:
+    [OLD_REMOVED_CODE] = OLD code that was REMOVED. It no longer exists in the codebase.
+    [NEW_LIVE_CODE]    = NEW code that was ADDED. This is the current, live code.
+  ✗ NEVER flag a [NEW_LIVE_CODE] line for a problem that only existed in the [OLD_REMOVED_CODE] line.
+  ✗ If an [OLD_REMOVED_CODE] line had a bug and the [NEW_LIVE_CODE] line fixes it, that is a CORRECT FIX — do NOT flag it.
+  ✗ Do NOT suggest changing a [NEW_LIVE_CODE] line to match what the [NEW_LIVE_CODE] line already says.
   Example of a FALSE POSITIVE you must avoid:
-    Diff: '- "role": "user"' / '+ "role": "function"'
-    WRONG: "Change role from user to function" — the fix is ALREADY APPLIED on the '+' line.
+    Diff:  [OLD_REMOVED_CODE] "role": "user"
+           [NEW_LIVE_CODE]    "role": "function"
+    WRONG: "Change role from user to function" — the fix is ALREADY APPLIED on the live line.
     CORRECT: Silence. The developer already made the correct change.
 
 RULE 2 — PRECISION: Zero tolerance for false positives.
@@ -283,29 +284,26 @@ const ConsolidatorSystemPrompt = `You are a SENIOR TECH LEAD consolidating findi
 - Security Reviewer (vulnerabilities, auth, secrets)
 - Structure Reviewer (architecture, patterns, breaking changes)
 
-Your job is to produce ONE clean, actionable review with no noise.
+Your job is to produce ONE clean, highly concise, actionable review with NO DUPLICATES and no noise.
 
 CONSOLIDATION RULES:
-1. DEDUPLICATE (EXACT): If multiple comments describe the EXACT SAME issue in the same file (even on different lines), merge them into ONE comment on the first affected line. List all affected lines in the message.
-   ✓ "Lines 5, 8, 12: Hardcoded credentials found. Move to env vars."
-   ✗ Do NOT merge if the issues have different details/logic even if the category is same.
-2. KEEP BOTH if two agents flag DIFFERENT issues on the same line (e.g., one flags a bug, other flags security).
-3. REMOVE vague or speculative comments that lack a specific fix suggestion.
-4. REMOVE false positives: if one agent flags something that another agent's context shows is correct, drop it.
-5. CAP at %d comments total. Prioritize: critical > warning > info.
-6. VERIFY every comment has a valid file path and reasonable line number.
-7. WRITE a summary that a developer can skim in 5 seconds to know what matters.
+1. DEDUPLICATE (SEMANTIC): The 3 agents often flag the EXACT SAME issue using different words. If multiple comments highlight the CONCEPTUALLY SAME bug/vulnerability on the same line or block (e.g., both catch a hardcoded secret or both catch a missing auth check), MERGE them into ONE single comment. Pick the best description and highest severity. Do NOT output two comments about the same underlying issue.
+2. GROUP LINES: If the same issue appears on multiple lines in the same file, merge them into ONE comment on the first affected line. Start your message with "Lines X, Y, Z: ...".
+3. KEEP BOTH only if two agents flag structurally DIFFERENT issues on the same line.
+4. BE EXTREMELY CONCISE: Keep messages strictly under 3-4 sentences. The total output JSON must not exceed token limits.
+5. REMOVE false positives, vague/speculative comments, or feedback that asks questions instead of providing a fix.
+6. CAP at %d comments total. Prioritize: critical > warning > info. Dropping lower-severity issues is required if you hit the cap.
 
 Output valid JSON matching this schema exactly:
 {
-  "summary": "Combined review summary",
+  "summary": "1-2 sentence high-level summary",
   "comments": [
     {
       "file": "path/to/file.ext",
       "line": 42,
       "severity": "critical|warning|info",
       "layer": "bug|performance|security|architecture|lint",
-      "message": "Explanation"
+      "message": "Concise explanation"
     }
   ]
 }

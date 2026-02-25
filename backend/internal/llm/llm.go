@@ -446,11 +446,43 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 			result.Comments = comments
 			result.Summary = "Automated review comments"
 		} else {
-			return nil, fmt.Errorf("failed to unmarshal JSON content: %v | content: %s", err, responseText)
+			return nil, fmt.Errorf("failed to unmarshal JSON content: %v", err)
 		}
 	}
 
 	return &result, nil
+}
+
+// formatSafeDiff rewrites a standard unified diff hunk into a semantically safe format.
+// It replaces raw '-' and '+' prefixes with explicit tags to prevent the LLM's
+// pattern-matching from confusing deleted lines for current, active code.
+func formatSafeDiff(diffSection string) string {
+	lines := strings.Split(diffSection, "\n")
+	var result strings.Builder
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "--- ") {
+			// Prefix with tag, padded to align with the other tag
+			result.WriteString("[OLD_REMOVED_CODE] ")
+			result.WriteString(line[1:])
+			result.WriteString("\n")
+		} else if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++ ") {
+			result.WriteString("[NEW_LIVE_CODE]    ")
+			result.WriteString(line[1:])
+			result.WriteString("\n")
+		} else {
+			// Context lines or headers (keep as is, but pad for alignment)
+			if !strings.HasPrefix(line, "@@ ") && !strings.HasPrefix(line, "--- ") && !strings.HasPrefix(line, "+++ ") && len(line) > 0 && line[0] == ' ' {
+				result.WriteString("                   ")
+				result.WriteString(line[1:])
+				result.WriteString("\n")
+			} else {
+				result.WriteString(line)
+				result.WriteString("\n")
+			}
+		}
+	}
+	return result.String()
 }
 
 func getFileKeys(m map[string]string) []string {

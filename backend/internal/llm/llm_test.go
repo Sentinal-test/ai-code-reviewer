@@ -269,3 +269,22 @@ func TestExtractDiffWithContext(t *testing.T) {
 			"Adjacent hunks should be merged, reducing omission markers")
 	})
 }
+
+func TestFormatSafeDiff(t *testing.T) {
+	input := "@@ -261,4 +262,4 @@\n" +
+		" 					},\n" +
+		" 					map[string]interface{}{\n" +
+		"-\t\t\t\t\t\t\"role\": \"user\",\n" +
+		"+\t\t\t\t\t\t\"role\": \"function\",\n" +
+		" 					},"
+
+	expected := "@@ -261,4 +262,4 @@\n" +
+		"                   \t\t\t\t\t},\n" +
+		"                   \t\t\t\t\tmap[string]interface{}{\n" +
+		"[OLD_REMOVED_CODE] \t\t\t\t\t\t\"role\": \"user\",\n" +
+		"[NEW_LIVE_CODE]    \t\t\t\t\t\t\"role\": \"function\",\n" +
+		"                   \t\t\t\t\t},\n"
+
+	result := formatSafeDiff(input)
+	assert.Equal(t, expected, result)
+}

@@ -385,10 +385,13 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 			b.WriteString("\n────────────────────────────────────────\n")
 			b.WriteString(fmt.Sprintf("DIFF HUNKS FOR: %s (ANALYZE THESE CHANGES)\n", path))
 			b.WriteString("────────────────────────────────────────\n")
-			b.WriteString("LEGEND: '-' = DELETED (old code, gone). '+' = ADDED (new code, review this).\n")
-			b.WriteString("Do NOT flag a '+' line for a problem that only existed in its '-' counterpart.\n\n")
+			b.WriteString("LEGEND:\n")
+			b.WriteString("  [OLD_REMOVED_CODE] = This code was DELETED. It no longer exists in the codebase.\n")
+			b.WriteString("  [NEW_LIVE_CODE]    = This code was ADDED. This is the current, active code.\n")
+			b.WriteString("CRITICAL: Do NOT tell the developer to make a change that [NEW_LIVE_CODE] already implements!\n\n")
 			for i, section := range diffSections {
-				b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s\n*/\n\n", i+1, section))
+				safeDiff := formatSafeDiff(section)
+				b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s*/\n\n", i+1, safeDiff))
 			}
 		}
 	}
