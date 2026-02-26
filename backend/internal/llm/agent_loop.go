@@ -253,15 +253,8 @@ func RunAgentReview(
 				// Append the assistant's function call and the tool result to messages
 				messages = append(messages,
 					map[string]interface{}{
-						"role": "model",
-						"parts": []map[string]interface{}{
-							{
-								"functionCall": map[string]interface{}{
-									"name": toolCall.Name,
-									"args": toolCall.Args,
-								},
-							},
-						},
+						"role":  "model",
+						"parts": []json.RawMessage{rawPart}, // Forward exact part to preserve thought_signature
 					},
 					map[string]interface{}{
 						"role": "function",
