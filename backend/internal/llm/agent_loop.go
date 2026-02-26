@@ -95,7 +95,7 @@ func RunAgentReview(
 			"temperature":     0.0,
 			"maxOutputTokens": 65536,
 			"thinkingConfig": map[string]interface{}{
-				"thinkingLevel": "HIGH",
+				"thinkingLevel": "MEDIUM",
 			},
 		}
 
