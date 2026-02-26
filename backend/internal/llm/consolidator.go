@@ -67,7 +67,7 @@ func RunConsolidation(
 		return agents.DeterministicConsolidate(agentResults, maxComments)
 	}
 
-	url := geminiURL + "?key=" + apiKey
+	url := geminiFlashURL + "?key=" + apiKey
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
 	if err != nil {
 		fmt.Printf("   ⚠️ [Consolidator] Request error: %v — falling back to deterministic\n", err)

@@ -94,6 +94,9 @@ func RunAgentReview(
 		genConfig := map[string]interface{}{
 			"temperature":     0.0,
 			"maxOutputTokens": 65536,
+			"thinkingConfig": map[string]interface{}{
+				"thinkingLevel": "MEDIUM",
+			},
 		}
 
 		reqBody := map[string]interface{}{
@@ -209,8 +212,10 @@ func RunAgentReview(
 		// Parse parts — each part can be either text or functionCall
 		var hasFunctionCall bool
 		var textParts []string
+		var toolCalls []agents.ToolCallRequest
+		var toolCallIndices []int // track which parts are function calls
 
-		for _, rawPart := range candidate.Content.Parts {
+		for i, rawPart := range candidate.Content.Parts {
 			var part struct {
 				Text         string `json:"text"`
 				FunctionCall *struct {
@@ -224,19 +229,34 @@ func RunAgentReview(
 
 			if part.FunctionCall != nil {
 				hasFunctionCall = true
-				toolCall := agents.ToolCallRequest{
+				toolCalls = append(toolCalls, agents.ToolCallRequest{
 					Name: part.FunctionCall.Name,
 					Args: part.FunctionCall.Args,
-				}
+				})
+				toolCallIndices = append(toolCallIndices, i)
+			} else if part.Text != "" {
+				textParts = append(textParts, part.Text)
+			}
+		}
 
+		// If we have tool calls, execute them and build the conversation history
+		if hasFunctionCall {
+			// Forward ALL of the model's parts (text, thought, functionCall) as one model turn.
+			// This preserves thought_signatures and chain-of-thought reasoning.
+			messages = append(messages, map[string]interface{}{
+				"role":  "model",
+				"parts": candidate.Content.Parts, // Forward ALL parts verbatim
+			})
+
+			// Execute each tool call and batch all responses into one function turn
+			var functionResponseParts []map[string]interface{}
+			for _, toolCall := range toolCalls {
 				fmt.Printf("  🔧 [%s] Tool call: %s(%v) [iter %d, %.1fs]\n",
 					config.Type, toolCall.Name, toolCall.Args, iteration+1, elapsed.Seconds())
 
-				// Execute the tool
 				toolResult := toolExecutor.Execute(ctx, toolCall)
 				result.ToolCalls++
 
-				// Log the tool response for transparency
 				fmt.Printf("  📨 [%s] Tool response (%s): %d chars\n",
 					config.Type, toolCall.Name, len(toolResult.Content))
 				fmt.Println("  ────────────────────────────────────────")
@@ -247,40 +267,23 @@ func RunAgentReview(
 				fmt.Println(responsePreview)
 				fmt.Println("  ────────────────────────────────────────")
 
-				// Append the assistant's function call and the tool result to messages
-				messages = append(messages,
-					map[string]interface{}{
-						"role": "model",
-						"parts": []map[string]interface{}{
-							{
-								"functionCall": map[string]interface{}{
-									"name": toolCall.Name,
-									"args": toolCall.Args,
-								},
-							},
+				functionResponseParts = append(functionResponseParts, map[string]interface{}{
+					"functionResponse": map[string]interface{}{
+						"name": toolCall.Name,
+						"response": map[string]interface{}{
+							"content": toolResult.Content,
 						},
 					},
-					map[string]interface{}{
-						"role": "function",
-						"parts": []map[string]interface{}{
-							{
-								"functionResponse": map[string]interface{}{
-									"name": toolCall.Name,
-									"response": map[string]interface{}{
-										"content": toolResult.Content,
-									},
-								},
-							},
-						},
-					},
-				)
-			} else if part.Text != "" {
-				textParts = append(textParts, part.Text)
+				})
 			}
-		}
 
-		// If we have text parts (final response), parse them
-		if len(textParts) > 0 && !hasFunctionCall {
+			// Append all function responses as a single function turn
+			messages = append(messages, map[string]interface{}{
+				"role":  "function",
+				"parts": functionResponseParts,
+			})
+		} else if len(textParts) > 0 {
+			// Text-only response (final answer) — parse it
 			fullText := strings.Join(textParts, "\n")
 			parsed := parseAgentResponse(fullText)
 			result.Comments = parsed.Comments
@@ -288,15 +291,8 @@ func RunAgentReview(
 			fmt.Printf("  ✅ [%s] Done: %d comments (%.1fs, %d tool calls)\n",
 				config.Type, len(result.Comments), elapsed.Seconds(), result.ToolCalls)
 			return result
-		}
-
-		// If we got text AND function calls, store text for later
-		if len(textParts) > 0 && hasFunctionCall {
-			fmt.Printf("  📝 [%s] Got partial text + function call, continuing loop\n", config.Type)
-		}
-
-		// Empty response — retry once with a nudge
-		if !hasFunctionCall && len(textParts) == 0 {
+		} else {
+			// Empty response — retry once with a nudge
 			if iteration == 0 {
 				fmt.Printf("  ⚠️ [%s] Empty response — retrying with nudge\n", config.Type)
 				messages = append(messages, map[string]interface{}{

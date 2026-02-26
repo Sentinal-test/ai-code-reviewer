@@ -17,9 +17,13 @@ import (
 )
 
 const (
-	// FIX #2: Use valid Gemini model name
-	geminiModel = "gemini-2.5-flash" // Changed from "gemini-3-flash-preview"
+	// Gemini 3.1 Pro Preview — 65K output tokens, enhanced SWE reasoning, adjustable thinking
+	geminiModel = "gemini-3.1-pro-preview"
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
+
+	// Gemini Flash — fast, cheap model for lightweight tasks (consolidation, summaries)
+	geminiFlashModel = "gemini-2.5-flash"
+	geminiFlashURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiFlashModel + ":generateContent"
 )
 
 // FIX #4: Safe UTF-8 truncation helper
@@ -386,6 +390,9 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 		},
 		"generationConfig": map[string]interface{}{
 			"responseMimeType": "application/json",
+			"thinkingConfig": map[string]interface{}{
+				"thinkingLevel": "MEDIUM",
+			},
 		},
 	}
 
