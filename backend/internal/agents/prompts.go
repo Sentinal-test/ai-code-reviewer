@@ -173,6 +173,20 @@ fit any area below, STILL FLAG IT.
   unordered systems — any case where asynchronous processing could produce incorrect
   results, duplicate side effects, or silent data loss.
 
+• AI & LLM INTEGRATIONS (when reviewing AI/ML apps):
+  Uncontrolled token generation (missing max_tokens), missing guardrails/validation on
+  LLM outputs, state/context leakage between user sessions, assuming LLM output formats
+  (JSON/XML) will always be valid without parsing checks, prompt injection handlers missing.
+
+• INTERNAL TOOLS & PLUGINS (when reviewing extensibility layers):
+  Plugin isolation failures, missing backward compatibility in internal APIs, generic type
+  handling errors, failure to handle badly behaved plugins gracefully.
+
+• GHOST LOGIC (CRITICAL FOR CORRECTNESS):
+  Code that claims to do something (via function name, return value, or log message) but
+  doesn't actually execute the logic. Example: A function named "deleteUser" that returns
+  success but fails to actually call the database deletion query.
+
 • API CONTRACT VIOLATIONS:
   Wrong status codes, response shapes that don't match consumer expectations, missing
   required fields, breaking changes without versioning, request/response mismatches
@@ -278,6 +292,11 @@ vulnerability not described below, STILL FLAG IT.
 • API & ENDPOINT SECURITY:
   CORS misconfiguration, missing rate limiting on sensitive endpoints, verbose error
   responses leaking internals, missing request size limits, insecure HTTP methods.
+
+• AI & LLM SECURITY (when reviewing AI apps):
+  Prompt injection vulnerabilities, passing unsanitized LLM output to dangerous sinks
+  (XSS, SQLi, command execution via agents), leaking system prompts or private data in
+  LLM responses, SSRF via agent tool execution.
 
 • DATABASE SECURITY (when reviewing data access code):
   Raw queries with string interpolation, queries that expose sensitive columns to
@@ -387,6 +406,15 @@ in THIS project:
 • CODE ORGANIZATION:
   Files that mix too many unrelated concerns, dead/unreachable code, exports that have
   zero consumers, modules that have grown beyond their original responsibility.
+
+• PLUGIN & EXTENSIBILITY ARCHITECTURE (if applicable):
+  Hardcoding plugin-specific logic in the core engine instead of using dynamic resolution.
+  Passing full application state to plugins instead of passing a scoped, isolated context.
+  Breaking backwards compatibility on plugin interfaces.
+
+• AI/AGENT ARCHITECTURE (if applicable):
+  Mixing LLM interaction string manipulation or parsing directly inside core business logic
+  controllers instead of isolating it in a dedicated AI service layer or adapter.
 
 • MIGRATION & SCHEMA SAFETY (if applicable):
   Destructive changes to database schemas, models, or serialization formats that could
