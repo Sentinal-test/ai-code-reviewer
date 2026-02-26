@@ -20,6 +20,10 @@ const (
 	// Gemini 3.1 Pro Preview — 65K output tokens, enhanced SWE reasoning, adjustable thinking
 	geminiModel = "gemini-3.1-pro-preview"
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
+
+	// Gemini Flash — fast, cheap model for lightweight tasks (consolidation, summaries)
+	geminiFlashModel = "gemini-2.5-flash"
+	geminiFlashURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiFlashModel + ":generateContent"
 )
 
 // FIX #4: Safe UTF-8 truncation helper
