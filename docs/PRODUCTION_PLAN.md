@@ -741,15 +741,15 @@ Run a lightweight version of the review locally before pushing:
 
 Moving from 1 LLM call to 3 parallel specialist agents + consolidator increases token usage but each agent gets **focused context** (not the full dump), keeping costs reasonable:
 
-| Scenario | Current (1 call) | Phase 2 (3 Agents + Consolidator) | Notes |
+| Scenario | Current (1 call) | Phase 2 (3 Pro Agents + Flash Consolidator) | Notes |
 | :--- | :--- | :--- | :--- |
-| Small PR (3 files) | ~15K tokens, ₹0.16 | ~50K tokens, ₹0.50 | All 3 agents + consolidator (cheap PR, all agents are fast) |
-| Medium PR (15 files) | ~80K tokens, ₹0.76 | ~150K tokens, ₹1.44 | Each agent gets ~40K focused context + tool calls |
-| Large PR (50 files) | ~400K tokens, ₹3.71 | ~600K tokens, ₹5.58 | Chunked into units, each chunk reviewed by all 3 agents |
-| **Monthly (1000 PRs)** | **₹695** | **₹1,400** | ~2x cost for ~3x accuracy improvement |
+| Small PR (3 files) | ~15K tokens, ₹0.16 | ~27K input tokens, ₹3.50 | All 3 agents + consolidator (cheap PR, all agents are fast) |
+| Medium PR (15 files) | ~80K tokens, ₹0.76 | ~240K input tokens, ₹28.00 | Each agent gets ~20K focused context + tool call loops |
+| Large PR (50 files) | ~400K tokens, ₹3.71 | ~1.8M input tokens, ₹200.00 | Chunked into units, each chunk reviewed by 3 agents + tool loops |
+| **Monthly (1000 PRs)** | **₹695** | **₹30,500 ($342)** | Cost scales with Pro reasoning, but yields extreme accuracy |
 
 > [!NOTE]
-> The cost roughly doubles, not triples, because each agent gets **less context than the current monolithic prompt**. The current system dumps everything into one prompt (~54K for medium PR). Each specialist gets only ~15K of relevant context. The math: 3 × 15K = 45K ≈ current 54K, plus overhead for tool calls and consolidation.
+> The cost jumps significantly because we moved from single-shot Flash to parallel **Gemini 2.5 Pro** agents making iterative tool calls. The operational ROI still pays for itself compared to the engineering hourly rate required to find complex bugs manually.
 
 ---
 
@@ -819,7 +819,7 @@ backend/
 | **Precision** (signal/noise) | ~40% | ~55% | **~75%+** |
 | **False Positive Rate** | High | Medium | **Low** |
 | **Review Latency** (median) | ~25s | ~20s | ~35s (more calls, but better) |
-| **Cost per PR** (median) | ₹0.76 | ₹0.80 | ₹1.24 |
+| **Cost per PR** (median) | ₹0.76 | ₹0.80 | ~₹28.00 |
 
 ---
 
