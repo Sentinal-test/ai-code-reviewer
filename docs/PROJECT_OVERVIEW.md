@@ -4,12 +4,16 @@
 The **AI Code Reviewer** is an automated defect detection system designed to provide hyper-critical, security-focused code reviews directly on GitHub Pull Requests. Unlike generic AI review tools, this system is built to behave like a senior security and reliability auditor, focusing on identifying bugs, vulnerabilities, and architectural inconsistencies rather than providing conversational praise.
 
 ## Key Features
-- **Multi-Pass LLM Orchestration**: Uses a two-step "Scout & Review" process to ensure the model has all necessary context before making a evaluation.
+- **Parallel Specialist Agents**: Instead of one generic prompt, the system runs 3 distinct agents in parallel per file chunk:
+    - **🐛 Correctness Agent**: Hunts for logic bugs and state leaks.
+    - **🔐 Security Agent**: Traces attack paths and auth bypasses.
+    - **🏗️ Structure Agent**: Acts as an architect, ensuring consistency across files.
+- **Intelligent Consolidation**: A final LLM pass that semantically merges, deduplicates, and formats the findings of the 3 specialists into a single clean review.
+- **Agentic Code Graph Tools**: Agents aren't just reading static text. They are equipped with tools (`get_callers`, `get_symbol_definition`, `search_codebase`) to actively traverse the codebase, verifying assumptions and preventing false positives before leaving a comment.
 - **Deep Contextual Awareness**:
-    - **Full File Content**: Reviews the entire changed file, not just the isolated diff lines.
-    - **Dependency Resolution**: Automatically identifies and fetches related files (types, interfaces, shared state) to verify logic across boundaries.
-    - **Repo Structure**: understands the overall project layout for architectural consistency checks.
-    - **PR History**: Incorporates the PR title, description, and the last 10 commit messages to understand developer intent.
+    - **Slim Dependency injection**: Instead of stuffing full files into context, agents receive a slim index of imported signatures.
+    - **Diff-Only Mode**: Prevents context overflow on massive, generated, or lock files.
+    - **Repo Structure**: Injects the directory tree so architectural decisions make sense.
 - **Automated Defect Detection**: Strictly identifies logic errors, security risks (injection, auth bypass), performance bottlenecks, and resource leaks.
 - **Hybrid Commenting**: Automatically posts inline comments on the diff when possible, falling back to general PR comments if a critical issue is found in a related (unchanged) file.
 - **Configurable Control**: A Next.js dashboard allows users to manage repository settings, toggle review layers (Security, Bug, Lint, etc.), and provide custom LLM API keys.

@@ -86,7 +86,7 @@ The code graph's `Edge` data tells us exactly which files depend on each other. 
 | **Actual code (diff hunks)** | **~168K tokens** |
 | **Total per chunk** | **~200K tokens** |
 
-Gemini 2.5 Flash supports 1M tokens. We target 200K per chunk for safety margin, leaving room for the model's response.
+Gemini 2.5 Pro supports an industry-leading 2M token context window. We target 200K per chunk for a massive safety margin, ensuring the model's attention span remains razor-sharp in evaluating the code without context dilution.
 
 ---
 
@@ -100,19 +100,20 @@ Gemini 2.5 Flash supports 1M tokens. We target 200K per chunk for safety margin,
 
 ---
 
-## Consolidation
+## Intelligent Consolidation
 
-Results from all chunks are merged **deterministically** (no extra LLM call):
+Results from all chunks and all 3 specialist agents (Correctness, Security, Structure) are passed to the **Consolidator** in a final, low-cost LLM pass:
 
-- **Deduplication**: comments on the same `(file, line, message_hash)` are merged
-- **Summary merging**: per-chunk summaries are concatenated
-- **No information loss**: every comment from every chunk makes it to the final result
+- **Deduplication**: Semantically similar comments (e.g., both Security and Correctness flagging the same missing validation) are merged intelligently.
+- **Summary merging**: Per-chunk summaries are compiled into a single high-level review overview.
+- **Cost Efficiency**: This pass runs on the much cheaper `Gemini 2.5 Flash` model, as it only processes text outputs and does not require complex codebase reasoning.
+- **Fallback**: If the LLM consolidator fails, the system automatically falls back to a deterministic grouping strategy.
 
 ---
 
 ## Small PRs: Zero Overhead
 
-If the entire PR fits within the 200K token budget (most PRs do), it becomes a **single chunk** — identical to today's flow. No extra calls, no consolidation, no overhead.
+If the entire PR fits within the 200K token budget (most PRs do), it becomes a **single chunk** — identical to today's flow. No extra calls, no chunking overhead.
 
 ---
 
@@ -122,5 +123,5 @@ If the entire PR fits within the 200K token budget (most PRs do), it becomes a *
 |:---|:---|
 | `internal/chunker/chunker.go` | Token estimation, graph-aware file grouping |
 | `internal/chunker/chunker_test.go` | Unit tests for grouping logic |
-| `internal/llm/llm.go` | `RunChunkReview` + `ConsolidateResults` |
-| `cmd/cli/main.go` | Chunked review orchestration |
+| `internal/llm/consolidator.go` | Intelligent LLM-based `RunConsolidation` |
+| `internal/orchestrator/orchestrator.go` | Multi-agent chunk orchestration |

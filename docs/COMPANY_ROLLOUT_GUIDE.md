@@ -45,16 +45,18 @@ Have developers add this file to `.github/workflows/ai-review.yml` in their proj
 
 ```yaml
 name: AI Code Review
+
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize]
 
 permissions:
   contents: read
   pull-requests: write
+  checks: write
 
 jobs:
-  ai-review:
+  review:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -63,53 +65,25 @@ jobs:
           fetch-depth: 0
 
       - name: Run AI Reviewer
-        uses: acme-corp/ai-code-reviewer@main # 👈 Update to your company repo
+        uses: appointytech/ai-code-reviewer@main
         with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # Optional: Override the org-wide API key for this specific repo
-          # gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
 ```
 
 **That’s it!** The action will cache the CodeGraph automatically and run directly inside the company’s secure GitHub Runner environment.
 
 ---
 
-## ⚠️ Alternative: Keeping it on Your Personal Account
+## 🛠️ Security & Privacy
 
-If you **must** keep the repository Private on your personal account, the GitHub Action cannot be used natively by your company. You have two sub-optimal choices:
-
-### Approach A: The PAT Hack (Fragile)
-Every single company repository that wants to use the reviewer must check out your private code using a Personal Access Token created by you.
-
-1. You create a Fine-Grained PAT on your account with "Read Content" access to your `ai-code-reviewer` repo.
-2. The company stores your PAT as an Organization Secret (e.g., `REVIEWER_ACCESS_TOKEN`).
-3. Developers use this clunky workflow:
-
-```yaml
-      - name: Checkout AI Reviewer Action
-        uses: actions/checkout@v4
-        with:
-          repository: your-username/ai-code-reviewer
-          token: ${{ secrets.REVIEWER_ACCESS_TOKEN }} 
-          path: .github/actions/ai-reviewer
-          ref: main
-
-      - name: Run AI Reviewer
-        uses: ./.github/actions/ai-reviewer
-        with:
-          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-```
-*Why this is bad: If you leave the company or your token expires, the entire company's CI/CD breaks instantly.*
-
-### Approach B: Self-Hosted Webhooks (Ops Heavy)
-You abandon GitHub Actions and run the reviewer as a SaaS product.
-1. You deploy the Go Backend to a cloud server (AWS, Render, etc.) yourself.
-2. You create a GitHub App in the company organization.
-3. You set the Webhook URL of the App to point to your cloud server.
-*Why this is bad: You now have to pay for server costs, maintain uptime, manage webhook retries, and scale the infrastructure.*
+By using the GitHub Action flow:
+1.  **Code stays in CI**: Your source code is checked out on the GitHub Runner and never sent to a third-party server.
+2.  **LLM Only**: Only the relevant diff and dependency snippets are sent to Google Gemini via encrypted API calls.
+3.  **No Persistent Access**: The `GITHUB_TOKEN` is short-lived and scoped only to the current Pull Request.
 
 ---
 
 ## Conclusion
-For 99% of organizations, **Step 1 (Shifting the repo to the Company GitHub)** is the only maintainable, secure, and zero-ops way to deploy this tool.
+
+The GitHub Action-only architecture is the most maintainable, secure, and zero-ops way to deploy this tool across a large organization. By setting organization-wide secrets, you can enable industry-grade reviews for hundreds of repositories in minutes.

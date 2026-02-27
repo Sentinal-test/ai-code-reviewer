@@ -24,11 +24,9 @@ Before your team can use this, you must **Publish** the Action by creating a rel
 
 Now your action is addressable as: `owner/repo-name@v1`.
 
-## 2. Usage (For Your Teammate)
+## 2. Usage
 
-Your teammate needs to create a workflow file in their repository (e.g., `.github/workflows/review.yml`) and reference your published action.
-
-**Important**: They must replace `owner/repo-name` with **YOUR** GitHub username and repository name.
+To enable AI code reviews, created a workflow file in your repository (e.g., `.github/workflows/review.yml`):
 
 ```yaml
 name: AI Code Review
@@ -40,6 +38,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  checks: write
 
 jobs:
   review:
@@ -51,9 +50,7 @@ jobs:
           fetch-depth: 0 # Required to access git history for diffs
 
       - name: AI Code Reviewer
-        # 👇 REPLACE THIS with your GitHub username and repo name!
-        # Example: tegi/ai-code-reviewer@v1
-        uses: YOUR_GITHUB_USERNAME/YOUR_REPO_NAME@v1
+        uses: appointytech/ai-code-reviewer@main
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}

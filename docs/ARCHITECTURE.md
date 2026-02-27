@@ -1,65 +1,60 @@
 # Architecture Overview
 
-This document outlines the planned architecture for the AI Code Reviewer, focusing on a high-performance, internal Go-based orchestration layer.
+This document outlines the architecture for the AI Code Reviewer, focusing on a high-performance, Go-based CLI orchestration layer designed to run within GitHub Actions.
 
 ## 🏗️ System Architecture
 
-The core of the system is a native **Go (Golang)** application that orchestrates the entire code review lifecycle. This design eliminates external workflow dependencies to ensure low latency, strict type safety, and a simplified single-binary deployment.
+The core of the system is a native **Go (Golang)** application that orchestrates the entire code review lifecycle. This design ensures low latency, strict type safety, and a simplified single-binary execution inside the GitHub Runner.
 
 ### Key Components
 
 #### 1. LLM Orchestration (`internal/llm`)
-- **Purpose**: A dedicated package for interacting with Large Language Models (Gemini).
+- **Purpose**: A dedicated package for interacting with Large Language Models (Gemini 2.5 Pro & Flash).
 - **Responsibilities**:
-    - Constructs context-aware prompts.
-    - Manages direct API calls to the LLM provider.
-    - Enforces strict JSON parsing to ensure structured, machine-readable output.
-- **Prompt Engineering Strategy**: The system uses highly specific system prompts to enforce brevity (max 2 sentences per comment) and actionable feedback.
+    - Constructs context-aware prompts with the Code Graph.
+    - Manages agentic loops: Model → Tools → Model.
+    - Handles semantic consolidation of multiple specialist agent results.
 
 #### 2. GitHub Integration (`internal/github`)
-- **Purpose**: A robust wrapper around the GitHub API.
+- **Purpose**: A robust wrapper around the GitHub API for CI environments.
 - **Responsibilities**:
-    - **Authentication**: Handles GitHub App JWT generation and installation token management.
-    - **Workflow Management**: Fetches PR diffs, posts review comments, and manages the "Check Run" lifecycle (In Progress -> Success/Failure).
-    - **Feedback Loop**: Ensures all interactions with GitHub are tracked and reported correctly.
+    - **Authentication**: Uses the local `GITHUB_TOKEN` provided by the Action runner.
+    - **Workflow Management**: Fetches PR diffs and metadata.
+    - **Commenting**: Posts intelligent inline comments and general PR summaries.
 
-#### 3. Shared Data Models (`internal/models`)
-- **Purpose**: To provide a single source of truth for data structures.
+#### 3. Agentic Code Graph (`internal/codegraph`)
+- **Purpose**: Provides deep, deterministic codebase context.
 - **Responsibilities**:
-    - Defines type-safe structs (`RepoSettings`, `ReviewResult`, `ReviewComment`).
-    - Ensures consistency across the GitHub and LLM packages.
+    - Parses AST to resolve imports and symbol definitions.
+    - Exposes tools to the LLM (e.g., `get_callers`, `get_symbol_definition`).
+    - Maintains a local cache for ultra-fast incremental analysis.
 
 ## 🚀 Architectural Goals & Benefits
 
-### 1. Low Latency ⚡
-The architecture is designed to minimize network hops.
-- **Flow**: Go Service -> LLM Provider -> Go Service
-- **Benefit**: direct communication removes the overhead of external webhook processors, resulting in faster feedback for developers.
+### 1. Security-First (Zero Ops) ⚡
+The architecture is designed to run entirely within the user's GitHub Actions environment.
+- **Flow**: Runner -> Local Binary -> Google Gemini -> Post Comments.
+- **Benefit**: Code stays within your security perimeter; no external webhook servers or databases are required for basic reviews.
 
-### 2. Simplified Infrastructure & Deployment 🧶
-- **Single Source of Truth**: All business logic, prompts, and integrations live within the Go codebase.
-- **Deployment**: The entire system compiles to a single Go binary (plus database), simplifying hosting, scaling, and debugging. No external workflow servers are required.
+### 2. Specialist Parallelism 🏗️
+- **Execution**: The orchestrator launches three specialized reasoning agents (Correctness, Security, Structure) in parallel goroutines.
+- **Benefit**: Massive reduction in wall-clock time and significant improvement in audit depth.
 
 ### 3. Reliability & Control 🛡️
-- **Type Safety**: Go's strong typing prevents runtime errors common in loosely typed JSON workflows.
-- **Resilience**: The system implements granular control over timeouts (e.g., 60s for LLM calls), retries, and failure states.
-- **Security**: delicate API keys and secrets are managed internally, significantly reducing the attack surface.
+- **Type Safety**: Go's strong typing prevents runtime errors common in loosely typed LLM workflows.
+- **Deterministic Context**: The Code Graph ensures agents see exactly what they need, preventing the "hallucinations" common when LLMs are given limited diff hunks.
 
-### 4. Enhanced User Experience ✨
-- **Real-time Feedback**: The integration allows for immediate management of GitHub Check Runs, showing "In Progress" spinners to users instantly.
-- **Dynamic Configuration**: The system can dynamically adjust system prompts based on repository-specific settings (e.g., toggling "Security" or "Performance" review layers) using internal logic.
-
-## 📂 Proposed Project Structure
-
-The project follows a standard Go CLI/Service layout:
+## 📂 Project Structure
 
 ```
 backend/
+├── cmd/
+│   └── cli/         # Entry point (GitHub Action binary)
 ├── internal/
-│   ├── database/    # DB connection & initialization
-│   ├── github/      # GitHub Client & Check Run management
-│   ├── llm/         # Gemini API Integration & Prompting
-│   └── models/      # Shared Domain Models
-├── main.go          # Application Entry point & Webhook Handler
-└── ...
+│   ├── agents/      # Specialist persona logic
+│   ├── codegraph/   # AST & dependency resolution
+│   ├── github/      # GitHub API integration
+│   ├── llm/         # Gemini client & consolidator
+│   └── orchestrator/# Parallel fan-out coordinator
+└── main.go          # CLI entry point logic
 ```

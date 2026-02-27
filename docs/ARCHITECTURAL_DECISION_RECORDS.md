@@ -1,64 +1,192 @@
 # Architectural Decision Records (ADR)
 
-This document tracks major architectural decisions made during the development of the AI Code Reviewer.
+This document tracks the major architectural pivots and decisions made during the development of the AI Code Reviewer.
+
+---
 
 ## ADR 1: Migration from n8n to Custom Go Backend
-**Context**:  
-Initially, the review logic was implemented using n8n (a low-code workflow tool). 
 
-**Decision**:  
-Rewrite the core logic in Go as a standalone backend service.
+### Context
+The first version of the AI Code Reviewer was implemented using n8n, a low-code workflow orchestration tool. GitHub webhooks triggered n8n flows, which then:
+1. Pulled PR diffs.
+2. Called Gemini.
+3. Posted comments back to GitHub.
 
-**Rationale**:  
-- **Reliability**: Custom Go code provides better control over error handling, retries, and background processing compared to visual workflows.
-- **Maintainability**: Low-code workflows are difficult to version control, test, and refactor.
-- **Performance**: Direct integration with the Gemini and GitHub APIs avoids the overhead and latency of a middle-man orchestration layer.
-- **Complexity**: As the review logic became more sophisticated (requiring complex dependency tracing), n8n became a bottleneck.
+As review logic grew more complex (dependency tracing, context enrichment, retry logic), the workflow-based system became fragile.
 
----
+### Decision
+Rewrite the system as a standalone Go backend service.
 
-## ADR 2: Deterministic Code Graph Context (Replacing LLM Scout)
-**Context**:  
-Single-pass reviews often miss context. The LLM only sees the diff and might guess incorrectly about used types or function signatures defined in other files. Initially, an LLM "Scout" was used to predict which files were needed, but this was slow, non-deterministic, and prone to hallucination.
+### Rationale
+- **Reliability**: Deterministic retry logic and error handling.
+- **Performance**: Direct GitHub + Gemini API integration.
+- **Version Control**: Go code is testable and diffable.
+- **Scalability**: Needed custom orchestration for the future agentic design.
+- **Security**: Full control over what leaves the GitHub runner.
 
-**Decision**:  
-Implement a `CodeGraph` engine using tree-sitter.
-1.  **AST Parsing**: Parse all changed files to extract precise symbols (function calls, type references) using tree-sitter grammar.
-2.  **Definition Resolution**: Scan the repository to find exactly where those symbols are defined.
-3.  **Context Assembly**: Extract small snippets of the actual definitions (max 500 chars) and build a deterministic context graph indicating caller-callee relationships and data flow.
-
-**Rationale**:  
-- **Accuracy**: Eliminates LLM hallucinations. Context is guaranteed to be real code.
-- **Speed**: Processing ASTs locally in Go takes milliseconds compared to LLM latency which took tens of seconds.
-- **Context Economy**: Precisely extracts only the definition snippets (not full files), conserving the LLM context window for actual analysis.
+*This marked the shift from workflow automation → engineered backend system.*
 
 ---
 
-## ADR 3: Full Context Enrichment (Beyond the Diff)
-**Context**:  
-Isolated diff lines are often insufficient for understanding complex logic or catching bugs like variable shadowing.
+## ADR 2: Two-Pass LLM Architecture (Scout → Review)
 
-**Decision**:  
-Enrich the Reviewer prompt with:
-1.  **Full Contents** of every file changed in the PR.
-2.  **Related Dependencies** fetched via the Scout pass.
-3.  **Repository Structure** (filtered file tree) to inform architectural context.
-4.  **Last 10 Commits** to help the model understand the progression and intent of the changes.
+### Context
+Early single-pass LLM reviews failed in cross-file reasoning:
+- The model only saw the diff.
+- It guessed about types and functions defined elsewhere.
+- It hallucinated dependencies and missed cross-boundary bugs.
 
-**Rationale**:  
-- Enables the model to find bugs that exist *around* the changes but aren't visible in a standard +/- diff.
-- Allows for high-level architectural feedback (e.g., "This new helper already exists in `utils/`").
+To solve this, we introduced a two-pass LLM system.
+
+### Decision
+Implement a:
+1. **Scout Pass (LLM #1)**: Analyze the diff and predict/suggest related files/types/functions to include.
+2. **Review Pass (LLM #2)**: Receive diff + Scout-selected dependencies and perform final defect analysis.
+
+### Architecture
+```mermaid
+graph TD
+    A[PR Diff] --> B[Scout LLM]
+    B --> C[Predicted Dependencies]
+    C --> D[Fetch Files]
+    D --> E[Review LLM]
+    E --> F[Comments]
+```
+
+### Benefits
+- Improved cross-file context.
+- Reduced blind diff review.
+
+### Problems
+- **Non-deterministic**: Scout could hallucinate wrong files.
+- **Slow/Expensive**: Two LLM calls per PR doubled latency and token cost.
+- **Unreliable**: Sometimes Scout missed critical dependencies.
 
 ---
 
-## ADR 4: Robust Defect Extraction & General Comments fallback
-**Context**:  
-LLM outputs can be unpredictable (e.g., wrapping JSON in markdown or formatting it as a naked array). Furthermore, comments on unchanged lines cause API errors.
+## ADR 3: Deterministic Code Graph (Replacing LLM Scout)
 
-**Decision**:  
-- Implement robust JSON extraction logic (ignoring markdown wrappers).
-- Create a `PostGeneralComment` fallback. If an inline comment fails validation because the line number is outside the diff, retry by posting it as a general PR comment.
+### Context
+The Scout LLM was fundamentally probabilistic. We needed deterministic dependency resolution. We observed that the Scout was trying to infer symbol relationships that could be computed locally.
 
-**Rationale**:  
-- Ensures no valuable feedback is lost due to formatting quirks or GitHub API restrictions.
-- Enhances user experience by providing a consolidated "global" feedback section for cross-file issues.
+### Decision
+Remove the LLM Scout completely and implement a **CodeGraph engine using tree-sitter**.
+
+### What the CodeGraph Does
+- Parses AST of changed files.
+- Extracts function calls, type references, struct usage, and imports.
+- Resolves definitions across the repository.
+- Generates a deterministic context graph.
+
+### New Flow
+```mermaid
+graph TD
+    A[PR Diff] --> B[CodeGraph tree-sitter]
+    B --> C[Resolved Definitions + Edges]
+    C --> D[Single Review LLM Call]
+```
+
+### Why This Was Critical
+- **No hallucinations**: symbol-accurate resolution.
+- **Performance**: Milliseconds instead of seconds.
+- **Stability**: Guaranteed real code context.
+
+*This was the biggest architectural pivot: eliminating the probabilistic Scout phase entirely.*
+
+---
+
+## ADR 4: Single-Pass Deterministic Review
+
+### Context
+After removing Scout, we simplified: build deterministic graph context and send everything in a single LLM call.
+
+### Decision
+Use a single prompt containing:
+- Diff hunks and full changed files.
+- CodeGraph snippets and repo structure.
+- Last 10 commits for intent analysis.
+
+### Rationale
+- Simpler orchestration.
+- Lower cost than Scout + Review.
+- Better context than diff-only review.
+
+### Limitation Discovered
+As PR size increased, context window overflow occurred. Truncation caused missing dependencies, and large PRs degraded accuracy.
+
+---
+
+## ADR 5: Token-Aware Graph-Based Chunking
+
+### Context
+Large PRs (50+ files) exceeded token budgets. Brute truncation dropped dependencies, while directory-based chunking split related files and missed cross-boundary bugs.
+
+### Decision
+Implement **Graph-Aware Chunking**.
+
+### Strategy
+1. Build CodeGraph.
+2. Construct connected components (group files by dependency relationships).
+3. Pack into ~200K token chunks.
+4. Review each chunk independently and consolidate results.
+
+### Flow
+```mermaid
+graph TD
+    A[PR] --> B[CodeGraph]
+    B --> C[Connected Components]
+    C --> D[Token-Budgeted Chunks]
+    D --> E[LLM Review per Chunk]
+    E --> F[Deterministic Consolidator]
+```
+
+### Rationale
+- Preserves dependency integrity.
+- Avoids token overflow and scales to monorepos.
+- No accuracy regression for small PRs.
+
+---
+
+## ADR 6: Production Plan — Multi-Agent Architecture
+
+### Context
+Even with chunking, a single monolithic prompt trying to detect bugs, security issues, and architecture violations produced mediocre precision. One prompt trying to be everything = diluted focus.
+
+### Decision
+Adopt **Parallel Specialist Agents**.
+
+| Agent | Focus |
+| :--- | :--- |
+| **Correctness Agent** | Bugs + Performance |
+| **Security Agent** | OWASP + Secrets |
+| **Structure Agent** | Architecture + Lint |
+
+All agents receive chunk-specific context, use CodeGraph, and support tool calls. Results are merged by an intelligent Consolidator.
+
+---
+
+## ADR 7: Agentic Tool-Call Loop
+
+### Context
+Preloading everything wastes tokens. The LLM should act as a reasoning engine, requesting context only when needed.
+
+### Decision
+Introduce function-calling tools:
+- `get_symbol_definition` / `get_type_definition`
+- `get_callers`
+- `get_file_content`
+- `search_codebase`
+
+### New Flow
+```mermaid
+graph TD
+    A[Chunk Context] --> B[Agent LLM]
+    B --> C{Tool Needed?}
+    C -->|Yes| D[Local CodeGraph Execution]
+    D --> B
+    C -->|No| E[Final JSON Review]
+```
+
+### Rationale
+- **Surgical Context**: Tokens are used for reasoning, not dumping text.
+- **Deep Tracing**: Accuracy improves on deep call chains.
