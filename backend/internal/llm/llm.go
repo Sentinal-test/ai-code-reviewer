@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	// Gemini 3.1 Pro Preview — 65K output tokens, enhanced SWE reasoning, adjustable thinking
-	geminiModel = "gemini-3.1-pro-preview"
+	// Gemini 2.5 Pro — Stable, highly capable SWE reasoning, 2M context window
+	geminiModel = "gemini-2.5-pro"
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
 
 	// Gemini Flash — fast, cheap model for lightweight tasks (consolidation, summaries)
@@ -390,9 +390,6 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 		},
 		"generationConfig": map[string]interface{}{
 			"responseMimeType": "application/json",
-			"thinkingConfig": map[string]interface{}{
-				"thinkingLevel": "MEDIUM",
-			},
 		},
 	}
 
