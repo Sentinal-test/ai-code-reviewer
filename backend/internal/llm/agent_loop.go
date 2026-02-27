@@ -94,9 +94,6 @@ func RunAgentReview(
 		genConfig := map[string]interface{}{
 			"temperature":     0.0,
 			"maxOutputTokens": 65536,
-			"thinkingConfig": map[string]interface{}{
-				"thinkingLevel": "MEDIUM",
-			},
 		}
 
 		reqBody := map[string]interface{}{
