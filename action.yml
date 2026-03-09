@@ -95,7 +95,18 @@ runs:
         
         echo "🚀 Running AI Reviewer..."
         cd "${{ github.workspace }}"
-        
+
+        # Ensure base ref is available (handles shallow clones)
+        if ! git rev-parse --verify "$BASE_REF_INPUT" >/dev/null 2>&1; then
+          echo "⚠️  Base ref '$BASE_REF_INPUT' not found locally. Attempting to fetch..."
+          if [[ "$BASE_REF_INPUT" == origin/* ]]; then
+            REMOTE_BRANCH=${BASE_REF_INPUT#origin/}
+            git fetch origin "$REMOTE_BRANCH" --depth=20
+          else
+            git fetch origin "$BASE_REF_INPUT" --depth=20
+          fi
+        fi
+
         "${{ github.action_path }}/ai-reviewer" \
           --api-key "$RESOLVED_API_KEY" \
           --github-token "$RESOLVED_TOKEN" \
