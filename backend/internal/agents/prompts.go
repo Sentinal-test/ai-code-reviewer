@@ -1,11 +1,12 @@
 package agents
 
 // sharedRules contains the mandatory analysis rules shared by all specialist agents.
+// It accepts a single Format parameter for injecting the multi-repo context block if present.
 const sharedRules = `
 ═══════════════════════════════════════════════════════════════════════════════
 MANDATORY ANALYSIS RULES
 ═══════════════════════════════════════════════════════════════════════════════
-
+%s
 RULE 1 — SCOPE: Review ONLY the diff ('+' lines).
   ✓ Every comment MUST reference a specific line from the diff ('+' lines).
   ✓ Use the full file and dependencies for understanding context.

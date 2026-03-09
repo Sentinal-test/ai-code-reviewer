@@ -67,14 +67,14 @@ Prices below are calculated using the prevailing **Gemini 2.5 Pro** rates ($1.25
 
 ## Monthly Budget Projection
 
-Based on a standard engineering team of **10 developers** performing **1,000 PRs per month** (Mix: 60% Small, 30% Medium, 10% Large).
+Based on a standard engineering team of **10 developers** performing **100 PRs per month** (Mix: 60% Small, 30% Medium, 10% Large).
 
 | PR Mix | Count | Avg Cost/PR (USD) | Avg Cost/PR (INR) | Monthly Total (USD) | Monthly Total (INR) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Small** | 600 | $0.04 | ₹3.50 | $24.00 | ₹2,100 |
-| **Medium** | 300 | $0.31 | ₹28.00 | $93.00 | ₹8,400 |
-| **Large** | 100 | $2.25 | ₹200.00 | $225.00 | ₹20,000 |
-| **TOTAL** | **1,000 PRs** | -- | -- | **$342.00** | **₹30,500** |
+| **Small** | 60 | $0.04 | ₹3.50 | $2.40 | ₹210 |
+| **Medium** | 30 | $0.31 | ₹28.00 | $9.30 | ₹840 |
+| **Large** | 10 | $2.25 | ₹200.00 | $22.50 | ₹2,000 |
+| **TOTAL** | **100 PRs** | -- | -- | **$34.20** | **₹3,050** |
 
 > [!IMPORTANT]
-> **Operational ROI**: Supporting a 10-person dev team costs approximately **$350 (₹30,000) per month**. Compared to the combined hourly rate of senior engineers manually hunting for subtle state leaks, architectural drift, or security vulnerabilities, the system pays for itself in just hours of human-time saved per month.
+> **Operational ROI**: Supporting a 10-person dev team costs approximately **$35 (₹3,050) per month**. Compared to the combined hourly rate of senior engineers manually hunting for subtle state leaks, architectural drift, or security vulnerabilities, the system pays for itself in just minutes of human-time saved per month.

@@ -31,4 +31,5 @@ datasets/
 docs/prompts
 
 .ai-reviewer/
+/output.md
 

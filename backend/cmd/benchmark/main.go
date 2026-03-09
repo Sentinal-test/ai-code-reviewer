@@ -6,6 +6,8 @@ import (
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/models"
 	"code-review/backend/internal/orchestrator"
+	"code-review/backend/internal/remotefetch"
+	"code-review/backend/internal/reposelect"
 	"context"
 	"encoding/json"
 	"flag"
@@ -27,6 +29,7 @@ type Truth struct {
 	Category             string    `json:"category"`
 	PRContext            PRContext `json:"pr_context"`
 	ExpectedDependencies []string  `json:"expected_dependencies"`
+	ExpectedCrossRepo    []string  `json:"expected_cross_repo_matches"`
 	BenchmarkTags        []string  `json:"benchmark_tags"`
 	Bugs                 []Bug     `json:"bugs"`
 	ExpectedComments     int       `json:"expected_comments"`
@@ -56,6 +59,7 @@ type Result struct {
 	Recall           float64
 	Precision        float64
 	DependencyRecall float64
+	CrossRepoRecall  float64
 	Comments         int
 	Error            string
 }
@@ -230,6 +234,10 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 
 	fmt.Printf("   🔭 Running Code Graph context analysis...\n")
 	dependencies := make(map[string]string)
+	matchSummary := ""
+	crossRepoRecall := 1.0
+	var remoteGraphs map[string]*codegraph.RemoteRepoGraph
+	var remoteFetch *remotefetch.Fetcher
 	cgContext, contextErr := cgService.GetContext(ctx, changedFiles)
 	if contextErr != nil {
 		fmt.Printf("   ⚠️  Code Graph context failed: %v\n", contextErr)
@@ -241,6 +249,35 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 	depRecall, depFound := dependencyRecall(truth.ExpectedDependencies, dependencies)
 	if len(truth.ExpectedDependencies) > 0 {
 		fmt.Printf("   🔍 Code Graph Recall: %.2f (%d/%d found)\n", depRecall, depFound, len(truth.ExpectedDependencies))
+	}
+
+	remoteBaseDir, remoteGraphs, remoteBuildErr := materializeRemoteRepos(ctx, caseDir)
+	if remoteBuildErr != nil {
+		return Result{
+			Approach: approach,
+			CaseID:   caseID,
+			CaseDir:  caseDir,
+			Tags:     truth.BenchmarkTags,
+			Error:    fmt.Sprintf("Failed to materialize remote repos: %v", remoteBuildErr),
+		}
+	}
+	if remoteBaseDir != "" {
+		defer os.RemoveAll(remoteBaseDir)
+	}
+
+	if cgService.Graph != nil && len(remoteGraphs) > 0 {
+		matches := reposelect.MatchRepos(reposelect.ExtractLocalSignals(cgService.Graph, changedFiles), remoteGraphs)
+		matchSummary = reposelect.FormatMatchSummary(matches)
+		crossRepoRecall = crossRepoRecallScore(truth.ExpectedCrossRepo, matches)
+		remoteFetch = remotefetch.NewFetcher(remoteBaseDir, 10, 250, 500000)
+
+		fmt.Printf("   🌐 Cross-Repo Matches: %.2f (%d expected)\n", crossRepoRecall, len(truth.ExpectedCrossRepo))
+		if matchSummary != "" {
+			fmt.Printf("%s\n", indentBlock(matchSummary, "      "))
+		}
+	} else if len(truth.ExpectedCrossRepo) > 0 {
+		crossRepoRecall = 0.0
+		fmt.Printf("   🌐 Cross-Repo Matches: %.2f (%d expected)\n", crossRepoRecall, len(truth.ExpectedCrossRepo))
 	}
 
 	// 4. Run review
@@ -257,6 +294,9 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 		prContext,
 		cgService,
 		repoPath,
+		matchSummary,
+		remoteGraphs,
+		remoteFetch,
 	)
 	if err != nil {
 		return Result{
@@ -291,7 +331,7 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 	if len(truth.ExpectedDependencies) > 0 {
 		minDepRecall = 0.5
 	}
-	passed := recall >= 1.0 && depRecall >= minDepRecall
+	passed := recall >= 1.0 && depRecall >= minDepRecall && crossRepoRecall >= 1.0
 
 	fmt.Printf("   ✅ Recall: %.2f | Precision: %.2f | Comments: %d\n", recall, precision, len(review.Comments))
 
@@ -304,6 +344,7 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 		Recall:           recall,
 		Precision:        precision,
 		DependencyRecall: depRecall,
+		CrossRepoRecall:  crossRepoRecall,
 		Comments:         len(review.Comments),
 	}
 }
@@ -321,6 +362,9 @@ func runReviewByApproach(
 	prContext models.PRContext,
 	cgService *codegraph.Service,
 	repoPath string,
+	matchSummary string,
+	remoteGraphs map[string]*codegraph.RemoteRepoGraph,
+	remoteFetch *remotefetch.Fetcher,
 ) (*models.ReviewResult, error) {
 	switch approach {
 	case "baseline":
@@ -350,6 +394,9 @@ func runReviewByApproach(
 				prContext,
 				cgService.Graph,
 				repoPath,
+				matchSummary,
+				remoteGraphs,
+				remoteFetch,
 			)
 			if err != nil {
 				fmt.Printf("   ❌ Chunk %d/%d failed: %v\n", chunk.Index, chunk.Total, err)
@@ -441,6 +488,7 @@ func printSummary(results []Result) {
 		avgRecall := 0.0
 		avgPrecision := 0.0
 		avgDepRecall := 0.0
+		avgCrossRepoRecall := 0.0
 		errors := 0
 
 		for _, res := range approachResults {
@@ -456,20 +504,21 @@ func printSummary(results []Result) {
 				status = "✅ PASS"
 				passed++
 			}
-			fmt.Printf("%-18s | Recall: %.2f | Prec: %.2f | DepRec: %.2f | %s\n",
-				res.CaseID, res.Recall, res.Precision, res.DependencyRecall, status)
+			fmt.Printf("%-18s | Recall: %.2f | Prec: %.2f | DepRec: %.2f | XRepo: %.2f | %s\n",
+				res.CaseID, res.Recall, res.Precision, res.DependencyRecall, res.CrossRepoRecall, status)
 
 			avgRecall += res.Recall
 			avgPrecision += res.Precision
 			avgDepRecall += res.DependencyRecall
+			avgCrossRepoRecall += res.CrossRepoRecall
 		}
 
 		if total > 0 {
 			fmt.Println(strings.Repeat("-", 80))
 			fmt.Printf("Total Cases: %d | Passed: %d (%.0f%%) | Errors: %d\n",
 				total, passed, (float64(passed)/float64(total))*100, errors)
-			fmt.Printf("Avg Recall: %.2f | Avg Precision: %.2f | Avg DepRecall: %.2f\n",
-				avgRecall/float64(total), avgPrecision/float64(total), avgDepRecall/float64(total))
+			fmt.Printf("Avg Recall: %.2f | Avg Precision: %.2f | Avg DepRecall: %.2f | Avg XRepo: %.2f\n",
+				avgRecall/float64(total), avgPrecision/float64(total), avgDepRecall/float64(total), avgCrossRepoRecall/float64(total))
 		}
 	}
 
@@ -517,8 +566,8 @@ func printComparativeDelta(byApproach map[string][]Result) {
 			fmt.Printf("%-18s | skipped delta (error in one approach)\n", caseID)
 			continue
 		}
-		fmt.Printf("%-18s | ΔRecall: %+0.2f | ΔPrec: %+0.2f | ΔDepRec: %+0.2f\n",
-			caseID, p.Recall-b.Recall, p.Precision-b.Precision, p.DependencyRecall-b.DependencyRecall)
+		fmt.Printf("%-18s | ΔRecall: %+0.2f | ΔPrec: %+0.2f | ΔDepRec: %+0.2f | ΔXRepo: %+0.2f\n",
+			caseID, p.Recall-b.Recall, p.Precision-b.Precision, p.DependencyRecall-b.DependencyRecall, p.CrossRepoRecall-b.CrossRepoRecall)
 	}
 }
 
@@ -732,6 +781,97 @@ func materializeCaseRepo(caseDir string) (repoPath string, changedFiles map[stri
 	}
 
 	return tmpDir, changedFiles, cleanup, nil
+}
+
+func materializeRemoteRepos(ctx context.Context, caseDir string) (string, map[string]*codegraph.RemoteRepoGraph, error) {
+	remoteRoot := filepath.Join(caseDir, "remote_repos")
+	if !isDir(remoteRoot) {
+		return "", nil, nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", "ai-review-benchmark-remote-*")
+	if err != nil {
+		return "", nil, err
+	}
+
+	graphs := make(map[string]*codegraph.RemoteRepoGraph)
+
+	owners, err := os.ReadDir(remoteRoot)
+	if err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return "", nil, err
+	}
+
+	for _, ownerEntry := range owners {
+		if !ownerEntry.IsDir() {
+			continue
+		}
+
+		ownerDir := filepath.Join(remoteRoot, ownerEntry.Name())
+		repos, readErr := os.ReadDir(ownerDir)
+		if readErr != nil {
+			_ = os.RemoveAll(tmpDir)
+			return "", nil, readErr
+		}
+
+		for _, repoEntry := range repos {
+			if !repoEntry.IsDir() {
+				continue
+			}
+
+			repoFullName := ownerEntry.Name() + "/" + repoEntry.Name()
+			srcDir := filepath.Join(ownerDir, repoEntry.Name())
+			dstDir := filepath.Join(tmpDir, ownerEntry.Name(), repoEntry.Name())
+			if err := copyDirContents(srcDir, dstDir); err != nil {
+				_ = os.RemoveAll(tmpDir)
+				return "", nil, fmt.Errorf("copy remote repo %s: %w", repoFullName, err)
+			}
+
+			graph, err := codegraph.BuildRemoteGraph(ctx, repoFullName, dstDir)
+			if err != nil {
+				_ = os.RemoveAll(tmpDir)
+				return "", nil, fmt.Errorf("build remote graph %s: %w", repoFullName, err)
+			}
+			graphs[repoFullName] = graph
+		}
+	}
+
+	return tmpDir, graphs, nil
+}
+
+func crossRepoRecallScore(expected []string, matches []reposelect.CandidateMatch) float64 {
+	if len(expected) == 0 {
+		if len(matches) == 0 {
+			return 1.0
+		}
+		return 0.0
+	}
+
+	found := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		found[strings.ToLower(match.RepoFullName)] = struct{}{}
+	}
+
+	matched := 0
+	for _, repo := range expected {
+		if _, ok := found[strings.ToLower(repo)]; ok {
+			matched++
+		}
+	}
+
+	return float64(matched) / float64(len(expected))
+}
+
+func indentBlock(input, prefix string) string {
+	if strings.TrimSpace(input) == "" {
+		return ""
+	}
+
+	lines := strings.Split(input, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func copyDirContents(src, dst string) error {

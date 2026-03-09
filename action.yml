@@ -20,6 +20,12 @@ inputs:
   allowed_domain:
     description: 'Optional: Organization domain'
     required: false
+  app_id:
+    description: 'Optional: GitHub App ID for multi-repo context'
+    required: false
+  app_private_key:
+    description: 'Optional: GitHub App Private Key for multi-repo context'
+    required: false
 
 runs:
   using: "composite"
@@ -58,6 +64,8 @@ runs:
         PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         BASE_REF_INPUT: ${{ inputs.base_ref }}
         HEAD_REF_INPUT: ${{ inputs.head_ref }}
+        APP_ID_INPUT: ${{ inputs.app_id }}
+        APP_PRIVATE_KEY_INPUT: ${{ inputs.app_private_key }}
       run: |
         echo "🔍 Validating inputs..."
         
@@ -95,4 +103,6 @@ runs:
           --repo "$GITHUB_REPOSITORY" \
           --sha "$GITHUB_SHA" \
           --base "$BASE_REF_INPUT" \
-          --head "$HEAD_REF_INPUT"
+          --head "$HEAD_REF_INPUT" \
+          --app-id "$APP_ID_INPUT" \
+          --app-private-key "$APP_PRIVATE_KEY_INPUT"
