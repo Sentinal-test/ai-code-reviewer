@@ -11,6 +11,7 @@ func TestExtractLocalSignals(t *testing.T) {
 	localGraph := &codegraph.Graph{
 		Files: map[string]codegraph.FileEntry{
 			"auth/client.go": {
+				Language: "go",
 				Definitions: []codegraph.Definition{
 					{Symbol: "ValidateToken", Kind: "function"},
 					{Symbol: "internalCheck", Kind: "function"},
@@ -26,13 +27,13 @@ func TestExtractLocalSignals(t *testing.T) {
 
 	signals := ExtractLocalSignals(localGraph, changedFiles)
 
-	if !signals.ChangedExports["ValidateToken"] {
+	if signals.ChangedExports["ValidateToken"] == "" {
 		t.Error(" expected ValidateToken to be in ChangedExports")
 	}
-	if signals.ChangedExports["internalCheck"] {
+	if signals.ChangedExports["internalCheck"] != "" {
 		t.Error(" expected internalCheck NOT to be in ChangedExports (lowercase)")
 	}
-	if !signals.ChangedImports["fmt"] {
+	if signals.ChangedImports["fmt"] == "" {
 		t.Error(" expected fmt to be in ChangedImports")
 	}
 }
@@ -42,6 +43,7 @@ func TestExtractRemoteFacts(t *testing.T) {
 		RepoFullName: "org/service-a",
 		Files: map[string]codegraph.RemoteFileEntry{
 			"main.go": {
+				Language: "go",
 				Definitions: []codegraph.Definition{
 					{Symbol: "ServiceAHandler", Kind: "function"},
 				},
@@ -52,19 +54,19 @@ func TestExtractRemoteFacts(t *testing.T) {
 
 	facts := ExtractRemoteFacts(remoteGraph)
 
-	if len(facts.Exports) != 1 || facts.Exports[0] != "ServiceAHandler" {
+	if len(facts.Exports) != 1 || facts.Exports["ServiceAHandler"] == "" {
 		t.Errorf("unexpected exports: %v", facts.Exports)
 	}
 
-	if len(facts.Imports) != 1 || facts.Imports[0] != "fmt" {
+	if len(facts.Imports) != 1 || facts.Imports["fmt"] == "" {
 		t.Errorf("unexpected imports: %v", facts.Imports)
 	}
 }
 
 func TestMatchRepos(t *testing.T) {
 	signals := LocalSignals{
-		ChangedExports: map[string]bool{"ValidateToken": true},
-		ChangedImports: map[string]bool{"fmt": true},
+		ChangedExports: map[string]string{"ValidateToken": "go"},
+		ChangedImports: map[string]string{"github.com/google/uuid": "go"},
 	}
 
 	remoteGraphs := map[string]*codegraph.RemoteRepoGraph{
@@ -72,7 +74,8 @@ func TestMatchRepos(t *testing.T) {
 			RepoFullName: "org/consumer-repo",
 			Files: map[string]codegraph.RemoteFileEntry{
 				"main.go": {
-					Imports: []string{"fmt"},
+					Language: "go",
+					Imports:  []string{"github.com/google/uuid"},
 					Definitions: []codegraph.Definition{
 						{Symbol: "UnrelatedSymbol"},
 					},
@@ -83,6 +86,7 @@ func TestMatchRepos(t *testing.T) {
 			RepoFullName: "org/consumer-symbol",
 			Files: map[string]codegraph.RemoteFileEntry{
 				"main.go": {
+					Language: "go",
 					Definitions: []codegraph.Definition{
 						{Symbol: "ValidateToken"},
 					},

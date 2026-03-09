@@ -9,8 +9,8 @@ import (
 // LocalSignals contains facts extracted from the PR's local graph.
 // These represent the "surface area" of the PR changes that might affect other repos.
 type LocalSignals struct {
-	ChangedExports map[string]bool // map[SymbolName]true
-	ChangedImports map[string]bool // map[ImportPath]true
+	ChangedExports map[string]string // map[SymbolName]Language
+	ChangedImports map[string]string // map[ImportPath]Language
 	// Placeholders for advanced extraction:
 	// ChangedHTTPRoutes map[string]bool
 	// ChangedTopics     map[string]bool
@@ -19,32 +19,30 @@ type LocalSignals struct {
 
 // RemoteFacts contains the targetable surface area of a remote repository.
 type RemoteFacts struct {
-	Imports []string // Packages/modules this repo imports
-	Exports []string // Symbols this repo provides
+	Imports map[string]string // map[ImportPath]Language
+	Exports map[string]string // map[SymbolName]Language
 }
 
 // ExtractLocalSignals analyzes the local code graph + the diff (changedFiles)
 // to identify what changed that a remote repo might care about.
 func ExtractLocalSignals(localGraph *codegraph.Graph, changedFiles map[string]string) LocalSignals {
 	signals := LocalSignals{
-		ChangedExports: make(map[string]bool),
-		ChangedImports: make(map[string]bool),
+		ChangedExports: make(map[string]string),
+		ChangedImports: make(map[string]string),
 	}
 
 	for path := range changedFiles {
 		if entry, ok := localGraph.Files[path]; ok {
 			// 1. Extract changed exports (Definitions)
 			for _, def := range entry.Definitions {
-				// Naive export check: in Go, starts with capital letter.
-				// For phase 1, we just collect all definitions, and rely on matching rules.
-				if len(def.Symbol) > 0 && def.Symbol[0] >= 'A' && def.Symbol[0] <= 'Z' {
-					signals.ChangedExports[def.Symbol] = true
+				if IsExported(entry.Language, def.Symbol) {
+					signals.ChangedExports[def.Symbol] = entry.Language
 				}
 			}
 
 			// 2. Extract changed imports
 			for _, imp := range entry.Imports {
-				signals.ChangedImports[imp] = true
+				signals.ChangedImports[imp] = entry.Language
 			}
 		}
 	}
@@ -54,27 +52,20 @@ func ExtractLocalSignals(localGraph *codegraph.Graph, changedFiles map[string]st
 
 // ExtractRemoteFacts flattens a remote graph into matchable lists.
 func ExtractRemoteFacts(remoteGraph *codegraph.RemoteRepoGraph) RemoteFacts {
-	facts := RemoteFacts{}
-
-	importSet := make(map[string]bool)
-	exportSet := make(map[string]bool)
+	facts := RemoteFacts{
+		Imports: make(map[string]string),
+		Exports: make(map[string]string),
+	}
 
 	for _, entry := range remoteGraph.Files {
 		for _, imp := range entry.Imports {
-			importSet[imp] = true
+			facts.Imports[imp] = entry.Language
 		}
 		for _, def := range entry.Definitions {
-			if len(def.Symbol) > 0 && def.Symbol[0] >= 'A' && def.Symbol[0] <= 'Z' {
-				exportSet[def.Symbol] = true
+			if IsExported(entry.Language, def.Symbol) {
+				facts.Exports[def.Symbol] = entry.Language
 			}
 		}
-	}
-
-	for imp := range importSet {
-		facts.Imports = append(facts.Imports, imp)
-	}
-	for exp := range exportSet {
-		facts.Exports = append(facts.Exports, exp)
 	}
 
 	return facts
@@ -100,15 +91,13 @@ func MatchRepos(signals LocalSignals, remoteGraphs map[string]*codegraph.RemoteR
 		// Rule 1: Direct module import match
 		// Check if the remote repo imports something the local repo changed.
 		// (In a real monorepo/polyrepo setup, you'd match the module prefix).
-		for _, imp := range facts.Imports {
-			// Skip standard library imports (e.g., "fmt", "net/http")
-			// Third-party and internal modules typically have a dot in the first path segment.
-			firstSegment := strings.Split(imp, "/")[0]
-			if !strings.Contains(firstSegment, ".") {
+		for imp, lang := range facts.Imports {
+			// Skip standard library imports based on language
+			if IsStandardLibrary(lang, imp) {
 				continue
 			}
 
-			if signals.ChangedImports[imp] {
+			if signals.ChangedImports[imp] != "" {
 				candidates = append(candidates, CandidateMatch{
 					RepoFullName: repoName,
 					Priority:     1,
@@ -118,9 +107,6 @@ func MatchRepos(signals LocalSignals, remoteGraphs map[string]*codegraph.RemoteR
 				matched = true
 				break
 			}
-
-			// If we know our own module name, we'd check if `imp` starts with it.
-			// e.g. if we are `github.com/myorg/auth` and remote imports it.
 		}
 		if matched {
 			continue // Already high priority, move to next repo
@@ -128,8 +114,8 @@ func MatchRepos(signals LocalSignals, remoteGraphs map[string]*codegraph.RemoteR
 
 		// Rule 5: Shared symbol match
 		// Check if the remote repo provides or consumes a symbol the PR changed.
-		for _, exp := range facts.Exports {
-			if signals.ChangedExports[exp] {
+		for exp, _ := range facts.Exports {
+			if signals.ChangedExports[exp] != "" {
 				candidates = append(candidates, CandidateMatch{
 					RepoFullName: repoName,
 					Priority:     5,
