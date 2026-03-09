@@ -47,8 +47,9 @@ func DiscoverRepos(ctx context.Context, allRepos []*github.Repository, currentRe
 			continue
 		}
 
-		// ✅ Include Private and internal repos only
-		if !repo.GetPrivate() && repo.GetVisibility() != "internal" {
+		// ✅ Security Scope: Only include repos from the same owner (Organizational boundary)
+		currentOwner := strings.Split(currentRepoFullName, "/")[0]
+		if !strings.EqualFold(repo.GetOwner().GetLogin(), currentOwner) {
 			continue
 		}
 

@@ -48,15 +48,30 @@ func TestDiscoverRepos(t *testing.T) {
 			Private:  ptr(true),
 			Size:     ptr(100),
 		},
+		{
+			Owner:    &github.User{Login: ptr("other-org")},
+			Name:     ptr("external-repo"),
+			FullName: ptr("other-org/external-repo"),
+			Private:  ptr(true),
+			Size:     ptr(100),
+		},
 	}
 
 	discovered := DiscoverRepos(context.Background(), repos, "org/pr-repo")
 
-	if len(discovered) != 1 {
-		t.Fatalf("expected 1 discovered repo, got %d", len(discovered))
+	if len(discovered) != 2 {
+		t.Fatalf("expected 2 discovered repos, got %d", len(discovered))
 	}
 
-	if discovered[0].FullName != "org/valid-repo" {
-		t.Errorf("expected org/valid-repo, got %s", discovered[0].FullName)
+	foundRepos := make(map[string]bool)
+	for _, d := range discovered {
+		foundRepos[d.FullName] = true
+	}
+
+	if !foundRepos["org/valid-repo"] {
+		t.Error("expected org/valid-repo to be discovered")
+	}
+	if !foundRepos["org/public-repo"] {
+		t.Error("expected org/public-repo to be discovered")
 	}
 }
