@@ -107,6 +107,23 @@ runs:
           fi
         fi
 
+        # Check for merge base (handles shallow clones where base branch is known but history is missing)
+        if ! git merge-base "$BASE_REF_INPUT" "$HEAD_REF_INPUT" >/dev/null 2>&1; then
+          echo "⚠️  No merge base found between $BASE_REF_INPUT and $HEAD_REF_INPUT. Attempting to fetch more history..."
+          if [[ "$BASE_REF_INPUT" == origin/* ]]; then
+            REMOTE_BRANCH=${BASE_REF_INPUT#origin/}
+            git fetch origin "$REMOTE_BRANCH" --depth=100
+          else
+            git fetch origin "$BASE_REF_INPUT" --depth=100
+          fi
+          
+          # If still no merge base, try unshallowing (last resort)
+          if ! git merge-base "$BASE_REF_INPUT" "$HEAD_REF_INPUT" >/dev/null 2>&1; then
+             echo "⚠️  Still no merge base. Unshollowing and fetching all history..."
+             git fetch --prune --unshallow || true
+          fi
+        fi
+
         "${{ github.action_path }}/ai-reviewer" \
           --api-key "$RESOLVED_API_KEY" \
           --github-token "$RESOLVED_TOKEN" \
