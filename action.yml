@@ -66,6 +66,9 @@ runs:
         HEAD_REF_INPUT: ${{ inputs.head_ref }}
         APP_ID_INPUT: ${{ inputs.app_id }}
         APP_PRIVATE_KEY_INPUT: ${{ inputs.app_private_key }}
+        # Support for Org-level secrets
+        ORG_APP_ID: ${{ secrets.APP_ID }}
+        ORG_APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
       run: |
         echo "🔍 Validating inputs..."
         
@@ -77,6 +80,10 @@ runs:
         RESOLVED_API_KEY="${GEMINI_API_KEY_INPUT:-${ORG_GEMINI_API_KEY:-$GEMINI_API_KEY}}"
         RESOLVED_TOKEN="${GITHUB_TOKEN_INPUT:-$GITHUB_TOKEN}"
         
+        # Resolve App Credentials (Input > Org Secret)
+        RESOLVED_APP_ID="${APP_ID_INPUT:-$ORG_APP_ID}"
+        RESOLVED_APP_PRIVATE_KEY="${APP_PRIVATE_KEY_INPUT:-$ORG_APP_PRIVATE_KEY}"
+
         if [ -n "$RESOLVED_API_KEY" ]; then
           echo "✅ API Key resolved (starts with: ${RESOLVED_API_KEY:0:4}...)"
         else
@@ -132,5 +139,5 @@ runs:
           --sha "$GITHUB_SHA" \
           --base "$BASE_REF_INPUT" \
           --head "$HEAD_REF_INPUT" \
-          --app-id "$APP_ID_INPUT" \
-          --app-private-key "$APP_PRIVATE_KEY_INPUT"
+          --app-id "$RESOLVED_APP_ID" \
+          --app-private-key "$RESOLVED_APP_PRIVATE_KEY"
