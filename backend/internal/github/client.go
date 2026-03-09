@@ -206,3 +206,25 @@ func GetChangedFilesContent(ctx context.Context, client *github.Client, owner, r
 	}
 	return contentMap, nil
 }
+
+// ListInstallationRepos fetches all repositories accessible to the current GitHub App installation.
+func ListInstallationRepos(ctx context.Context, client *github.Client) ([]*github.Repository, error) {
+	var allRepos []*github.Repository
+	opts := &github.ListOptions{PerPage: 100}
+
+	for {
+		result, resp, err := client.Apps.ListRepos(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		allRepos = append(allRepos, result.Repositories...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return allRepos, nil
+}

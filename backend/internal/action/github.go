@@ -4,6 +4,8 @@ import (
 	"code-review/backend/internal/models"
 	"context"
 	"fmt"
+	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v60/github"
 	"golang.org/x/oauth2"
 )
@@ -119,6 +122,7 @@ type GitHubClient struct {
 	client *github.Client
 	owner  string
 	repo   string
+	Token  string
 }
 
 func NewGitHubClient(ctx context.Context, token, owner, repo string) *GitHubClient {
@@ -131,7 +135,59 @@ func NewGitHubClient(ctx context.Context, token, owner, repo string) *GitHubClie
 		client: client,
 		owner:  owner,
 		repo:   repo,
+		Token:  token,
 	}
+}
+
+// NewGitHubAppClient initializes a GitHub client using an App Installation Token.
+// It authenticates as the App, finds its installation for the repo, and creates a client.
+func NewGitHubAppClient(ctx context.Context, appID int64, privateKeyString, owner, repo string) (*GitHubClient, error) {
+	// Parse private key. If it's a file path or raw string, we'll try raw bytes first.
+	var privateKey []byte
+	// if it doesn't look like an RSA key header, might be a file path, though we expect raw string from Secrets.
+	if !strings.Contains(privateKeyString, "-----BEGIN") {
+		// Just in case it's a path (unlikely for Secrets, but good fallback)
+		data, err := os.ReadFile(privateKeyString)
+		if err == nil {
+			privateKey = data
+		} else {
+			privateKey = []byte(privateKeyString)
+		}
+	} else {
+		privateKey = []byte(privateKeyString)
+	}
+
+	// Create App transport
+	appTransport, err := ghinstallation.NewAppsTransport(http.DefaultTransport, appID, privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create app transport: %w", err)
+	}
+
+	// Temporary client just to find the installation ID
+	appClient := github.NewClient(&http.Client{Transport: appTransport})
+
+	install, _, err := appClient.Apps.FindRepositoryInstallation(ctx, owner, repo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find installation for %s/%s: %w", owner, repo, err)
+	}
+
+	// Create Installation transport
+	itr := ghinstallation.NewFromAppsTransport(appTransport, install.GetID())
+	installClient := github.NewClient(&http.Client{Transport: itr})
+
+	// Fetch actual token string to store manually if needed by scripts
+	token, _, err := appClient.Apps.CreateInstallationToken(ctx, install.GetID(), nil)
+	var rawToken string
+	if err == nil && token != nil {
+		rawToken = token.GetToken()
+	}
+
+	return &GitHubClient{
+		client: installClient,
+		owner:  owner,
+		repo:   repo,
+		Token:  rawToken, // Store the raw token for things that need to clone
+	}, nil
 }
 
 // PostReviewComment posts the review comments to the PR.
@@ -343,4 +399,26 @@ func (g *GitHubClient) GetPullRequest(ctx context.Context, prNumber int) (*model
 		Body:  pr.GetBody(),
 		// Commits fetching could be added here if needed, but Title/Body is the main missing piece
 	}, nil
+}
+
+// ListAccessibleRepos fetches all repositories accessible to the current GitHub App installation.
+func (g *GitHubClient) ListAccessibleRepos(ctx context.Context) ([]*github.Repository, error) {
+	var allRepos []*github.Repository
+	opts := &github.ListOptions{PerPage: 100}
+
+	for {
+		result, resp, err := g.client.Apps.ListRepos(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		allRepos = append(allRepos, result.Repositories...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return allRepos, nil
 }

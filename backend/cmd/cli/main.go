@@ -6,7 +6,10 @@ import (
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/models"
+	"code-review/backend/internal/multirepo"
 	"code-review/backend/internal/orchestrator"
+	"code-review/backend/internal/remotefetch"
+	"code-review/backend/internal/reposelect"
 	"context"
 	"flag"
 	"fmt"
@@ -14,8 +17,29 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
+
+// checkMultiRepoAvailability returns true if the current token has access to more than 1 repository.
+func checkMultiRepoAvailability(ctx context.Context, ghClient *action.GitHubClient) bool {
+	if ghClient == nil {
+		fmt.Println("ℹ️ Multi-repo context skipped: no GitHub client available.")
+		return false
+	}
+	repos, err := ghClient.ListAccessibleRepos(ctx)
+	if err != nil {
+		fmt.Printf("ℹ️ Multi-repo context skipped: unable to list accessible repos (likely using standard token instead of App token).\n")
+		return false
+	}
+	if len(repos) <= 1 {
+		fmt.Printf("ℹ️ Multi-repo context skipped: token has access to only 1 repository.\n")
+		return false
+	}
+	fmt.Printf("✅ Multi-repo context available! Found %d accessible repositories.\n", len(repos))
+	return true
+}
 
 func main() {
 	// 1. Parse Args & Env
@@ -24,6 +48,8 @@ func main() {
 	prNumberFlag := flag.String("pr-number", "", "Pull Request Number")
 	repoNameFlag := flag.String("repo", "", "Repository Name (owner/repo)")
 	commitShaFlag := flag.String("sha", "", "Commit SHA")
+	appIdFlag := flag.String("app-id", "", "GitHub App ID")
+	appPrivateKeyFlag := flag.String("app-private-key", "", "GitHub App Private Key")
 
 	// Flags for local testing or overrides
 	baseRef := flag.String("base", "main", "Base ref to diff against")
@@ -56,6 +82,16 @@ func main() {
 	commitSHA := *commitShaFlag
 	if commitSHA == "" {
 		commitSHA = os.Getenv("GITHUB_SHA")
+	}
+
+	appID := *appIdFlag
+	if appID == "" {
+		appID = os.Getenv("APP_ID")
+	}
+
+	appPrivateKey := *appPrivateKeyFlag
+	if appPrivateKey == "" {
+		appPrivateKey = os.Getenv("APP_PRIVATE_KEY")
 	}
 
 	if apiKey == "" {
@@ -102,21 +138,91 @@ func main() {
 		Body:  "Running via GitHub Actions CLI",
 	}
 
-	// Fetch real PR metadata if tokens are available
-	if githubToken != "" && repoName != "" && prNumber != "" {
+	var ghClient *action.GitHubClient
+	if repoName != "" {
 		parts := strings.Split(repoName, "/")
 		if len(parts) == 2 {
-			var prNum int
-			fmt.Sscanf(prNumber, "%d", &prNum)
-			ghClient := action.NewGitHubClient(context.Background(), githubToken, parts[0], parts[1])
-			realPR, err := ghClient.GetPullRequest(context.Background(), prNum)
-			if err != nil {
-				fmt.Printf("⚠️ Failed to fetch PR metadata: %v. Using defaults.\n", err)
-			} else {
-				prContext = *realPR
-				fmt.Printf("✅ Fetched PR Context: %s\n", prContext.Title)
+			if appID != "" && appPrivateKey != "" {
+				fmt.Println("🔑 Using GitHub App credentials...")
+				appIDInt, err := strconv.ParseInt(appID, 10, 64)
+				if err == nil {
+					ghClient, err = action.NewGitHubAppClient(context.Background(), appIDInt, appPrivateKey, parts[0], parts[1])
+					if err != nil {
+						fmt.Printf("⚠️ Failed to initialize App client: %v. Falling back to Token.\n", err)
+						ghClient = action.NewGitHubClient(context.Background(), githubToken, parts[0], parts[1])
+					}
+				} else {
+					fmt.Printf("⚠️ Invalid App ID: %v. Falling back to Token.\n", err)
+					ghClient = action.NewGitHubClient(context.Background(), githubToken, parts[0], parts[1])
+				}
+			} else if githubToken != "" {
+				ghClient = action.NewGitHubClient(context.Background(), githubToken, parts[0], parts[1])
 			}
 		}
+	}
+
+	// Fetch real PR metadata if tokens are available
+	if ghClient != nil && prNumber != "" {
+		var prNum int
+		fmt.Sscanf(prNumber, "%d", &prNum)
+		realPR, err := ghClient.GetPullRequest(context.Background(), prNum)
+		if err != nil {
+			fmt.Printf("⚠️ Failed to fetch PR metadata: %v. Using defaults.\n", err)
+		} else {
+			prContext = *realPR
+			fmt.Printf("✅ Fetched PR Context: %s\n", prContext.Title)
+		}
+	}
+
+	// Phase 0/1/2/3: Multi-repo compatibility guard & execution
+	var matchSummary string
+	var remoteGraphs map[string]*codegraph.RemoteRepoGraph
+	var remoteFetch *remotefetch.Fetcher
+
+	multiRepoStartTime := time.Now()
+	var baseTempDir string
+	if checkMultiRepoAvailability(context.Background(), ghClient) {
+		fmt.Println("🌐 [MultiRepo] Multi-repo review capability detected.")
+
+		// 1. Discover accessible repositories
+		fmt.Println("   🔍 Discovering accessible repositories...")
+		repos, err := ghClient.ListAccessibleRepos(context.Background())
+		if err != nil {
+			fmt.Printf("   ⚠️  Failed to discover repos: %v (falling back to single-repo)\n", err)
+		} else {
+			filteredRepos := multirepo.DiscoverRepos(context.Background(), repos, repoName)
+			fmt.Printf("   ✅ Found %d accessible peer repositories\n", len(filteredRepos))
+
+			// 2. Checkout & Graph Build
+			fmt.Println("   📥 Fetching lightweight graphs for peer repositories...")
+			workerPool := multirepo.NewWorkerPool(5)
+			remoteGraphs = make(map[string]*codegraph.RemoteRepoGraph)
+			// We need a temp dir to store the cloned repos.
+			baseTempDir, _ = os.MkdirTemp("", "ai-reviewer-multirepo-*")
+			defer os.RemoveAll(baseTempDir)
+
+			fetchMap := make(map[string]string) // map repoFullName -> localPath for fetcher
+
+			checkoutPaths, err := workerPool.ProcessRepos(context.Background(), filteredRepos, ghClient.Token, baseTempDir)
+			if err != nil {
+				fmt.Printf("   ⚠️ Failed to process repos: %v\n", err)
+			}
+
+			for repoFullName, localPath := range checkoutPaths {
+				fmt.Printf("      - Building graph for %s...\n", repoFullName)
+				graph, err := codegraph.BuildRemoteGraph(context.Background(), repoFullName, localPath)
+				if err != nil {
+					fmt.Printf("        ⚠️ Failed to build graph for %s: %v\n", repoFullName, err)
+					continue
+				}
+				remoteGraphs[repoFullName] = graph
+				fetchMap[repoFullName] = localPath
+			}
+
+			fmt.Printf("   ✅ Built graphs for %d peer repositories\n", len(remoteGraphs))
+		}
+	} else {
+		fmt.Println("   (Running in standard single-repo mode)")
 	}
 
 	// 4.7 Code Graph: Deterministic Context Analysis
@@ -175,6 +281,27 @@ func main() {
 		}
 	}
 
+	// Multi-Repo Matching Execution (Phase 2 & 3 combined)
+	if baseTempDir != "" && ghClient != nil && cgService.Graph != nil && len(remoteGraphs) > 0 {
+		fmt.Println("   🔄 Analyzing cross-repo dependencies...")
+		localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
+
+		matches := reposelect.MatchRepos(localSignals, remoteGraphs)
+		if len(matches) > 0 {
+			matchSummary = reposelect.FormatMatchSummary(matches)
+			fmt.Printf("   ✅ Found cross-repo references for %d peer repositories\n", len(matches))
+
+			remoteFetch = remotefetch.NewFetcher(baseTempDir, 5, 200, 500000)
+
+			// Because the worker pool creates temp directories, we need a way to fetch lines from them later.
+			// Instead of closing the pool / directories, we'll keep them around until process exit.
+		} else {
+			fmt.Println("   ℹ️ No direct cross-repo references found in this PR's scope.")
+		}
+
+		fmt.Printf("⏱️  [Timing] Multi-repo enrichment completed in %v\n", time.Since(multiRepoStartTime))
+	}
+
 	// Note: Review layer selection is now handled by the multi-agent orchestrator.
 	// Each specialist agent (Correctness, Security, Structure) covers its own layers.
 	// Per-layer toggles from RepoSettings can be re-added when rules.yml is implemented.
@@ -230,6 +357,9 @@ func main() {
 			scopedDeps, repoStructure,
 			apiKey, prContext,
 			cgService.Graph, wd,
+			matchSummary,
+			remoteGraphs,
+			remoteFetch,
 		)
 		if err != nil {
 			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)
@@ -270,7 +400,9 @@ func main() {
 		var prNum int
 		fmt.Sscanf(prNumber, "%d", &prNum)
 
-		ghClient := action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
+		if ghClient == nil {
+			ghClient = action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
+		}
 		if err := ghClient.PostReview(ctx, prNum, result, commitSHA, diff); err != nil {
 			fmt.Printf("❌ Failed to post review: %v\n", err)
 			os.Exit(1)

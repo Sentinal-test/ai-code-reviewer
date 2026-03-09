@@ -5,6 +5,7 @@ import (
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/models"
+	"code-review/backend/internal/remotefetch"
 	"context"
 	"fmt"
 	"net/http"
@@ -69,6 +70,9 @@ func ReviewChunk(
 	prContext models.PRContext,
 	graph *codegraph.Graph,
 	repoPath string,
+	matchSummary string,
+	remoteGraphs map[string]*codegraph.RemoteRepoGraph,
+	remoteFetch *remotefetch.Fetcher,
 ) (*models.ReviewResult, error) {
 
 	start := time.Now()
@@ -120,6 +124,7 @@ func ReviewChunk(
 		ChunkTotal:   chunkTotal,
 		APIKey:       apiKey,
 		RepoPath:     repoPath,
+		MatchSummary: matchSummary,
 	}
 
 	// Build per-agent configs with DIFFERENTIATED context:
@@ -140,6 +145,9 @@ func ReviewChunk(
 
 	// Create tool executor for agent tool calls
 	toolExecutor := llm.NewToolExecutor(repoPath, graph)
+	if matchSummary != "" {
+		toolExecutor.WithMultiRepo(matchSummary, remoteGraphs, remoteFetch)
+	}
 
 	// Prepare the 3 specialist configs
 	configs := []agents.AgentConfig{

@@ -34,6 +34,9 @@ type AgentConfig struct {
 	// LLM
 	APIKey   string
 	RepoPath string // for tool calls (file reads, git grep)
+
+	// Multi-repo
+	MatchSummary string
 }
 
 // AgentResult is the output from a single specialist agent.

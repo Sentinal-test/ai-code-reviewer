@@ -3,6 +3,7 @@ package llm
 import (
 	"code-review/backend/internal/agents"
 	"code-review/backend/internal/codegraph"
+	"code-review/backend/internal/remotefetch"
 	"context"
 	"fmt"
 	"os"
@@ -70,6 +71,76 @@ func AgentToolDeclarations() []map[string]interface{} {
 				"required": []string{"query"},
 			},
 		},
+		{
+			"name":        "list_cross_repo_matches",
+			"description": "List all cross-repository matches available for this PR context. Use this to discover which other repositories share code with the current PR.",
+			"parameters": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "resolve_repo_symbol",
+			"description": "Find which file defines a symbol inside a remote repository.",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"repo_full_name": map[string]interface{}{
+						"type":        "string",
+						"description": "The target repository. Must be retrieved from `list_cross_repo_matches`.",
+					},
+					"symbol": map[string]interface{}{
+						"type":        "string",
+						"description": "The symbol to find (e.g. 'AuthService').",
+					},
+				},
+				"required": []string{"repo_full_name", "symbol"},
+			},
+		},
+		{
+			"name":        "fetch_repo_snippet",
+			"description": "Fetch a specific snippet of code from a remote repository.",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"repo_full_name": map[string]interface{}{
+						"type":        "string",
+						"description": "The target repository.",
+					},
+					"file_path": map[string]interface{}{
+						"type":        "string",
+						"description": "The path to the file inside the remote repo.",
+					},
+					"start_line": map[string]interface{}{
+						"type":        "integer",
+						"description": "The starting line number (1-indexed).",
+					},
+					"end_line": map[string]interface{}{
+						"type":        "integer",
+						"description": "The ending line number (1-indexed).",
+					},
+				},
+				"required": []string{"repo_full_name", "file_path", "start_line", "end_line"},
+			},
+		},
+		{
+			"name":        "search_repo_graph",
+			"description": "Search the lightweight graph of a remote repository to find package imports or simple types.",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"repo_full_name": map[string]interface{}{
+						"type":        "string",
+						"description": "The target repository.",
+					},
+					"query": map[string]interface{}{
+						"type":        "string",
+						"description": "The string to match against exported definitions or imports.",
+					},
+				},
+				"required": []string{"repo_full_name", "query"},
+			},
+		},
 	}
 }
 
@@ -77,6 +148,11 @@ func AgentToolDeclarations() []map[string]interface{} {
 type ToolExecutor struct {
 	RepoPath string
 	Graph    *codegraph.Graph
+
+	// Multi-repo extensions
+	MatchSummary string
+	RemoteGraphs map[string]*codegraph.RemoteRepoGraph
+	RemoteFetch  *remotefetch.Fetcher
 }
 
 // NewToolExecutor creates a tool executor for the given repo.
@@ -85,6 +161,13 @@ func NewToolExecutor(repoPath string, graph *codegraph.Graph) *ToolExecutor {
 		RepoPath: repoPath,
 		Graph:    graph,
 	}
+}
+
+// WithMultiRepo attaches the multi-repo context to the ToolExecutor.
+func (te *ToolExecutor) WithMultiRepo(matchSummary string, remote map[string]*codegraph.RemoteRepoGraph, fetch *remotefetch.Fetcher) {
+	te.MatchSummary = matchSummary
+	te.RemoteGraphs = remote
+	te.RemoteFetch = fetch
 }
 
 // Execute runs a tool call and returns the result.
@@ -98,6 +181,14 @@ func (te *ToolExecutor) Execute(ctx context.Context, call agents.ToolCallRequest
 		return te.getCallers(call.Args)
 	case "search_codebase":
 		return te.searchCodebase(ctx, call.Args)
+	case "list_cross_repo_matches":
+		return te.listCrossRepoMatches()
+	case "resolve_repo_symbol":
+		return te.resolveRepoSymbol(call.Args)
+	case "fetch_repo_snippet":
+		return te.fetchRepoSnippet(ctx, call.Args)
+	case "search_repo_graph":
+		return te.searchRepoGraph(call.Args)
 	default:
 		return agents.ToolCallResponse{
 			Name:    call.Name,
@@ -237,5 +328,128 @@ func (te *ToolExecutor) searchCodebase(ctx context.Context, args map[string]inte
 	return agents.ToolCallResponse{
 		Name:    "search_codebase",
 		Content: strings.Join(lines, "\n"),
+	}
+}
+
+// -- Multi-Repo Tools --
+
+func (te *ToolExecutor) listCrossRepoMatches() agents.ToolCallResponse {
+	if te.MatchSummary == "" {
+		return agents.ToolCallResponse{
+			Name:    "list_cross_repo_matches",
+			Content: "No cross-repository matches are available for this PR.",
+		}
+	}
+	return agents.ToolCallResponse{
+		Name:    "list_cross_repo_matches",
+		Content: te.MatchSummary,
+	}
+}
+
+func (te *ToolExecutor) resolveRepoSymbol(args map[string]interface{}) agents.ToolCallResponse {
+	repoFullName, _ := args["repo_full_name"].(string)
+	symbol, _ := args["symbol"].(string)
+
+	if repoFullName == "" || symbol == "" {
+		return agents.ToolCallResponse{Name: "resolve_repo_symbol", Content: "Error: repo_full_name and symbol are required"}
+	}
+
+	if te.RemoteGraphs == nil {
+		return agents.ToolCallResponse{Name: "resolve_repo_symbol", Content: "Error: remote graphs not initialized"}
+	}
+
+	graph, ok := te.RemoteGraphs[repoFullName]
+	if !ok {
+		return agents.ToolCallResponse{Name: "resolve_repo_symbol", Content: fmt.Sprintf("Error: repository %s not found in cross-repo match list", repoFullName)}
+	}
+
+	var found []string
+	for path, entry := range graph.Files {
+		for _, def := range entry.Definitions {
+			if def.Symbol == symbol {
+				found = append(found, fmt.Sprintf("File: %s (Lines %d-%d, Kind: %s)", path, def.Line, def.EndLine, def.Kind))
+			}
+		}
+	}
+
+	if len(found) == 0 {
+		return agents.ToolCallResponse{Name: "resolve_repo_symbol", Content: fmt.Sprintf("Symbol %s not found in remote repository %s", symbol, repoFullName)}
+	}
+
+	return agents.ToolCallResponse{
+		Name:    "resolve_repo_symbol",
+		Content: "Found definitions:\n" + strings.Join(found, "\n"),
+	}
+}
+
+func (te *ToolExecutor) fetchRepoSnippet(ctx context.Context, args map[string]interface{}) agents.ToolCallResponse {
+	repoFullName, _ := args["repo_full_name"].(string)
+	filePath, _ := args["file_path"].(string)
+	startLineF, _ := args["start_line"].(float64) // JSON unmarshals ints as float64
+	endLineF, _ := args["end_line"].(float64)
+
+	if repoFullName == "" || filePath == "" {
+		return agents.ToolCallResponse{Name: "fetch_repo_snippet", Content: "Error: repo_full_name and file_path are required"}
+	}
+
+	if te.RemoteFetch == nil {
+		return agents.ToolCallResponse{Name: "fetch_repo_snippet", Content: "Error: remote fetcher not initialized"}
+	}
+
+	snippet, err := te.RemoteFetch.FetchSnippet(ctx, repoFullName, filePath, int(startLineF), int(endLineF))
+	if err != nil {
+		return agents.ToolCallResponse{Name: "fetch_repo_snippet", Content: fmt.Sprintf("Error fetching snippet from %s: %v", repoFullName, err)}
+	}
+
+	return agents.ToolCallResponse{
+		Name:    "fetch_repo_snippet",
+		Content: snippet,
+	}
+}
+
+func (te *ToolExecutor) searchRepoGraph(args map[string]interface{}) agents.ToolCallResponse {
+	repoFullName, _ := args["repo_full_name"].(string)
+	query, _ := args["query"].(string)
+
+	if repoFullName == "" || query == "" {
+		return agents.ToolCallResponse{Name: "search_repo_graph", Content: "Error: repo_full_name and query are required"}
+	}
+
+	graph, ok := te.RemoteGraphs[repoFullName]
+	if !ok {
+		return agents.ToolCallResponse{Name: "search_repo_graph", Content: fmt.Sprintf("Error: repository %s not found", repoFullName)}
+	}
+
+	queryLower := strings.ToLower(query)
+	var matches []string
+
+	for path, entry := range graph.Files {
+		// Search definitions
+		for _, def := range entry.Definitions {
+			if strings.Contains(strings.ToLower(def.Symbol), queryLower) {
+				matches = append(matches, fmt.Sprintf("[DEF] %s at %s:%d (%s)", def.Symbol, path, def.Line, def.Kind))
+			}
+		}
+		// Search imports
+		for _, imp := range entry.Imports {
+			if strings.Contains(strings.ToLower(imp), queryLower) {
+				matches = append(matches, fmt.Sprintf("[IMPORT] %s in %s", imp, path))
+			}
+		}
+	}
+
+	if len(matches) == 0 {
+		return agents.ToolCallResponse{Name: "search_repo_graph", Content: fmt.Sprintf("No graph nodes matched '%s' in %s", query, repoFullName)}
+	}
+
+	// Cap at 50 results
+	if len(matches) > 50 {
+		matches = matches[:50]
+		matches = append(matches, "... (truncated max 50 hits)")
+	}
+
+	return agents.ToolCallResponse{
+		Name:    "search_repo_graph",
+		Content: strings.Join(matches, "\n"),
 	}
 }
