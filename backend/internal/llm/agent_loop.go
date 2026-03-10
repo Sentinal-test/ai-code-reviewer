@@ -138,6 +138,13 @@ func RunAgentReview(
 			"generationConfig": genConfig,
 		}
 
+		// Tool schema fallback (for both cached and non-cached)
+		if toolExecutor == nil {
+			// No tools — we can enforce JSON schema on the response
+			genConfig["responseMimeType"] = "application/json"
+			genConfig["responseSchema"] = responseSchema
+		}
+
 		// Inject the cache URI if we successfully created it
 		if cacheName != "" {
 			reqBody["cachedContent"] = cacheName
@@ -148,27 +155,23 @@ func RunAgentReview(
 					{"text": config.SystemPrompt},
 				},
 			}
-		}
 
-		// Add tool declarations if we have a tool executor
-		if toolExecutor != nil {
-			reqBody["tools"] = []map[string]interface{}{
-				{
-					"function_declarations": AgentToolDeclarations(),
-				},
+			// Add tool declarations if we have a tool executor
+			if toolExecutor != nil {
+				reqBody["tools"] = []map[string]interface{}{
+					{
+						"function_declarations": AgentToolDeclarations(),
+					},
+				}
+				// Allow the model to decide between text and tool calls
+				reqBody["tool_config"] = map[string]interface{}{
+					"function_calling_config": map[string]interface{}{
+						"mode": "AUTO",
+					},
+				}
+				// NOTE: Gemini does NOT support responseMimeType with function calling.
+				// JSON output is enforced via the hardened system prompt instead.
 			}
-			// Allow the model to decide between text and tool calls
-			reqBody["tool_config"] = map[string]interface{}{
-				"function_calling_config": map[string]interface{}{
-					"mode": "AUTO",
-				},
-			}
-			// NOTE: Gemini does NOT support responseMimeType with function calling.
-			// JSON output is enforced via the hardened system prompt instead.
-		} else {
-			// No tools — we can enforce JSON schema on the response
-			genConfig["responseMimeType"] = "application/json"
-			genConfig["responseSchema"] = responseSchema
 		}
 
 		bodyJSON, err := json.Marshal(reqBody)
