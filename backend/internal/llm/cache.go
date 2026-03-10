@@ -33,7 +33,7 @@ func CreateCachedContent(
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/cachedContents?key=%s", apiKey)
 
 	// TTL for the cache (15 minutes is plenty for our max 8 iteration loop)
-	expireTime := time.Now().Add(15 * time.Minute).Format(time.RFC3339Nano)
+	expireTime := time.Now().UTC().Add(15 * time.Minute).Format(time.RFC3339Nano)
 
 	reqBody := map[string]interface{}{
 		// Map the specific model we're caching against
@@ -54,6 +54,12 @@ func CreateCachedContent(
 				"role": "user",
 				"parts": []map[string]interface{}{
 					{"text": staticContext},
+				},
+			},
+			{
+				"role": "model",
+				"parts": []map[string]interface{}{
+					{"text": "Understood. I have stored this context and await your instructions."},
 				},
 			},
 		},

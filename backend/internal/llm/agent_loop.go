@@ -81,8 +81,9 @@ func RunAgentReview(
 	var cacheName string
 	var err error
 
-	// Only bother caching if the context is substantial enough (> 4000 chars roughly)
-	if len(staticContext) > 4000 {
+	// Only bother caching if the context is substantial enough (> 135,000 chars is roughly 33,000 tokens)
+	// Gemini API requires a minimum of 32,768 tokens for Context Caching.
+	if len(staticContext) > 135000 {
 		fmt.Printf("  � [%s] Creating Context Cache (~%d tokens)...\n", config.Type, len(staticContext)/4)
 		cacheStart := time.Now()
 
@@ -98,7 +99,7 @@ func RunAgentReview(
 			fmt.Printf("  ⚠️ [%s] Failed to create cache, falling back to inline context: %v\n", config.Type, err)
 		} else {
 			fmt.Printf("  ✅ [%s] Cache created in %.1fs: %s\n", config.Type, time.Since(cacheStart).Seconds(), cacheName)
-			defer DeleteCachedContent(ctx, client, apiKey, cacheName)
+			defer DeleteCachedContent(context.Background(), client, apiKey, cacheName)
 		}
 	}
 
