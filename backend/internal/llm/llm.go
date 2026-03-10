@@ -18,7 +18,7 @@ import (
 
 const (
 	// Gemini 3.1 Pro — Highly capable SWE reasoning model with High Thinking support
-	geminiModel = "gemini-3.1-pro"
+	geminiModel = "gemini-3.1-pro-preview-customtools"
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
 
 	// Gemini Flash — fast, cheap model for lightweight tasks (consolidation, summaries)
