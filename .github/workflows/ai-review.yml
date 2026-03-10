@@ -1,27 +1,25 @@
 name: AI Code Review
-
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize]
 
 permissions:
   contents: read
   pull-requests: write
+  checks: write
 
 jobs:
-  ai-review:
+  review:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout Repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Important to get history for diffs
 
       - name: Run AI Reviewer
-        uses: ./ # Uses the action in the root of this repo
+        uses: Sentinal-test/ai-code-reviewer@main
         with:
-          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          pr_number: ${{ github.event.pull_request.number }}
-          base_ref: ${{ github.event.pull_request.base.sha }}
-          head_ref: ${{ github.event.pull_request.head.sha }}
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          app_id: ${{ secrets.APP_ID }}
+          app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          
