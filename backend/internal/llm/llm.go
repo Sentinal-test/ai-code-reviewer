@@ -391,7 +391,7 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 		"generationConfig": map[string]interface{}{
 			"responseMimeType": "application/json",
 			"thinkingConfig": map[string]interface{}{
-				"thinkingLevel": "high",
+				"thinkingLevel": "standard",
 			},
 		},
 	}
@@ -959,7 +959,7 @@ func RunChunkReview(ctx context.Context, client *http.Client, chunkIndex int, ch
 		"generationConfig": map[string]interface{}{
 			"responseMimeType": "application/json",
 			"thinkingConfig": map[string]interface{}{
-				"thinkingLevel": "high",
+				"thinkingLevel": "standard",
 			},
 		},
 	}

@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const maxToolIterations = 8
+const maxToolIterations = 4
 
 // responseSchema is the JSON schema enforced on Gemini's output.
 // Using responseMimeType + responseSchema guarantees valid JSON.
@@ -130,7 +130,7 @@ func RunAgentReview(
 			"temperature":     0.0,
 			"maxOutputTokens": 65536,
 			"thinkingConfig": map[string]interface{}{
-				"thinkingLevel": "high",
+				"thinkingLevel": "standard",
 			},
 		}
 
