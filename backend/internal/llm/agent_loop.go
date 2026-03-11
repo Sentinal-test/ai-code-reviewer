@@ -5,6 +5,7 @@ import (
 	"code-review/backend/internal/agents"
 	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/models"
+	"code-review/backend/internal/rules"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -364,6 +365,15 @@ func RunAgentReview(
 // 3. Repo structure
 func buildStaticContext(config agents.AgentConfig) string {
 	var b strings.Builder
+
+	// Developer rules (highest priority — inject first)
+	if config.DeveloperRules != nil {
+		rulesBlock := rules.FormatForPrompt(config.DeveloperRules)
+		if rulesBlock != "" {
+			b.WriteString(rulesBlock)
+			b.WriteString("\n")
+		}
+	}
 
 	// Changed files with full content, line numbers, AND inline diff hunks
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")

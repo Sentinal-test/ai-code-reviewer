@@ -38,3 +38,10 @@ type PRContext struct {
 	Body           string
 	CommitMessages []string
 }
+
+// DeveloperRules holds custom review rules defined by repo maintainers.
+type DeveloperRules struct {
+	Instructions []string `yaml:"instructions"`
+	Ignore       []string `yaml:"ignore"`
+	Focus        []string `yaml:"focus"`
+}
