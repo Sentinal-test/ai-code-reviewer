@@ -157,13 +157,10 @@ runs:
 
         "${{ github.action_path }}/ai-reviewer" \
           --llm-provider "$RESOLVED_PROVIDER" \
-          --api-key "$RESOLVED_API_KEY" \
-          --github-token "$RESOLVED_TOKEN" \
           --pr-number "${PR_NUMBER_INPUT:-$PR_NUMBER}" \
           --repo "$GITHUB_REPOSITORY" \
           --sha "$GITHUB_SHA" \
           --base "$BASE_REF_INPUT" \
           --head "$HEAD_REF_INPUT" \
           --app-id "$RESOLVED_APP_ID" \
-          --app-private-key "$RESOLVED_APP_PRIVATE_KEY" \
           --review-rules "$REVIEW_RULES"

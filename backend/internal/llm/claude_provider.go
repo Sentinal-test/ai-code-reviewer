@@ -38,7 +38,7 @@ func (p *ClaudeProvider) GenerateContent(ctx context.Context, req GenerateReques
 		role := m.Role
 		if role == "model" {
 			role = string(anthropic.RoleAssistant)
-		} else if role == "user" {
+		} else if role == "user" || role == "function" {
 			role = string(anthropic.RoleUser) // Anthropic models treat tool results as user messages
 		}
 
@@ -48,13 +48,12 @@ func (p *ClaudeProvider) GenerateContent(ctx context.Context, req GenerateReques
 				blocks = append(blocks, anthropic.NewTextMessageContent(part.Text))
 			} else if part.FunctionCall != nil {
 				argsBytes, _ := json.Marshal(part.FunctionCall.Args)
-				blocks = append(blocks, anthropic.NewToolUseMessageContent("call_"+part.FunctionCall.Name, part.FunctionCall.Name, argsBytes))
+				blocks = append(blocks, anthropic.NewToolUseMessageContent(part.FunctionCall.ID, part.FunctionCall.Name, argsBytes))
 			} else if part.FunctionResp != nil {
 				// Tool Result
-				respBytes, _ := json.Marshal(part.FunctionResp.Content)
 				resContent := anthropic.NewToolResultMessageContent(
-					"call_"+part.FunctionResp.Name, // ID must match what we got
-					string(respBytes),
+					part.FunctionResp.ID,      // ID must match what we got
+					part.FunctionResp.Content, // Use raw string directly (fixes double JSON encoding)
 					false,
 				)
 				blocks = append(blocks, resContent)
@@ -84,13 +83,17 @@ func (p *ClaudeProvider) GenerateContent(ctx context.Context, req GenerateReques
 		systemStr += "\n\nProject Context:\n" + req.CachedContent
 	}
 
+	if req.ResponseJSON {
+		systemStr += "\n\nYou MUST return your answer as a raw JSON object matching the requested schema. Do not enclose it in markdown blocks."
+	}
+
 	temp := req.Temperature
 	apiReq := anthropic.MessagesRequest{
 		Model:       anthropic.Model(p.model),
 		Messages:    messages,
 		System:      systemStr,
 		Temperature: &temp,
-		MaxTokens:   4096, // required by Anthropic
+		MaxTokens:   8192, // Increased limit for complex reviews
 	}
 
 	if len(tools) > 0 {
@@ -113,6 +116,7 @@ func (p *ClaudeProvider) GenerateContent(ctx context.Context, req GenerateReques
 			result.Text += *block.Text
 		} else if block.Type == anthropic.MessagesContentTypeToolUse {
 			result.FunctionCall = &FunctionCall{
+				ID:   block.ID,
 				Name: block.Name,
 			}
 

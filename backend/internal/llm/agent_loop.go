@@ -198,6 +198,7 @@ func RunAgentReview(
 				Parts: []Part{
 					{
 						FunctionResp: &FunctionResponse{
+							ID:      resp.FunctionCall.ID,
 							Name:    callReq.Name,
 							Content: toolResult.Content,
 						},

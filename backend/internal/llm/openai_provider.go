@@ -85,7 +85,7 @@ func (p *OpenAIProvider) GenerateContent(ctx context.Context, req GenerateReques
 						Name:      part.FunctionCall.Name,
 						Arguments: string(bytes),
 					},
-					ID: "call_" + part.FunctionCall.Name, // minimal mock ID
+					ID: part.FunctionCall.ID,
 				})
 			} else if part.FunctionResp != nil {
 				// OpenAI maps function responses directly as a separate message format.
@@ -93,7 +93,7 @@ func (p *OpenAIProvider) GenerateContent(ctx context.Context, req GenerateReques
 					Role:       openai.ChatMessageRoleTool,
 					Content:    part.FunctionResp.Content,
 					Name:       part.FunctionResp.Name,
-					ToolCallID: "call_" + part.FunctionResp.Name, // matches mock ID
+					ToolCallID: part.FunctionResp.ID,
 				})
 			}
 		}
@@ -161,6 +161,7 @@ func (p *OpenAIProvider) GenerateContent(ctx context.Context, req GenerateReques
 		var args map[string]interface{}
 		json.Unmarshal([]byte(tc.Function.Arguments), &args)
 		result.FunctionCall = &FunctionCall{
+			ID:   tc.ID,
 			Name: tc.Function.Name,
 			Args: args,
 		}

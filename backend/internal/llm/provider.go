@@ -34,12 +34,14 @@ type Part struct {
 
 // FunctionCall represents the LLM deciding to call a tool
 type FunctionCall struct {
+	ID   string
 	Name string
 	Args map[string]interface{}
 }
 
 // FunctionResponse represents the result of a tool execution sent back to the LLM
 type FunctionResponse struct {
+	ID      string
 	Name    string
 	Content string
 }

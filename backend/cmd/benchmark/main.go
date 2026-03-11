@@ -202,16 +202,26 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 
 	// 3. Build context
 	ctx := context.Background()
-	provider, err := llm.NewGeminiProvider(apiKey, "")
-	if err != nil {
-		return Result{
-			Approach: approach,
-			CaseID:   caseID,
-			CaseDir:  caseDir,
-			Tags:     truth.BenchmarkTags,
-			Error:    fmt.Sprintf("Failed to init LLM provider: %v", err),
+	providerStr := os.Getenv("LLM_PROVIDER")
+	var provider llm.LLMProvider
+
+	if providerStr == "openai" {
+		provider = llm.NewOpenAIProvider(apiKey, "")
+	} else if providerStr == "claude" {
+		provider = llm.NewClaudeProvider(apiKey, "")
+	} else {
+		provider, err = llm.NewGeminiProvider(apiKey, "")
+		if err != nil {
+			return Result{
+				Approach: approach,
+				CaseID:   caseID,
+				CaseDir:  caseDir,
+				Tags:     truth.BenchmarkTags,
+				Error:    fmt.Sprintf("Failed to init LLM provider: %v", err),
+			}
 		}
 	}
+
 	repoStructure := buildRepoStructure(repoPath)
 
 	settings := models.RepoSettings{

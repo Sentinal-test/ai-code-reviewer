@@ -1,24 +1,20 @@
 package llm
 
 import (
-	"bytes"
 	"code-review/backend/internal/models"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 	"unicode/utf8"
 )
 
 const (
-	// Gemini 3.1 Pro — Highly capable SWE reasoning model with High Thinking support
-	geminiModel = "gemini-3-flash-preview"     // "gemini-3.1-pro-preview-customtools"
+	// Gemini 3.1 Pro — Highly capable SWE reasoning model
+	geminiModel = "gemini-3.1-pro-preview-customtools"
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
 
 	// Gemini Flash — fast, cheap model for lightweight tasks (consolidation, summaries)
@@ -49,7 +45,7 @@ func truncateUTF8(s string, maxBytes int) string {
 		}
 	}
 
-	return "\n...[TRUNCATED]..."
+	return truncated + "\n...[TRUNCATED]..."
 }
 
 // isDocumentationFile checks if a file is documentation/config and shouldn't be reviewed
@@ -839,167 +835,6 @@ func buildPRContextSummary(prContext models.PRContext) string {
 		b.WriteString(msg)
 	}
 	return b.String()
-}
-
-// RunChunkReview reviews a single chunk of files with scoped dependencies.
-// It adds chunk metadata and cross-chunk context to the prompt.
-func RunChunkReview(ctx context.Context, client *http.Client, chunkIndex int, chunkTotal int,
-	chunkFiles map[string]string, chunkDiff string, crossRefs []string,
-	dependencies map[string]string, settings models.RepoSettings,
-	repoStructure string, apiKey string, prContext models.PRContext,
-) (*models.ReviewResult, error) {
-
-	// Filter out documentation files
-	reviewableFiles := filterReviewableFiles(chunkFiles)
-	reviewableDeps := filterReviewableFiles(dependencies)
-
-	if len(reviewableFiles) == 0 {
-		return &models.ReviewResult{
-			Summary:  "No reviewable code files in this chunk",
-			Comments: []models.ReviewComment{},
-		}, nil
-	}
-
-	// Build prompt with chunk awareness
-	prompt := buildPrompt(chunkDiff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
-
-	// Inject chunk metadata and cross-chunk context at the start of the prompt
-	var chunkHeader strings.Builder
-	chunkHeader.WriteString(fmt.Sprintf("NOTE: You are reviewing chunk %d of %d.\n", chunkIndex, chunkTotal))
-
-	// Collect directory names for this chunk
-	dirSet := make(map[string]bool)
-	for path := range reviewableFiles {
-		dirSet[filepath.Dir(path)] = true
-	}
-	dirs := make([]string, 0, len(dirSet))
-	for d := range dirSet {
-		dirs = append(dirs, d)
-	}
-	sort.Strings(dirs)
-	chunkHeader.WriteString(fmt.Sprintf("This chunk covers: %s\n", strings.Join(dirs, ", ")))
-
-	if len(crossRefs) > 0 {
-		chunkHeader.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
-		chunkHeader.WriteString("ARCHITECTURAL CONTEXT: Cross-Chunk Dependencies\n")
-		chunkHeader.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-		chunkHeader.WriteString("Files in THIS chunk depend on files being reviewed in OTHER chunks:\n")
-		for _, ref := range crossRefs {
-			chunkHeader.WriteString(fmt.Sprintf("  - %s\n", ref))
-		}
-		chunkHeader.WriteString("\nIf you detect that changes in this chunk could break or conflict with\n")
-		chunkHeader.WriteString("these external dependencies, flag it as an ARCHITECTURAL issue.\n\n")
-	}
-
-	prompt = chunkHeader.String() + prompt
-
-	// Simplified Prompt Summary Logging (shows exactly what context is being used)
-	fmt.Printf("🔍 [Chunk Context] Processing %d changed files:\n", len(reviewableFiles))
-	for _, f := range getFileKeys(reviewableFiles) {
-		fmt.Printf("   + %s (%d chars)\n", f, len(reviewableFiles[f]))
-	}
-	if len(reviewableDeps) > 0 {
-		fmt.Printf("🔍 [Code Graph] Including %d project dependencies:\n", len(reviewableDeps))
-		for _, d := range getFileKeys(reviewableDeps) {
-			// Show a tiny preview of the dependency summary/code
-			preview := "Graph Context"
-			if !strings.HasPrefix(reviewableDeps[d], "CONTEXT GRAPH") {
-				lines := strings.Split(reviewableDeps[d], "\n")
-				if len(lines) > 2 {
-					preview = lines[1] // Usually shows "resolves: ..." or First line of snippet
-				}
-			}
-			fmt.Printf("   🔗 %s (%s)\n", d, preview)
-		}
-	}
-	if len(crossRefs) > 0 {
-		fmt.Printf("🔗 [Cross-Chunk] Known boundaries: %s\n", strings.Join(crossRefs, ", "))
-	}
-	fmt.Println("--------------------------------------------------------------------------------")
-
-	// RAW PROMPT LOGGING (requested by user for full transparency)
-	fmt.Println("\n📜 [RAW LLM PROMPT START]")
-	fmt.Println(prompt)
-	fmt.Println("📜 [RAW LLM PROMPT END]")
-
-	fmt.Println("--------------------------------------------------------------------------------")
-
-	// Execute LLM call (same API logic as RunReview)
-	reqBody := map[string]interface{}{
-		"contents": []map[string]interface{}{
-			{
-				"parts": []map[string]string{
-					{"text": prompt},
-				},
-			},
-		},
-		"generationConfig": map[string]interface{}{
-			"responseMimeType": "application/json",
-			"thinkingConfig": map[string]interface{}{
-				"thinkingLevel": "MEDIUM",
-			},
-		},
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %v", err)
-	}
-
-	url := fmt.Sprintf("%s?key=%s", geminiURL, apiKey)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("chunk %d/%d LLM request failed: %v", chunkIndex, chunkTotal, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("chunk %d/%d LLM returned status %d: %s", chunkIndex, chunkTotal, resp.StatusCode, string(body))
-	}
-
-	var geminiResp struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
-		return nil, fmt.Errorf("failed to decode chunk %d response: %v", chunkIndex, err)
-	}
-
-	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("chunk %d LLM returned empty response", chunkIndex)
-	}
-
-	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
-
-	var result models.ReviewResult
-	if err := json.Unmarshal([]byte(responseText), &result); err != nil {
-		var comments []models.ReviewComment
-		if errArray := json.Unmarshal([]byte(responseText), &comments); errArray == nil {
-			result.Comments = comments
-			result.Summary = fmt.Sprintf("Chunk %d/%d: Automated review comments", chunkIndex, chunkTotal)
-		} else {
-			return nil, fmt.Errorf("failed to unmarshal chunk %d response: %v", chunkIndex, err)
-		}
-	}
-
-	fmt.Printf("✅ [CHUNK %d/%d] Found %d comments\n", chunkIndex, chunkTotal, len(result.Comments))
-	return &result, nil
 }
 
 // ConsolidateResults merges results from multiple chunks into a single ReviewResult.
