@@ -1,13 +1,10 @@
 package llm
 
 import (
-	"bytes"
 	"code-review/backend/internal/models"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -15,12 +12,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type MockRoundTripper struct {
-	RoundTripFunc func(req *http.Request) (*http.Response, error)
+type MockLLMProvider struct {
+	response GenerateResponse
+	err      error
 }
 
-func (m *MockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	return m.RoundTripFunc(req)
+func (m *MockLLMProvider) GenerateContent(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
+	return m.response, m.err
+}
+
+func (m *MockLLMProvider) CreateCache(ctx context.Context, sys, usr string, tools []ToolDeclaration) (string, error) {
+	return "test-cache-id", nil
+}
+
+func (m *MockLLMProvider) DeleteCache(ctx context.Context, cacheID string) error {
+	return nil
 }
 
 func TestRunReview_Success(t *testing.T) {
@@ -37,38 +43,14 @@ func TestRunReview_Success(t *testing.T) {
 	}
 	resultJSON, _ := json.Marshal(expectedResult)
 
-	// Mock Gemini response structure
-	geminiRespObj := map[string]interface{}{
-		"candidates": []map[string]interface{}{
-			{
-				"content": map[string]interface{}{
-					"parts": []map[string]interface{}{
-						{"text": string(resultJSON)},
-					},
-				},
-			},
-		},
-	}
-	geminiRespBytes, _ := json.Marshal(geminiRespObj)
-
-	mockClient := &http.Client{
-		Transport: &MockRoundTripper{
-			RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-				// Verify request
-				assert.Equal(t, "POST", req.Method)
-				assert.Contains(t, req.URL.String(), geminiURL) // basic check
-				assert.Contains(t, req.URL.String(), "key=test-api-key")
-
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBuffer(geminiRespBytes)),
-					Header:     make(http.Header),
-				}, nil
-			},
+	mockProvider := &MockLLMProvider{
+		response: GenerateResponse{
+			Text:         string(resultJSON),
+			FinishReason: "stop",
 		},
 	}
 
-	result, err := RunReview(context.Background(), mockClient, "diff content", changedFiles, nil, models.RepoSettings{}, "", "test-api-key", models.PRContext{})
+	result, err := RunReview(context.Background(), mockProvider, "diff content", changedFiles, nil, models.RepoSettings{}, "", models.PRContext{})
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, "Good code", result.Summary)
@@ -80,21 +62,13 @@ func TestRunReview_APIError(t *testing.T) {
 		"main.go": "package main\nfunc main() {}\n",
 	}
 
-	mockClient := &http.Client{
-		Transport: &MockRoundTripper{
-			RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-				return &http.Response{
-					StatusCode: http.StatusInternalServerError,
-					Body:       io.NopCloser(bytes.NewBufferString("Internal Server Error")),
-					Header:     make(http.Header),
-				}, nil
-			},
-		},
+	mockProvider := &MockLLMProvider{
+		err: fmt.Errorf("LLM returned context deadline exceeded or error"),
 	}
 
-	_, err := RunReview(context.Background(), mockClient, "diff", changedFiles, nil, models.RepoSettings{}, "", "key", models.PRContext{})
+	_, err := RunReview(context.Background(), mockProvider, "diff", changedFiles, nil, models.RepoSettings{}, "", models.PRContext{})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "LLM returned status 500")
+	assert.Contains(t, err.Error(), "LLM returned context deadline")
 }
 
 func TestRunReview_EmptyResponse(t *testing.T) {
@@ -103,24 +77,14 @@ func TestRunReview_EmptyResponse(t *testing.T) {
 	}
 
 	// Mock empty candidates
-	geminiRespObj := map[string]interface{}{
-		"candidates": []interface{}{},
-	}
-	geminiRespBytes, _ := json.Marshal(geminiRespObj)
-
-	mockClient := &http.Client{
-		Transport: &MockRoundTripper{
-			RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBuffer(geminiRespBytes)),
-					Header:     make(http.Header),
-				}, nil
-			},
+	mockProvider := &MockLLMProvider{
+		response: GenerateResponse{
+			FinishReason: "EMPTY",
+			Text:         "",
 		},
 	}
 
-	_, err := RunReview(context.Background(), mockClient, "diff", changedFiles, nil, models.RepoSettings{}, "", "key", models.PRContext{})
+	_, err := RunReview(context.Background(), mockProvider, "diff", changedFiles, nil, models.RepoSettings{}, "", models.PRContext{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "LLM returned empty response")
 }
@@ -131,32 +95,14 @@ func TestRunReview_MalformedJSON(t *testing.T) {
 	}
 
 	// Mock response where text is not valid JSON
-	geminiRespObj := map[string]interface{}{
-		"candidates": []map[string]interface{}{
-			{
-				"content": map[string]interface{}{
-					"parts": []map[string]interface{}{
-						{"text": "not valid json"},
-					},
-				},
-			},
-		},
-	}
-	geminiRespBytes, _ := json.Marshal(geminiRespObj)
-
-	mockClient := &http.Client{
-		Transport: &MockRoundTripper{
-			RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBuffer(geminiRespBytes)),
-					Header:     make(http.Header),
-				}, nil
-			},
+	mockProvider := &MockLLMProvider{
+		response: GenerateResponse{
+			FinishReason: "stop",
+			Text:         "not valid json",
 		},
 	}
 
-	_, err := RunReview(context.Background(), mockClient, "diff", changedFiles, nil, models.RepoSettings{}, "", "key", models.PRContext{})
+	_, err := RunReview(context.Background(), mockProvider, "diff", changedFiles, nil, models.RepoSettings{}, "", models.PRContext{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to unmarshal JSON content")
 }

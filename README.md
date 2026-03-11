@@ -75,6 +75,8 @@ jobs:
       - name: Run AI Reviewer
         uses: appointytech/ai-code-reviewer@main # (OR use your org/repo path here)
         with:
+          # Specify your provider: 'gemini' (default), 'openai', or 'claude'
+          llm_provider: gemini
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # Optional: Custom rules for your repo
@@ -90,16 +92,23 @@ jobs:
 
 ---
 
-## � API Key Configuration
+## 🔑 API Key Configuration
 
-The system is designed to be flexible with API keys. It resolves the `GEMINI_API_KEY` using the following priority:
+The system is designed to be LLM-agnostic and supports Gemini, OpenAI, and Anthropic Claude. You must configure the `llm_provider` input in your workflow along with the corresponding API key.
 
-1.  **Explicit Input**: Passed via the `with: gemini_api_key` parameter in your YAML (can be a user's personal secret).
-2.  **Organization/Repository Secret**: A secret named `GEMINI_API_KEY` defined at the org or repo level.
-3.  **Environment Variable**: A `STAKEHOLDER_GEMINI_API_KEY` or `GEMINI_API_KEY` mapped in the runner environment.
+### Supported Providers:
+- **gemini** (Default): Requires `gemini_api_key`
+- **openai**: Requires `openai_api_key`
+- **claude**: Requires `anthropic_api_key`
+
+The system resolves API keys using the following priority:
+
+1.  **Explicit Input**: Passed via the `with: [provider]_api_key` parameter in your YAML (can be a user's personal secret).
+2.  **Organization/Repository Secret**: A secret named appropriately (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) defined at the org or repo level.
+3.  **Environment Variable**: Mapped directly in the runner environment.
 
 > [!TIP]
-> This allow individual developers to use their own "Pro" keys for specific repos while the rest of the organization uses a shared billing key.
+> This allows individual developers to use their own keys for specific repos while the rest of the organization uses a shared billing key.
 
 ---
 

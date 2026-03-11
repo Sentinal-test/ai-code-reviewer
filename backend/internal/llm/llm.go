@@ -341,7 +341,7 @@ func extractDiffWithContext(content string, diffSections []string, contextLines 
 }
 
 // RunReview analyzes the diff using the provided API key, settings, and PR context.
-func RunReview(ctx context.Context, client *http.Client, diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, apiKey string, prContext models.PRContext) (*models.ReviewResult, error) {
+func RunReview(ctx context.Context, provider LLMProvider, diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, prContext models.PRContext) (*models.ReviewResult, error) {
 	// Filter out documentation files
 	reviewableFiles := filterReviewableFiles(changedFiles)
 	reviewableDeps := filterReviewableFiles(dependencies)
@@ -383,69 +383,31 @@ func RunReview(ctx context.Context, client *http.Client, diff string, changedFil
 	fmt.Println()
 
 	// 2. Prepare Request
-	reqBody := map[string]interface{}{
-		"contents": []map[string]interface{}{
+	req := GenerateRequest{
+		SystemPrompt: "", // Built into the dynamic prompt for RunReview for now
+		Messages: []Message{
 			{
-				"parts": []map[string]string{
-					{"text": prompt},
+				Role: "user",
+				Parts: []Part{
+					{Text: prompt},
 				},
 			},
 		},
-		"generationConfig": map[string]interface{}{
-			"responseMimeType": "application/json",
-			"thinkingConfig": map[string]interface{}{
-				"thinkingLevel": "MEDIUM",
-			},
-		},
+		Temperature:  0.0,
+		ResponseJSON: true, // we mandate a JSON array or object
 	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %v", err)
-	}
-
-	url := fmt.Sprintf("%s?key=%s", geminiURL, apiKey)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
 
 	// 3. Execute Request
-	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
-	}
-	resp, err := client.Do(req)
+	resp, err := provider.GenerateContent(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("LLM request failed: %v", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// 4. Parse Response
-	var geminiResp struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
-		return nil, fmt.Errorf("failed to decode LLM response: %v", err)
-	}
-
-	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+	if resp.FinishReason == "EMPTY" || resp.Text == "" {
 		return nil, fmt.Errorf("LLM returned empty response")
 	}
 
-	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
+	responseText := resp.Text
 
 	// Robust parsing: try Result object first, then fallback to Array of comments
 	var result models.ReviewResult

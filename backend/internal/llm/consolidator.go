@@ -1,29 +1,25 @@
 package llm
 
 import (
-	"bytes"
 	"code-review/backend/internal/agents"
 	"code-review/backend/internal/models"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 )
 
-// RunConsolidation sends all specialist agent results to Gemini for intelligent
+// RunConsolidation sends all specialist agent results to the LLM for intelligent
 // consolidation. The LLM can detect semantically similar issues with different
 // wording, assess comment quality, and resolve conflicts between agents.
 //
 // Falls back to DeterministicConsolidate on any LLM failure.
 func RunConsolidation(
 	ctx context.Context,
-	client *http.Client,
+	provider LLMProvider,
 	agentResults []agents.AgentResult,
 	maxComments int,
-	apiKey string,
 ) *models.ReviewResult {
 
 	if maxComments <= 0 {
@@ -39,93 +35,37 @@ func RunConsolidation(
 	fmt.Printf("   📏 [Consolidator] Prompt size: %d chars (~%d tokens)\n",
 		len(prompt), len(prompt)/4)
 
-	reqBody := map[string]interface{}{
-		"contents": []map[string]interface{}{
+	req := GenerateRequest{
+		SystemPrompt: systemPrompt,
+		Messages: []Message{
 			{
-				"role": "user",
-				"parts": []map[string]interface{}{
-					{"text": prompt},
+				Role: "user",
+				Parts: []Part{
+					{Text: prompt},
 				},
 			},
 		},
-		"system_instruction": map[string]interface{}{
-			"parts": []map[string]interface{}{
-				{"text": systemPrompt},
-			},
-		},
-		"generationConfig": map[string]interface{}{
-			"temperature":      0.0,
-			"maxOutputTokens":  8192,
-			"responseMimeType": "application/json",
-			"responseSchema":   responseSchema,
-		},
+		Temperature:  0.0,
+		ResponseJSON: true,
 	}
-
-	bodyJSON, err := json.Marshal(reqBody)
-	if err != nil {
-		fmt.Printf("   ⚠️ [Consolidator] Marshal error: %v — falling back to deterministic\n", err)
-		return agents.DeterministicConsolidate(agentResults, maxComments)
-	}
-
-	url := geminiFlashURL + "?key=" + apiKey
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
-	if err != nil {
-		fmt.Printf("   ⚠️ [Consolidator] Request error: %v — falling back to deterministic\n", err)
-		return agents.DeterministicConsolidate(agentResults, maxComments)
-	}
-	req.Header.Set("Content-Type", "application/json")
 
 	start := time.Now()
-	resp, err := client.Do(req)
+	resp, err := provider.GenerateContent(ctx, req)
 	elapsed := time.Since(start)
+
 	if err != nil {
 		fmt.Printf("   ⚠️ [Consolidator] API error: %v — falling back to deterministic\n", err)
 		return agents.DeterministicConsolidate(agentResults, maxComments)
 	}
-	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf("   ⚠️ [Consolidator] Read error: %v — falling back to deterministic\n", err)
-		return agents.DeterministicConsolidate(agentResults, maxComments)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("   ⚠️ [Consolidator] API returned %d: %s — falling back to deterministic\n",
-			resp.StatusCode, string(respBody))
-		return agents.DeterministicConsolidate(agentResults, maxComments)
-	}
-
-	// Parse the Gemini response
-	var geminiResp struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-		UsageMetadata struct {
-			PromptTokenCount     int `json:"promptTokenCount"`
-			CandidatesTokenCount int `json:"candidatesTokenCount"`
-		} `json:"usageMetadata"`
-	}
-
-	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
-		fmt.Printf("   ⚠️ [Consolidator] Parse error: %v — falling back to deterministic\n", err)
-		return agents.DeterministicConsolidate(agentResults, maxComments)
-	}
-
-	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+	if resp.FinishReason == "EMPTY" || resp.Text == "" {
 		fmt.Printf("   ⚠️ [Consolidator] Empty response — falling back to deterministic\n")
 		return agents.DeterministicConsolidate(agentResults, maxComments)
 	}
 
-	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
-
 	// Parse the JSON response
 	var result models.ReviewResult
-	cleaned := strings.TrimSpace(responseText)
+	cleaned := strings.TrimSpace(resp.Text)
 	cleaned = strings.TrimPrefix(cleaned, "```json")
 	cleaned = strings.TrimPrefix(cleaned, "```")
 	cleaned = strings.TrimSuffix(cleaned, "```")
@@ -139,8 +79,8 @@ func RunConsolidation(
 
 	fmt.Printf("   ✅ [Consolidator] LLM consolidation complete: %d comments (%.1fs, %d→%d tokens)\n",
 		len(result.Comments), elapsed.Seconds(),
-		geminiResp.UsageMetadata.PromptTokenCount,
-		geminiResp.UsageMetadata.CandidatesTokenCount)
+		resp.InputTokens,
+		resp.OutputTokens)
 
 	return &result
 }

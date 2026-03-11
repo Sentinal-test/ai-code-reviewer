@@ -8,7 +8,6 @@ import (
 	"code-review/backend/internal/remotefetch"
 	"context"
 	"fmt"
-	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -59,14 +58,13 @@ func filterReviewableFiles(files map[string]string) map[string]string {
 // then consolidates their results using LLM-based consolidation.
 func ReviewChunk(
 	ctx context.Context,
-	client *http.Client,
+	provider llm.LLMProvider,
 	chunkFiles map[string]string,
 	chunkDiff string,
 	chunkIndex, chunkTotal int,
 	crossRefs []string,
 	dependencies map[string]string,
 	repoStructure string,
-	apiKey string,
 	prContext models.PRContext,
 	graph *codegraph.Graph,
 	repoPath string,
@@ -123,7 +121,6 @@ func ReviewChunk(
 		CrossRefs:      crossRefs,
 		ChunkIndex:     chunkIndex,
 		ChunkTotal:     chunkTotal,
-		APIKey:         apiKey,
 		RepoPath:       repoPath,
 		MatchSummary:   matchSummary,
 		DeveloperRules: devRules,
@@ -172,7 +169,7 @@ func ReviewChunk(
 		wg.Add(1)
 		go func(idx int, cfg agents.AgentConfig) {
 			defer wg.Done()
-			results[idx] = llm.RunAgentReview(ctx, client, cfg, toolExecutor)
+			results[idx] = llm.RunAgentReview(ctx, provider, cfg, toolExecutor)
 		}(i, config)
 	}
 
@@ -198,7 +195,7 @@ func ReviewChunk(
 		totalComments, elapsed.Seconds(), totalToolCalls)
 
 	// LLM-based consolidation (falls back to deterministic on failure)
-	consolidated := llm.RunConsolidation(ctx, client, results, agents.DefaultMaxComments, apiKey)
+	consolidated := llm.RunConsolidation(ctx, provider, results, agents.DefaultMaxComments)
 
 	fmt.Printf("✅ [Orchestrator] Final: %d comments after consolidation\n", len(consolidated.Comments))
 
