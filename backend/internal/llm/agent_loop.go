@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const maxToolIterations = 4
+const maxToolIterations = 10
 
 // responseSchema is the JSON schema enforced on Gemini's output.
 // Using responseMimeType + responseSchema guarantees valid JSON.
