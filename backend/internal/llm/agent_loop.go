@@ -164,12 +164,16 @@ func RunAgentReview(
 
 		// If we have tool calls, execute them and build the conversation history
 		if resp.FunctionCall != nil {
-			// Append model turn
+			// Append model turn — use ModelParts if available (Gemini includes
+			// thought parts that must be replayed), otherwise fall back to
+			// constructing a single-part message.
+			modelParts := resp.ModelParts
+			if len(modelParts) == 0 {
+				modelParts = []Part{{FunctionCall: resp.FunctionCall}}
+			}
 			messages = append(messages, Message{
-				Role: "model",
-				Parts: []Part{
-					{FunctionCall: resp.FunctionCall},
-				},
+				Role:  "model",
+				Parts: modelParts,
 			})
 
 			fmt.Printf("  🔧 [%s] Tool call: %s(%v) [iter %d, %.1fs]\n",

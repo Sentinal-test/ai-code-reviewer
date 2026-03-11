@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -121,24 +122,25 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 		var parts []*genai.Part
 		for _, p := range m.Parts {
 			part := &genai.Part{}
-			if p.Text != "" {
-				part.Text = p.Text
-			} else if p.FunctionCall != nil {
+
+			// Restore thought metadata on ANY part type
+			if p.IsThought {
+				part.Thought = true
+			}
+			if p.ThoughtSig != "" {
+				decodedSig, _ := base64.StdEncoding.DecodeString(p.ThoughtSig)
+				part.ThoughtSignature = decodedSig
+			}
+
+			if p.FunctionCall != nil {
 				argsBytes, _ := json.Marshal(p.FunctionCall.Args)
 				var argsMap map[string]any
 				json.Unmarshal(argsBytes, &argsMap)
-
-				call := &genai.FunctionCall{
+				part.FunctionCall = &genai.FunctionCall{
+					ID:   p.FunctionCall.ID,
 					Name: p.FunctionCall.Name,
 					Args: argsMap,
 				}
-
-				// Required by Gemini 2.0+ models when using thoughtful mode
-				if p.FunctionCall.Thought != "" {
-					part.ThoughtSignature = []byte(p.FunctionCall.Thought)
-					part.Thought = true
-				}
-				part.FunctionCall = call
 			} else if p.FunctionResp != nil {
 				argsMap := map[string]any{
 					"content": p.FunctionResp.Content,
@@ -147,7 +149,10 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 					Name:     p.FunctionResp.Name,
 					Response: argsMap,
 				}
+			} else if p.Text != "" {
+				part.Text = p.Text
 			}
+
 			parts = append(parts, part)
 		}
 
@@ -183,17 +188,39 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 		result.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
 	}
 
+	// Capture ALL parts from the response — including thought parts.
+	// Gemini 2.0+ requires these to be replayed verbatim in subsequent turns.
 	if candidate.Content != nil {
 		var textParts []string
 		for _, part := range candidate.Content.Parts {
-			if part.Text != "" {
-				textParts = append(textParts, part.Text)
-			} else if part.FunctionCall != nil {
-				result.FunctionCall = &FunctionCall{
-					Name:    part.FunctionCall.Name,
-					Args:    part.FunctionCall.Args,
-					Thought: string(part.ThoughtSignature), // Capture for next turn
+			// Base64 encode the thought signature for safe string transport
+			encodedSig := ""
+			if len(part.ThoughtSignature) > 0 {
+				encodedSig = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+			}
+
+			if part.FunctionCall != nil {
+				fc := &FunctionCall{
+					ID:   part.FunctionCall.ID,
+					Name: part.FunctionCall.Name,
+					Args: part.FunctionCall.Args,
 				}
+				result.FunctionCall = fc
+				result.ModelParts = append(result.ModelParts, Part{
+					FunctionCall: fc,
+					IsThought:    part.Thought,
+					ThoughtSig:   encodedSig,
+				})
+			} else if part.Text != "" {
+				if !part.Thought {
+					textParts = append(textParts, part.Text)
+				}
+				// Always capture the part (thought or not) for history replay
+				result.ModelParts = append(result.ModelParts, Part{
+					Text:       part.Text,
+					IsThought:  part.Thought,
+					ThoughtSig: encodedSig,
+				})
 			}
 		}
 		result.Text = strings.Join(textParts, "\n")

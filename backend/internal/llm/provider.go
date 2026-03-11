@@ -30,6 +30,8 @@ type Part struct {
 	Text         string
 	FunctionCall *FunctionCall
 	FunctionResp *FunctionResponse
+	IsThought    bool   // Gemini: marks this part as model thinking
+	ThoughtSig   string // Gemini: base64-encoded thought signature for this part
 }
 
 // FunctionCall represents the LLM deciding to call a tool
@@ -51,6 +53,7 @@ type FunctionResponse struct {
 type GenerateResponse struct {
 	Text         string
 	FunctionCall *FunctionCall
+	ModelParts   []Part // Full set of model response parts (preserves thought parts for Gemini)
 	InputTokens  int
 	OutputTokens int
 	FinishReason string
