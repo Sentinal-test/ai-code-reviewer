@@ -192,6 +192,15 @@ fit any area below, STILL FLAG IT.
   required fields, breaking changes without versioning, request/response mismatches
   between frontend and backend.
 
+• CROSS-SERVICE / MULTI-REPO BREAKAGE (when cross-repo match data is provided):
+  When reviewing code that is part of a multi-repo microservices architecture, changes in
+  THIS repo can silently break other services. Look for: API response shape changes that
+  break consumers in other repos, shared data model or enum changes that cause deserialization
+  failures downstream, event/message payload changes without updating subscribers, RPC or HTTP
+  client call-sites in other repos that assume the old interface, mismatched error codes or
+  status codes between producer and consumer, and database schema changes that affect queries
+  in other services sharing the same database. USE the cross-repo match data to verify.
+
 • PERFORMANCE (when clearly problematic):
   Algorithmic complexity issues in hot paths, unbounded allocations, blocking I/O on
   event loops, missing pagination, suboptimal data structure choices where a better
@@ -310,6 +319,16 @@ vulnerability not described below, STILL FLAG IT.
   Debug mode in production, insecure cookie flags, default credentials, missing
   HTTPS enforcement, exposed admin interfaces, verbose logging of sensitive data.
 
+• CROSS-SERVICE / MULTI-REPO SECURITY (when cross-repo match data is provided):
+  In a multi-repo microservices architecture, security boundaries span services. Look for:
+  trust boundary violations where one service trusts data from another without validation,
+  authentication/authorization changes that break the auth flow across services (e.g., token
+  format changes, header name changes, middleware behavior changes), secrets or credentials
+  shared across repos via hardcoded values instead of secret management, CORS/CSRF config
+  changes in one service that expose another, and API endpoints that removed auth checks
+  while other services still route unauthenticated traffic to them. USE the cross-repo
+  match data to trace trust boundaries across services.
+
 ═══════════════════════════════════════════════════════════════════════════════
 ANALYSIS APPROACH — Think like an attacker
 ═══════════════════════════════════════════════════════════════════════════════
@@ -425,6 +444,15 @@ in THIS project:
   New environment variables introduced without documenting them, environment-specific
   values hardcoded in source code, config differences between environments that could
   cause surprises in production.
+
+• CROSS-SERVICE / MULTI-REPO ARCHITECTURE (when cross-repo match data is provided):
+  In a multi-repo microservices architecture, architectural consistency spans repos. Look for:
+  breaking changes to shared API contracts (REST endpoints, gRPC protos, GraphQL schemas) that
+  would require coordinated deployment, inconsistent patterns between services (e.g., one repo
+  uses v2 of an API while another still references v1), shared library or package version
+  drift that can cause runtime incompatibilities, event/message schema evolution without
+  backward compatibility, and service-to-service dependency direction violations.
+  USE the cross-repo match data and the repository structure to evaluate architectural impact.
 
 If you find a structural issue that doesn't match any of these descriptions, STILL FLAG IT.
 Your architectural judgment always takes priority over any category list.

@@ -10,6 +10,7 @@ import (
 	"code-review/backend/internal/orchestrator"
 	"code-review/backend/internal/remotefetch"
 	"code-review/backend/internal/reposelect"
+	"code-review/backend/internal/rules"
 	"context"
 	"flag"
 	"fmt"
@@ -56,6 +57,7 @@ func main() {
 	headRef := flag.String("head", "HEAD", "Head ref to diff")
 	dryRun := flag.Bool("dry-run", false, "Print results to stdout instead of commenting")
 	noCache := flag.Bool("no-cache", false, "Skip graph cache (force fresh analysis)")
+	reviewRulesFlag := flag.String("review-rules", "", "YAML block with custom review rules")
 	flag.Parse()
 
 	// 2. Resolve parameters (Priority: Flag -> Env)
@@ -304,7 +306,46 @@ func main() {
 
 	// Note: Review layer selection is now handled by the multi-agent orchestrator.
 	// Each specialist agent (Correctness, Security, Structure) covers its own layers.
-	// Per-layer toggles from RepoSettings can be re-added when rules.yml is implemented.
+
+	// 4.8 Developer Rules: Parse, sanitize, and apply ignore filter
+	reviewRulesYAML := *reviewRulesFlag
+	if reviewRulesYAML == "" {
+		reviewRulesYAML = os.Getenv("REVIEW_RULES")
+	}
+
+	var devRules *models.DeveloperRules
+	if reviewRulesYAML != "" {
+		fmt.Println("📋 [DevRules] Parsing developer-defined review rules...")
+		parsed, err := rules.Parse(reviewRulesYAML)
+		if err != nil {
+			fmt.Printf("⚠️  [DevRules] Failed to parse review_rules: %v (continuing without rules)\n", err)
+		} else if parsed != nil {
+			devRules = rules.Sanitize(parsed)
+			fmt.Printf("✅ [DevRules] Loaded %d instructions, %d ignore patterns, %d focus areas\n",
+				len(devRules.Instructions), len(devRules.Ignore), len(devRules.Focus))
+
+			// Apply ignore filter to changed files
+			if len(devRules.Ignore) > 0 {
+				ignoreFilter := rules.BuildIgnoreFilter(devRules)
+				filtered := make(map[string]string)
+				var ignored []string
+				for path, content := range changedFiles {
+					if ignoreFilter(path) {
+						ignored = append(ignored, path)
+					} else {
+						filtered[path] = content
+					}
+				}
+				if len(ignored) > 0 {
+					fmt.Printf("   🚫 [DevRules] Excluded %d files matching ignore patterns:\n", len(ignored))
+					for _, f := range ignored {
+						fmt.Printf("      - %s\n", f)
+					}
+					changedFiles = filtered
+				}
+			}
+		}
+	}
 
 	// 4. Run Review — with token-aware chunking
 	ctx := context.Background()
@@ -360,6 +401,7 @@ func main() {
 			matchSummary,
 			remoteGraphs,
 			remoteFetch,
+			devRules,
 		)
 		if err != nil {
 			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)

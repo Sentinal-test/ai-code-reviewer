@@ -5,6 +5,7 @@ import (
 	"code-review/backend/internal/agents"
 	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/models"
+	"code-review/backend/internal/rules"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,7 +16,7 @@ import (
 	"time"
 )
 
-const maxToolIterations = 8
+const maxToolIterations = 4
 
 // responseSchema is the JSON schema enforced on Gemini's output.
 // Using responseMimeType + responseSchema guarantees valid JSON.
@@ -70,21 +71,56 @@ func RunAgentReview(
 
 	result := agents.AgentResult{Agent: config.Type}
 
-	// Build the initial prompt with diff-anchored context
-	prompt := buildAgentPrompt(config)
+	// 1. Build the heavy, static context (to be cached)
+	staticContext := buildStaticContext(config)
 	apiKey := config.APIKey
 
 	fmt.Printf("🤖 [%s] Starting review (%d files, %d deps)\n",
 		config.Type, len(config.ChangedFiles), len(config.Dependencies))
-	fmt.Printf("  📏 [%s] Prompt size: %d chars (~%d tokens)\n",
-		config.Type, len(prompt), len(prompt)/4)
 
-	// Build the request with tool declarations
+	// Create the cache for this agent's specific context
+	var cacheName string
+	var err error
+
+	// Only bother caching if the context is substantial enough (> 135,000 chars is roughly 33,000 tokens)
+	// Gemini API requires a minimum of 32,768 tokens for Context Caching.
+	if len(staticContext) > 135000 {
+		fmt.Printf("  � [%s] Creating Context Cache (~%d tokens)...\n", config.Type, len(staticContext)/4)
+		cacheStart := time.Now()
+
+		var tools []map[string]interface{}
+		if toolExecutor != nil {
+			tools = []map[string]interface{}{
+				{"function_declarations": AgentToolDeclarations()},
+			}
+		}
+
+		cacheName, err = CreateCachedContent(ctx, client, apiKey, config.SystemPrompt, staticContext, tools)
+		if err != nil {
+			fmt.Printf("  ⚠️ [%s] Failed to create cache, falling back to inline context: %v\n", config.Type, err)
+		} else {
+			fmt.Printf("  ✅ [%s] Cache created in %.1fs: %s\n", config.Type, time.Since(cacheStart).Seconds(), cacheName)
+			defer DeleteCachedContent(context.Background(), client, apiKey, cacheName)
+		}
+	}
+
+	// 2. Build the lightweight, dynamic prompt
+	dynamicPrompt := buildDynamicPrompt(config)
+
+	// If caching failed or skipped, we must inline the static context into the dynamic prompt
+	if cacheName == "" {
+		dynamicPrompt = staticContext + "\n\n" + dynamicPrompt
+	}
+
+	fmt.Printf("  �📏 [%s] Prompt size: %d chars (~%d tokens)\n",
+		config.Type, len(dynamicPrompt), len(dynamicPrompt)/4)
+
+	// Build the initial request messages
 	messages := []map[string]interface{}{
 		{
 			"role": "user",
 			"parts": []map[string]interface{}{
-				{"text": prompt},
+				{"text": dynamicPrompt},
 			},
 		},
 	}
@@ -95,39 +131,49 @@ func RunAgentReview(
 			"temperature":     0.0,
 			"maxOutputTokens": 65536,
 			"thinkingConfig": map[string]interface{}{
-				"thinkingLevel": "high",
+				"thinkingLevel": "MEDIUM",
 			},
 		}
 
 		reqBody := map[string]interface{}{
-			"contents": messages,
-			"system_instruction": map[string]interface{}{
-				"parts": []map[string]interface{}{
-					{"text": config.SystemPrompt},
-				},
-			},
+			"contents":         messages,
 			"generationConfig": genConfig,
 		}
 
-		// Add tool declarations if we have a tool executor
-		if toolExecutor != nil {
-			reqBody["tools"] = []map[string]interface{}{
-				{
-					"function_declarations": AgentToolDeclarations(),
-				},
-			}
-			// Allow the model to decide between text and tool calls
-			reqBody["tool_config"] = map[string]interface{}{
-				"function_calling_config": map[string]interface{}{
-					"mode": "AUTO",
-				},
-			}
-			// NOTE: Gemini does NOT support responseMimeType with function calling.
-			// JSON output is enforced via the hardened system prompt instead.
-		} else {
+		// Tool schema fallback (for both cached and non-cached)
+		if toolExecutor == nil {
 			// No tools — we can enforce JSON schema on the response
 			genConfig["responseMimeType"] = "application/json"
 			genConfig["responseSchema"] = responseSchema
+		}
+
+		// Inject the cache URI if we successfully created it
+		if cacheName != "" {
+			reqBody["cachedContent"] = cacheName
+		} else {
+			// If no cache, we MUST provide the system instruction here
+			reqBody["system_instruction"] = map[string]interface{}{
+				"parts": []map[string]interface{}{
+					{"text": config.SystemPrompt},
+				},
+			}
+
+			// Add tool declarations if we have a tool executor
+			if toolExecutor != nil {
+				reqBody["tools"] = []map[string]interface{}{
+					{
+						"function_declarations": AgentToolDeclarations(),
+					},
+				}
+				// Allow the model to decide between text and tool calls
+				reqBody["tool_config"] = map[string]interface{}{
+					"function_calling_config": map[string]interface{}{
+						"mode": "AUTO",
+					},
+				}
+				// NOTE: Gemini does NOT support responseMimeType with function calling.
+				// JSON output is enforced via the hardened system prompt instead.
+			}
 		}
 
 		bodyJSON, err := json.Marshal(reqBody)
@@ -313,39 +359,21 @@ func RunAgentReview(
 	return result
 }
 
-// buildAgentPrompt constructs the user prompt for a specialist agent.
-// Key improvement: diff hunks are shown INLINE with each file so agents
-// know exactly which lines changed (marked with '+').
-func buildAgentPrompt(config agents.AgentConfig) string {
+// buildStaticContext constructs the heavy, cacheable portion of the prompt:
+// 1. Changed files (with diffs)
+// 2. Dependencies
+// 3. Repo structure
+func buildStaticContext(config agents.AgentConfig) string {
 	var b strings.Builder
 
-	// Chunk header
-	if config.ChunkTotal > 1 {
-		b.WriteString(fmt.Sprintf("=== CHUNK %d/%d ===\n", config.ChunkIndex, config.ChunkTotal))
-		if len(config.CrossRefs) > 0 {
-			b.WriteString(fmt.Sprintf("Files in other chunks that relate to this one: %s\n", strings.Join(config.CrossRefs, ", ")))
+	// Developer rules (highest priority — inject first)
+	if config.DeveloperRules != nil {
+		rulesBlock := rules.FormatForPrompt(config.DeveloperRules)
+		if rulesBlock != "" {
+			b.WriteString(rulesBlock)
+			b.WriteString("\n")
 		}
-		b.WriteString("\n")
 	}
-
-	// PR Context
-	if config.PRContext.Title != "" {
-		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-		b.WriteString("PR CONTEXT (Developer Intent)\n")
-		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-		b.WriteString(fmt.Sprintf("Title: %s\n", config.PRContext.Title))
-		if config.PRContext.Body != "" {
-			body := config.PRContext.Body
-			if len(body) > 2000 {
-				body = body[:2000] + "..."
-			}
-			b.WriteString(fmt.Sprintf("Description: %s\n", body))
-		}
-		b.WriteString("\n")
-	}
-
-	// Extract per-file diff hunks
-	diffMap := extractChangedLinesFromDiff(config.Diff)
 
 	// Changed files with full content, line numbers, AND inline diff hunks
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
@@ -353,6 +381,8 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 	b.WriteString("INSTRUCTION: Analyze ONLY the lines marked with '+' in the DIFF HUNKS below.\n")
 	b.WriteString("Use the full file content for context, but flag issues ONLY in changed lines.\n\n")
+
+	diffMap := extractChangedLinesFromDiff(config.Diff)
 
 	for _, path := range getFileKeys(config.ChangedFiles) {
 		content := config.ChangedFiles[path]
@@ -414,6 +444,38 @@ func buildAgentPrompt(config agents.AgentConfig) string {
 		b.WriteString("SUPPORTING CONTEXT: Repository Structure\n")
 		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 		b.WriteString(config.RepoStructure)
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// buildDynamicPrompt constructs the dynamic, conversational part of the prompt
+func buildDynamicPrompt(config agents.AgentConfig) string {
+	var b strings.Builder
+
+	// Chunk header
+	if config.ChunkTotal > 1 {
+		b.WriteString(fmt.Sprintf("=== CHUNK %d/%d ===\n", config.ChunkIndex, config.ChunkTotal))
+		if len(config.CrossRefs) > 0 {
+			b.WriteString(fmt.Sprintf("Files in other chunks that relate to this one: %s\n", strings.Join(config.CrossRefs, ", ")))
+		}
+		b.WriteString("\n")
+	}
+
+	// PR Context
+	if config.PRContext.Title != "" {
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("PR CONTEXT (Developer Intent)\n")
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString(fmt.Sprintf("Title: %s\n", config.PRContext.Title))
+		if config.PRContext.Body != "" {
+			body := config.PRContext.Body
+			if len(body) > 2000 {
+				body = body[:2000] + "..."
+			}
+			b.WriteString(fmt.Sprintf("Description: %s\n", body))
+		}
 		b.WriteString("\n")
 	}
 

@@ -37,6 +37,9 @@ type AgentConfig struct {
 
 	// Multi-repo
 	MatchSummary string
+
+	// Developer rules
+	DeveloperRules *models.DeveloperRules
 }
 
 // AgentResult is the output from a single specialist agent.

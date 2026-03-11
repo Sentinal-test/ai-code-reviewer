@@ -73,10 +73,19 @@ jobs:
           fetch-depth: 0
 
       - name: Run AI Reviewer
-        uses: appointytech/ai-code-reviewer@main
+        uses: appointytech/ai-code-reviewer@main # (OR use your org/repo path here)
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: Custom rules for your repo
+          review_rules: |
+            instructions:
+              - "Use CHI router for HTTP handlers"
+              - "Ignore debug logs or print statements"
+            ignore:
+              - "**/*_test.go"
+            focus:
+              - "Authentication logic"
 ```
 
 ---
@@ -127,6 +136,7 @@ backend/
 - [Cost Analysis](./docs/COST_ANALYSIS.md) - *Detailed token & pricing breakdown*
 - [Team Usage Guide](./docs/TEAM_USAGE.md)
 - [Project Overview](./docs/PROJECT_OVERVIEW.md)
+- [**Custom Review Rules**](./docs/DEVELOPER_RULES.md) - *Guide to personalizing the AI for your codebase*
 - [Architectural Decision Records](./docs/ARCHITECTURAL_DECISION_RECORDS.md)
 - [**Troubleshooting Guide**](./docs/DEVELOPER_GUIDE.md#troubleshooting)
 

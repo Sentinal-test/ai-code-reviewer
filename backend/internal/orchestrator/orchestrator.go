@@ -73,6 +73,7 @@ func ReviewChunk(
 	matchSummary string,
 	remoteGraphs map[string]*codegraph.RemoteRepoGraph,
 	remoteFetch *remotefetch.Fetcher,
+	devRules *models.DeveloperRules,
 ) (*models.ReviewResult, error) {
 
 	start := time.Now()
@@ -116,15 +117,16 @@ func ReviewChunk(
 
 	// Build shared fields
 	shared := agents.AgentConfig{
-		ChangedFiles: reviewableFiles,
-		Diff:         chunkDiff,
-		PRContext:    prContext,
-		CrossRefs:    crossRefs,
-		ChunkIndex:   chunkIndex,
-		ChunkTotal:   chunkTotal,
-		APIKey:       apiKey,
-		RepoPath:     repoPath,
-		MatchSummary: matchSummary,
+		ChangedFiles:   reviewableFiles,
+		Diff:           chunkDiff,
+		PRContext:      prContext,
+		CrossRefs:      crossRefs,
+		ChunkIndex:     chunkIndex,
+		ChunkTotal:     chunkTotal,
+		APIKey:         apiKey,
+		RepoPath:       repoPath,
+		MatchSummary:   matchSummary,
+		DeveloperRules: devRules,
 	}
 
 	// Build per-agent configs with DIFFERENTIATED context:
