@@ -394,10 +394,32 @@ func (g *GitHubClient) GetPullRequest(ctx context.Context, prNumber int) (*model
 		return nil, err
 	}
 
+	var commitMsgs []string
+	opts := &github.ListOptions{
+		PerPage: 2, // User requested the last 2 commit messages
+	}
+
+	commits, _, commitErr := g.client.PullRequests.ListCommits(ctx, g.owner, g.repo, prNumber, opts)
+	if commitErr == nil {
+		// Since ListCommits returns them in chronological order, we take the last 2 if there are more
+		startIdx := 0
+		if len(commits) > 2 {
+			startIdx = len(commits) - 2
+		}
+
+		for i := startIdx; i < len(commits); i++ {
+			if commits[i].Commit != nil && commits[i].Commit.Message != nil {
+				commitMsgs = append(commitMsgs, *commits[i].Commit.Message)
+			}
+		}
+	} else {
+		fmt.Printf("⚠️ Failed to fetch commits for PR %d: %v\n", prNumber, commitErr)
+	}
+
 	return &models.PRContext{
-		Title: pr.GetTitle(),
-		Body:  pr.GetBody(),
-		// Commits fetching could be added here if needed, but Title/Body is the main missing piece
+		Title:          pr.GetTitle(),
+		Body:           pr.GetBody(),
+		CommitMessages: commitMsgs,
 	}, nil
 }
 

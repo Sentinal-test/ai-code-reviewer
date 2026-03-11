@@ -127,10 +127,18 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 				argsBytes, _ := json.Marshal(p.FunctionCall.Args)
 				var argsMap map[string]any
 				json.Unmarshal(argsBytes, &argsMap)
-				part.FunctionCall = &genai.FunctionCall{
+
+				call := &genai.FunctionCall{
 					Name: p.FunctionCall.Name,
 					Args: argsMap,
 				}
+
+				// Required by Gemini 2.0+ models when using thoughtful mode
+				if p.FunctionCall.Thought != "" {
+					part.ThoughtSignature = []byte(p.FunctionCall.Thought)
+					part.Thought = true
+				}
+				part.FunctionCall = call
 			} else if p.FunctionResp != nil {
 				argsMap := map[string]any{
 					"content": p.FunctionResp.Content,
@@ -182,8 +190,9 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 				textParts = append(textParts, part.Text)
 			} else if part.FunctionCall != nil {
 				result.FunctionCall = &FunctionCall{
-					Name: part.FunctionCall.Name,
-					Args: part.FunctionCall.Args,
+					Name:    part.FunctionCall.Name,
+					Args:    part.FunctionCall.Args,
+					Thought: string(part.ThoughtSignature), // Capture for next turn
 				}
 			}
 		}

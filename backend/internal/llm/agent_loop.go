@@ -350,6 +350,18 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 			}
 			b.WriteString(fmt.Sprintf("Description: %s\n", body))
 		}
+
+		if len(config.PRContext.CommitMessages) > 0 {
+			b.WriteString("\nRecent Commits:\n")
+			for i, msg := range config.PRContext.CommitMessages {
+				// Clean and truncate commit messages just in case they are massive
+				cleanMsg := strings.TrimSpace(msg)
+				if len(cleanMsg) > 500 {
+					cleanMsg = cleanMsg[:500] + "..."
+				}
+				b.WriteString(fmt.Sprintf("  %d. %s\n", i+1, cleanMsg))
+			}
+		}
 		b.WriteString("\n")
 	}
 
