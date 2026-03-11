@@ -150,7 +150,7 @@ func packChunks(components [][]string, files map[string]string, budget int) []Ch
 			compTokens += EstimateTokens(files[path])
 		}
 
-		// If this component alone exceeds budget, give it its own chunk
+		// If this component alone exceeds budget, we must break it down into smaller chunks
 		if compTokens > budget {
 			// Flush current chunk first if non-empty
 			if len(currentFiles) > 0 {
@@ -158,12 +158,39 @@ func packChunks(components [][]string, files map[string]string, budget int) []Ch
 				currentFiles = make(map[string]string)
 				currentTokens = 0
 			}
-			// Create a chunk for the oversized component
-			oversized := make(map[string]string)
+
+			// Break down the oversized component
+			oversizedChunk := make(map[string]string)
+			oversizedTokens := 0
+
 			for _, path := range comp {
-				oversized[path] = files[path]
+				fileTokens := EstimateTokens(files[path])
+
+				// If a single file itself exceeds the budget (rare, but possible), it gets its own chunk
+				if fileTokens > budget {
+					if len(oversizedChunk) > 0 {
+						chunks = append(chunks, Chunk{Files: oversizedChunk})
+						oversizedChunk = make(map[string]string)
+						oversizedTokens = 0
+					}
+					chunks = append(chunks, Chunk{Files: map[string]string{path: files[path]}})
+					continue
+				}
+
+				if oversizedTokens+fileTokens > budget {
+					chunks = append(chunks, Chunk{Files: oversizedChunk})
+					oversizedChunk = make(map[string]string)
+					oversizedTokens = 0
+				}
+
+				oversizedChunk[path] = files[path]
+				oversizedTokens += fileTokens
 			}
-			chunks = append(chunks, Chunk{Files: oversized})
+
+			// Flush remaining of the component
+			if len(oversizedChunk) > 0 {
+				chunks = append(chunks, Chunk{Files: oversizedChunk})
+			}
 			continue
 		}
 
