@@ -84,10 +84,6 @@ func (p *ClaudeProvider) GenerateContent(ctx context.Context, req GenerateReques
 	}
 
 	systemStr := req.SystemPrompt
-	if req.CachedContent != "" {
-		systemStr += "\n\nProject Context:\n" + req.CachedContent
-	}
-
 	if req.ResponseJSON {
 		systemStr += "\n\nYou MUST return your answer as a raw JSON object matching the requested schema. Do not enclose it in markdown blocks."
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -44,14 +43,9 @@ func (p *OpenAIProvider) GenerateContent(ctx context.Context, req GenerateReques
 
 	// Add System message, incorporating cached content/static context if it was "cached" locally
 	if req.SystemPrompt != "" {
-		msgs := []string{req.SystemPrompt}
-		if req.CachedContent != "" {
-			msgs = append(msgs, "Project Context:", req.CachedContent)
-		}
-
 		messages = append(messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
-			Content: strings.Join(msgs, "\n\n"),
+			Content: req.SystemPrompt,
 		})
 	}
 
@@ -164,7 +158,9 @@ func (p *OpenAIProvider) GenerateContent(ctx context.Context, req GenerateReques
 	if len(choice.Message.ToolCalls) > 0 {
 		tc := choice.Message.ToolCalls[0]
 		var args map[string]interface{}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil || args == nil {
+			args = make(map[string]interface{})
+		}
 		result.FunctionCall = &FunctionCall{
 			ID:   tc.ID,
 			Name: tc.Function.Name,
