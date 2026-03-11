@@ -32,7 +32,6 @@ type AgentConfig struct {
 	ChunkTotal int
 
 	// LLM
-	APIKey   string
 	RepoPath string // for tool calls (file reads, git grep)
 
 	// Multi-repo

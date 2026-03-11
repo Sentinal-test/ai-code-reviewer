@@ -327,7 +327,14 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 
 	// 5. Run LLM Review (With PR Context & Dependencies)
 	fmt.Printf("🧠 Running LLM review for PR #%d (with %d changed files, %d deps)...\n", pr.GetNumber(), len(changedFiles), len(dependencies))
-	review, err := llm.RunReview(ctx, nil, diff, changedFiles, dependencies, settings, repoStructure, apiKey, prContext)
+
+	provider, err := llm.NewGeminiProvider(apiKey, "")
+	if err != nil {
+		fmt.Printf("❌ Failed to initialize Gemini provider: %v\n", err)
+		return
+	}
+
+	review, err := llm.RunReview(ctx, provider, diff, changedFiles, dependencies, settings, repoStructure, prContext)
 	if err != nil {
 		fmt.Printf("❌ LLM Review Failed: %v\n", err)
 		if checkRunID != 0 {

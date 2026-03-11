@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bytes"
 	"code-review/backend/internal/agents"
 	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/models"
@@ -9,14 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
-const maxToolIterations = 4
+const maxToolIterations = 10
 
 // responseSchema is the JSON schema enforced on Gemini's output.
 // Using responseMimeType + responseSchema guarantees valid JSON.
@@ -64,7 +62,7 @@ var responseSchema = map[string]interface{}{
 // It sends the initial prompt, handles tool calls, and returns the agent's findings.
 func RunAgentReview(
 	ctx context.Context,
-	client *http.Client,
+	provider LLMProvider,
 	config agents.AgentConfig,
 	toolExecutor *ToolExecutor,
 ) agents.AgentResult {
@@ -73,7 +71,6 @@ func RunAgentReview(
 
 	// 1. Build the heavy, static context (to be cached)
 	staticContext := buildStaticContext(config)
-	apiKey := config.APIKey
 
 	fmt.Printf("🤖 [%s] Starting review (%d files, %d deps)\n",
 		config.Type, len(config.ChangedFiles), len(config.Dependencies))
@@ -82,25 +79,25 @@ func RunAgentReview(
 	var cacheName string
 	var err error
 
+	var tools []ToolDeclaration
+	if toolExecutor != nil {
+		tools = AgentToolDeclarations()
+	}
+
 	// Only bother caching if the context is substantial enough (> 135,000 chars is roughly 33,000 tokens)
 	// Gemini API requires a minimum of 32,768 tokens for Context Caching.
 	if len(staticContext) > 135000 {
-		fmt.Printf("  � [%s] Creating Context Cache (~%d tokens)...\n", config.Type, len(staticContext)/4)
+		fmt.Printf("  📦 [%s] Creating Context Cache (~%d tokens)...\n", config.Type, len(staticContext)/4)
 		cacheStart := time.Now()
 
-		var tools []map[string]interface{}
-		if toolExecutor != nil {
-			tools = []map[string]interface{}{
-				{"function_declarations": AgentToolDeclarations()},
-			}
-		}
-
-		cacheName, err = CreateCachedContent(ctx, client, apiKey, config.SystemPrompt, staticContext, tools)
+		cacheName, err = provider.CreateCache(ctx, config.SystemPrompt, staticContext, tools)
 		if err != nil {
 			fmt.Printf("  ⚠️ [%s] Failed to create cache, falling back to inline context: %v\n", config.Type, err)
-		} else {
+		} else if cacheName != "" {
 			fmt.Printf("  ✅ [%s] Cache created in %.1fs: %s\n", config.Type, time.Since(cacheStart).Seconds(), cacheName)
-			defer DeleteCachedContent(context.Background(), client, apiKey, cacheName)
+			defer provider.DeleteCache(context.Background(), cacheName)
+		} else {
+			fmt.Printf("  ℹ️ [%s] Caching skipped (not supported/required by provider)\n", config.Type)
 		}
 	}
 
@@ -112,135 +109,49 @@ func RunAgentReview(
 		dynamicPrompt = staticContext + "\n\n" + dynamicPrompt
 	}
 
-	fmt.Printf("  �📏 [%s] Prompt size: %d chars (~%d tokens)\n",
+	fmt.Printf("  📏 [%s] Prompt size: %d chars (~%d tokens)\n",
 		config.Type, len(dynamicPrompt), len(dynamicPrompt)/4)
 
 	// Build the initial request messages
-	messages := []map[string]interface{}{
+	messages := []Message{
 		{
-			"role": "user",
-			"parts": []map[string]interface{}{
-				{"text": dynamicPrompt},
+			Role: "user",
+			Parts: []Part{
+				{Text: dynamicPrompt},
 			},
 		},
 	}
 
 	// Agentic loop: send → maybe tool call → send result → repeat
 	for iteration := 0; iteration <= maxToolIterations; iteration++ {
-		genConfig := map[string]interface{}{
-			"temperature":     0.0,
-			"maxOutputTokens": 65536,
-			"thinkingConfig": map[string]interface{}{
-				"thinkingLevel": "MEDIUM",
-			},
+		req := GenerateRequest{
+			SystemPrompt:  config.SystemPrompt,
+			Messages:      messages,
+			Tools:         tools,
+			CachedContent: cacheName,
+			Temperature:   0.0,
+			ResponseJSON:  toolExecutor == nil, // enforce JSON if no tools
 		}
-
-		reqBody := map[string]interface{}{
-			"contents":         messages,
-			"generationConfig": genConfig,
-		}
-
-		// Tool schema fallback (for both cached and non-cached)
-		if toolExecutor == nil {
-			// No tools — we can enforce JSON schema on the response
-			genConfig["responseMimeType"] = "application/json"
-			genConfig["responseSchema"] = responseSchema
-		}
-
-		// Inject the cache URI if we successfully created it
-		if cacheName != "" {
-			reqBody["cachedContent"] = cacheName
-		} else {
-			// If no cache, we MUST provide the system instruction here
-			reqBody["system_instruction"] = map[string]interface{}{
-				"parts": []map[string]interface{}{
-					{"text": config.SystemPrompt},
-				},
-			}
-
-			// Add tool declarations if we have a tool executor
-			if toolExecutor != nil {
-				reqBody["tools"] = []map[string]interface{}{
-					{
-						"function_declarations": AgentToolDeclarations(),
-					},
-				}
-				// Allow the model to decide between text and tool calls
-				reqBody["tool_config"] = map[string]interface{}{
-					"function_calling_config": map[string]interface{}{
-						"mode": "AUTO",
-					},
-				}
-				// NOTE: Gemini does NOT support responseMimeType with function calling.
-				// JSON output is enforced via the hardened system prompt instead.
-			}
-		}
-
-		bodyJSON, err := json.Marshal(reqBody)
-		if err != nil {
-			result.Error = fmt.Errorf("marshal request: %w", err)
-			return result
-		}
-
-		url := geminiURL + "?key=" + apiKey
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
-		if err != nil {
-			result.Error = fmt.Errorf("create request: %w", err)
-			return result
-		}
-		req.Header.Set("Content-Type", "application/json")
 
 		start := time.Now()
-		resp, err := client.Do(req)
+		resp, err := provider.GenerateContent(ctx, req)
 		elapsed := time.Since(start)
+
 		if err != nil {
-			result.Error = fmt.Errorf("API call: %w", err)
-			return result
-		}
-		defer resp.Body.Close()
-
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			result.Error = fmt.Errorf("read response: %w", err)
+			result.Error = fmt.Errorf("LLM API error: %w", err)
 			return result
 		}
 
-		if resp.StatusCode != http.StatusOK {
-			result.Error = fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
-			return result
-		}
+		result.InputTokens += resp.InputTokens
+		result.OutputTokens += resp.OutputTokens
 
-		// Parse the Gemini response
-		var geminiResp struct {
-			Candidates []struct {
-				Content struct {
-					Parts []json.RawMessage `json:"parts"`
-				} `json:"content"`
-				FinishReason string `json:"finishReason"`
-			} `json:"candidates"`
-			UsageMetadata struct {
-				PromptTokenCount     int `json:"promptTokenCount"`
-				CandidatesTokenCount int `json:"candidatesTokenCount"`
-			} `json:"usageMetadata"`
-		}
-
-		if err := json.Unmarshal(respBody, &geminiResp); err != nil {
-			result.Error = fmt.Errorf("parse response: %w", err)
-			return result
-		}
-
-		result.InputTokens += geminiResp.UsageMetadata.PromptTokenCount
-		result.OutputTokens += geminiResp.UsageMetadata.CandidatesTokenCount
-
-		if len(geminiResp.Candidates) == 0 {
-			// Retry once on empty candidates (Gemini safety filter)
+		if resp.FinishReason == "EMPTY" {
+			// Retry once on empty candidates (safety filter or model error)
 			if iteration == 0 {
 				fmt.Printf("  ⚠️ [%s] No candidates — retrying with nudge\n", config.Type)
-				messages = append(messages, map[string]interface{}{
-					"role": "user",
-					"parts": []map[string]interface{}{
-						{"text": "Please analyze the code changes and respond with a JSON object containing your findings. If you find no issues, respond with {\"summary\": \"No issues found\", \"comments\": []}."},
-					},
+				lastMsg := &messages[len(messages)-1]
+				lastMsg.Parts = append(lastMsg.Parts, Part{
+					Text: "\n\nPlease analyze the code changes and respond with a JSON object containing your findings. If you find no issues, respond with {\"summary\": \"No issues found\", \"comments\": []}.",
 				})
 				continue
 			}
@@ -248,104 +159,77 @@ func RunAgentReview(
 			return result
 		}
 
-		candidate := geminiResp.Candidates[0]
-
-		// Check finish reason for truncation
-		if candidate.FinishReason == "MAX_TOKENS" {
+		if resp.FinishReason == "MAX_TOKENS" {
 			fmt.Printf("  ⚠️ [%s] Response truncated (MAX_TOKENS) at iteration %d\n", config.Type, iteration+1)
 		}
 
-		// Parse parts — each part can be either text or functionCall
-		var hasFunctionCall bool
-		var textParts []string
-		var toolCalls []agents.ToolCallRequest
-		var toolCallIndices []int // track which parts are function calls
-
-		for i, rawPart := range candidate.Content.Parts {
-			var part struct {
-				Text         string `json:"text"`
-				FunctionCall *struct {
-					Name string                 `json:"name"`
-					Args map[string]interface{} `json:"args"`
-				} `json:"functionCall"`
-			}
-			if err := json.Unmarshal(rawPart, &part); err != nil {
-				continue
-			}
-
-			if part.FunctionCall != nil {
-				hasFunctionCall = true
-				toolCalls = append(toolCalls, agents.ToolCallRequest{
-					Name: part.FunctionCall.Name,
-					Args: part.FunctionCall.Args,
-				})
-				toolCallIndices = append(toolCallIndices, i)
-			} else if part.Text != "" {
-				textParts = append(textParts, part.Text)
-			}
-		}
-
 		// If we have tool calls, execute them and build the conversation history
-		if hasFunctionCall {
-			// Forward ALL of the model's parts (text, thought, functionCall) as one model turn.
-			// This preserves thought_signatures and chain-of-thought reasoning.
-			messages = append(messages, map[string]interface{}{
-				"role":  "model",
-				"parts": candidate.Content.Parts, // Forward ALL parts verbatim
+		if len(resp.FunctionCalls) > 0 {
+			// Append model turn — use ModelParts if available (Gemini includes
+			// thought parts that must be replayed), otherwise fall back to all tools.
+			modelParts := resp.ModelParts
+			if len(modelParts) == 0 {
+				for _, fc := range resp.FunctionCalls {
+					modelParts = append(modelParts, Part{FunctionCall: fc})
+				}
+			}
+			messages = append(messages, Message{
+				Role:  "model",
+				Parts: modelParts,
 			})
 
-			// Execute each tool call and batch all responses into one function turn
-			var functionResponseParts []map[string]interface{}
-			for _, toolCall := range toolCalls {
-				fmt.Printf("  🔧 [%s] Tool call: %s(%v) [iter %d, %.1fs]\n",
-					config.Type, toolCall.Name, toolCall.Args, iteration+1, elapsed.Seconds())
+			fmt.Printf("  🔧 [%s] Executing %d parallel tool calls [iter %d, %.1fs]\n",
+				config.Type, len(resp.FunctionCalls), iteration+1, elapsed.Seconds())
 
-				toolResult := toolExecutor.Execute(ctx, toolCall)
+			var wg sync.WaitGroup
+			funcParts := make([]Part, len(resp.FunctionCalls))
+
+			for i, fc := range resp.FunctionCalls {
+				wg.Add(1)
 				result.ToolCalls++
 
-				fmt.Printf("  📨 [%s] Tool response (%s): %d chars\n",
-					config.Type, toolCall.Name, len(toolResult.Content))
-				fmt.Println("  ────────────────────────────────────────")
-				responsePreview := toolResult.Content
-				if len(responsePreview) > 2000 {
-					responsePreview = responsePreview[:2000] + "\n  ...(truncated for display)"
-				}
-				fmt.Println(responsePreview)
-				fmt.Println("  ────────────────────────────────────────")
+				go func(idx int, call *FunctionCall) {
+					defer wg.Done()
+					req := agents.ToolCallRequest{
+						Name: call.Name,
+						Args: call.Args,
+					}
 
-				functionResponseParts = append(functionResponseParts, map[string]interface{}{
-					"functionResponse": map[string]interface{}{
-						"name": toolCall.Name,
-						"response": map[string]interface{}{
-							"content": toolResult.Content,
+					fmt.Printf("     ├── Call %d: %s(%v)\n", idx+1, call.Name, call.Args)
+					res := toolExecutor.Execute(ctx, req)
+					fmt.Printf("     └── Resp %d: %s (%d chars)\n", idx+1, call.Name, len(res.Content))
+
+					funcParts[idx] = Part{
+						FunctionResp: &FunctionResponse{
+							ID:      call.ID,
+							Name:    call.Name,
+							Content: res.Content,
 						},
-					},
-				})
+					}
+				}(i, fc)
 			}
+			wg.Wait()
 
-			// Append all function responses as a single function turn
-			messages = append(messages, map[string]interface{}{
-				"role":  "function",
-				"parts": functionResponseParts,
+			// Append function response turn with all tool results safely ordered
+			messages = append(messages, Message{
+				Role:  "function",
+				Parts: funcParts,
 			})
-		} else if len(textParts) > 0 {
+		} else if resp.Text != "" {
 			// Text-only response (final answer) — parse it
-			fullText := strings.Join(textParts, "\n")
-			parsed := parseAgentResponse(fullText)
+			parsed := parseAgentResponse(resp.Text)
 			result.Comments = parsed.Comments
 			result.Summary = parsed.Summary
 			fmt.Printf("  ✅ [%s] Done: %d comments (%.1fs, %d tool calls)\n",
 				config.Type, len(result.Comments), elapsed.Seconds(), result.ToolCalls)
 			return result
 		} else {
-			// Empty response — retry once with a nudge
+			// Empty text response — retry once with a nudge
 			if iteration == 0 {
 				fmt.Printf("  ⚠️ [%s] Empty response — retrying with nudge\n", config.Type)
-				messages = append(messages, map[string]interface{}{
-					"role": "user",
-					"parts": []map[string]interface{}{
-						{"text": "Your previous response was empty. Please analyze the code changes shown above and respond with a JSON object. Focus on the diff hunks marked with '+'. If no issues found, respond with {\"summary\": \"No issues found\", \"comments\": []}."},
-					},
+				lastMsg := &messages[len(messages)-1]
+				lastMsg.Parts = append(lastMsg.Parts, Part{
+					Text: "\n\nYour previous response was empty. Please analyze the code changes shown above and respond with a JSON object. Focus on the diff hunks marked with '+'. If no issues found, respond with {\"summary\": \"No issues found\", \"comments\": []}.",
 				})
 				continue
 			}
@@ -475,6 +359,18 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 				body = body[:2000] + "..."
 			}
 			b.WriteString(fmt.Sprintf("Description: %s\n", body))
+		}
+
+		if len(config.PRContext.CommitMessages) > 0 {
+			b.WriteString("\nRecent Commits:\n")
+			for i, msg := range config.PRContext.CommitMessages {
+				// Clean and truncate commit messages just in case they are massive
+				cleanMsg := strings.TrimSpace(msg)
+				if len(cleanMsg) > 500 {
+					cleanMsg = cleanMsg[:500] + "..."
+				}
+				b.WriteString(fmt.Sprintf("  %d. %s\n", i+1, cleanMsg))
+			}
 		}
 		b.WriteString("\n")
 	}

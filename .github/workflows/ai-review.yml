@@ -20,8 +20,17 @@ jobs:
       - name: Run AI Reviewer
         uses: ./ # Uses the action in the root of this repo
         with:
+          llm_provider: gemini
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           pr_number: ${{ github.event.pull_request.number }}
           base_ref: ${{ github.event.pull_request.base.sha }}
           head_ref: ${{ github.event.pull_request.head.sha }}
+          review_rules: |
+            instructions:
+              - "Ignore debug logs or print statements"
+            ignore:
+              - "**/*_test.go"
+              - openai and anthropic api key files for now
+            focus:
+              - gemini implementation

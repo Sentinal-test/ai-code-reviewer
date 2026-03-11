@@ -14,7 +14,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,7 +43,8 @@ func checkMultiRepoAvailability(ctx context.Context, ghClient *action.GitHubClie
 
 func main() {
 	// 1. Parse Args & Env
-	apiKeyFlag := flag.String("api-key", "", "Gemini API Key")
+	apiKeyFlag := flag.String("api-key", "", "API Key (default Gemini, fallback for others)")
+	llmProviderFlag := flag.String("llm-provider", "gemini", "LLM Provider (gemini, openai, claude)")
 	githubTokenFlag := flag.String("github-token", "", "GitHub Token")
 	prNumberFlag := flag.String("pr-number", "", "Pull Request Number")
 	repoNameFlag := flag.String("repo", "", "Repository Name (owner/repo)")
@@ -63,7 +63,12 @@ func main() {
 	// 2. Resolve parameters (Priority: Flag -> Env)
 	apiKey := *apiKeyFlag
 	if apiKey == "" {
-		apiKey = os.Getenv("GEMINI_API_KEY")
+		apiKey = os.Getenv("GEMINI_API_KEY") // legacy, acts as default API key
+	}
+
+	llmProvider := *llmProviderFlag
+	if os.Getenv("LLM_PROVIDER") != "" {
+		llmProvider = os.Getenv("LLM_PROVIDER")
 	}
 
 	githubToken := *githubTokenFlag
@@ -96,8 +101,8 @@ func main() {
 		appPrivateKey = os.Getenv("APP_PRIVATE_KEY")
 	}
 
-	if apiKey == "" {
-		fmt.Println("❌ Error: GEMINI_API_KEY is required. Pass via --api-key or GEMINI_API_KEY environment variable.")
+	if apiKey == "" && os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" {
+		fmt.Println("❌ Error: Valid API key is required. Set GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.")
 		os.Exit(1)
 	}
 
@@ -349,7 +354,31 @@ func main() {
 
 	// 4. Run Review — with token-aware chunking
 	ctx := context.Background()
-	client := &http.Client{}
+
+	var provider llm.LLMProvider
+	var initErr error
+
+	switch llmProvider {
+	case "openai":
+		key := os.Getenv("OPENAI_API_KEY")
+		if key == "" {
+			key = apiKey
+		}
+		provider = llm.NewOpenAIProvider(key, "")
+	case "claude":
+		key := os.Getenv("ANTHROPIC_API_KEY")
+		if key == "" {
+			key = apiKey
+		}
+		provider = llm.NewClaudeProvider(key, "")
+	default:
+		provider, initErr = llm.NewGeminiProvider(apiKey, "")
+	}
+
+	if initErr != nil || provider == nil {
+		fmt.Printf("❌ Failed to initialize provider %s: %v\n", llmProvider, initErr)
+		os.Exit(1)
+	}
 
 	// Get graph edges for smart chunk grouping
 	var graphEdges []codegraph.Edge
@@ -391,12 +420,12 @@ func main() {
 		scopedDeps := scopeDependencies(dependencies, chunk, cgService)
 
 		// Multi-agent review: 3 specialist agents in parallel per chunk
-		r, err := orchestrator.ReviewChunk(ctx, client,
+		r, err := orchestrator.ReviewChunk(ctx, provider,
 			chunk.Files, chunk.Diff,
 			chunk.Index, chunk.Total,
 			chunk.CrossRefs,
 			scopedDeps, repoStructure,
-			apiKey, prContext,
+			prContext,
 			cgService.Graph, wd,
 			matchSummary,
 			remoteGraphs,

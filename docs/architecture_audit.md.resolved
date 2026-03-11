@@ -1,0 +1,128 @@
+# Codebase Architecture Audit — Post Feature Integration
+
+## 1. Is Single-Repo Accuracy Maintained?
+
+**✅ Yes — fully preserved.** All new features are additive and optional:
+
+| Feature | Impact on Single-Repo |
+|---|---|
+| **Multi-Repo Context** | Only activates if `--app-id` and `--app-private-key` are provided AND remote repos are discovered. Otherwise `matchSummary = ""` and `remoteGraphs = nil` — zero prompt impact. |
+| **Gemini Cache** | Only activates if static context > 135K chars (~33K tokens). On smaller PRs, it falls back to inline context — identical behavior to before. |
+| **Developer Rules** | Only activates if `review_rules` is provided. When absent, `devRules = nil` and [FormatForPrompt(nil) = ""](file:///Users/tegi/Desktop/code-review/backend/internal/rules/rules.go#133-180) — no prompt injection at all. |
+
+The core review pipeline is unchanged:
+```
+CodeGraph → Chunker → Orchestrator (3 agents ∥) → Consolidator → GitHub Comments
+```
+
+Each new feature has an **explicit nil/empty guard** that short-circuits before touching any prompt.
+
+---
+
+## 2. Is Gemini Cache Working Correctly?
+
+**✅ Yes, with a smart fallback.**
+
+The cache logic in [agent_loop.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/agent_loop.go#L82-L113):
+
+```
+if len(staticContext) > 135,000 chars:
+    → Create Gemini Cache (system prompt + static context + tools)
+    → Use `cachedContent` in API request
+    → Delete cache after agent completes
+else:
+    → Inline static context directly into the prompt (original behavior)
+```
+
+**What gets cached:**
+- System instruction (agent persona prompt)
+- Static context = developer rules + changed files with diffs + dependencies + repo structure
+- Tool declarations
+
+**What stays dynamic (not cached):**
+- PR context (title, body, commits)
+- Chunk metadata
+- Cross-references
+
+> [!IMPORTANT]  
+> **The 135K threshold exists because Gemini requires a minimum of 32,768 tokens for Context Caching.** If your PR is small (most are), the cache is skipped and everything works inline — no cost overhead, no API roundtrip.
+
+> [!NOTE]  
+> If cache creation fails, it logs a warning and falls back to inline context automatically. The review never fails due to a cache issue.
+
+---
+
+## 3. What Happens If We Switch from Gemini to Claude or GPT?
+
+**⚠️ Significant refactoring required.** The codebase is tightly coupled to Gemini's API:
+
+### Gemini-Specific Code (would need rewriting)
+
+| Component | Gemini Coupling |
+|---|---|
+| [llm.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/llm.go#L19-L27) | Hardcoded `geminiModel`, `geminiURL`, `geminiFlashModel`, `geminiFlashURL` |
+| [agent_loop.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/agent_loop.go#L128-L160) | Gemini-specific request body structure (`contents`, `generationConfig`, `thinkingConfig`, `responseMimeType`, `responseSchema`) |
+| [agent_loop.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/agent_loop.go#L214-L235) | Gemini-specific response parsing (`geminiResp.Candidates[0].Content.Parts`) |
+| [cache.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/cache.go) | Entire file is Gemini-only (`generativelanguage.googleapis.com/v1beta/cachedContents`) |
+| [consolidator.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/consolidator.go) | Uses `geminiFlashURL` and Gemini response format |
+| [tools.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/tools.go) | Gemini `function_declarations` format (differs from OpenAI's `tools` format) |
+
+### What Would NOT Change
+- Prompts content (instructions, rules, personas)
+- CodeGraph, chunker, orchestrator logic
+- GitHub integration
+- Developer rules package
+
+### To Make It LLM-Agnostic
+You'd need to introduce an **LLM Provider Interface**:
+```go
+type LLMProvider interface {
+    Chat(ctx, messages, config) (Response, error)
+    CacheContent(ctx, content) (CacheRef, error)
+    DeleteCache(ctx, ref) error
+}
+```
+Then implement `GeminiProvider`, `ClaudeProvider`, `OpenAIProvider` separately.
+
+---
+
+## 4. Chunk Execution: Parallel or Sequential?
+
+### Chunks → **Sequential** (one after another)
+
+From [main.go:389](file:///Users/tegi/Desktop/code-review/backend/cmd/cli/main.go#L389):
+```go
+for _, chunk := range chunks {
+    r, err := orchestrator.ReviewChunk(...)  // blocks until complete
+    results = append(results, r)
+}
+```
+
+This is a simple [for](file:///Users/tegi/Desktop/code-review/backend/internal/llm/llm.go#463-494) loop — each chunk waits for the previous one to finish.
+
+### Agents within each chunk → **Parallel** (3 agents simultaneously)
+
+From [orchestrator.go:176-184](file:///Users/tegi/Desktop/code-review/backend/internal/orchestrator/orchestrator.go#L176-L184):
+```go
+for i, config := range configs {
+    wg.Add(1)
+    go func(idx int, cfg agents.AgentConfig) {  // goroutine
+        defer wg.Done()
+        results[idx] = llm.RunAgentReview(ctx, client, cfg, toolExecutor)
+    }(i, config)
+}
+wg.Wait()  // waits for all 3 to finish
+```
+
+### Execution Diagram
+
+```
+Chunk 1: [Correctness ║ Security ║ Structure] → Consolidate → Done
+                                                                ↓
+Chunk 2: [Correctness ║ Security ║ Structure] → Consolidate → Done
+                                                                ↓
+Chunk 3: [Correctness ║ Security ║ Structure] → Consolidate → Done
+```
+
+> [!TIP]
+> **Why sequential chunks?** Rate limits. Running 3 agents per chunk already sends 3 concurrent Gemini API calls. Running multiple chunks in parallel would multiply that (e.g., 3 chunks × 3 agents = 9 concurrent calls), which could hit Gemini's rate limits and cause failures.

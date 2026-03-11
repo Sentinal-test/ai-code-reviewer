@@ -1,8 +1,18 @@
 name: 'AI Code Reviewer'
 description: 'AI-powered code review running entirely within GitHub Actions'
 inputs:
+  llm_provider:
+    description: 'LLM Provider to use (gemini, openai, claude)'
+    required: false
+    default: 'gemini'
   gemini_api_key:
     description: 'Google Gemini API Key'
+    required: false
+  openai_api_key:
+    description: 'OpenAI API Key'
+    required: false
+  anthropic_api_key:
+    description: 'Anthropic API Key'
     required: false
   github_token:
     description: 'GitHub Token for posting comments'
@@ -61,9 +71,13 @@ runs:
     - name: Run AI Reviewer
       shell: bash
       env:
+        LLM_PROVIDER_INPUT: ${{ inputs.llm_provider }}
         GEMINI_API_KEY_INPUT: ${{ inputs.gemini_api_key }}
-        # Map the Org-level secret (named GEMINI_API_KEY by user) to an internal name
         ORG_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        OPENAI_API_KEY_INPUT: ${{ inputs.openai_api_key }}
+        ORG_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        ANTHROPIC_API_KEY_INPUT: ${{ inputs.anthropic_api_key }}
+        ORG_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         GITHUB_TOKEN_INPUT: ${{ inputs.github_token }}
         PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         BASE_REF_INPUT: ${{ inputs.base_ref }}
@@ -82,24 +96,31 @@ runs:
         #   2nd: Organization-level GEMINI_API_KEY secret
         #   3rd: Runner's GEMINI_API_KEY environment variable
         
+        RESOLVED_PROVIDER="${LLM_PROVIDER_INPUT:-gemini}"
         RESOLVED_API_KEY="${GEMINI_API_KEY_INPUT:-${ORG_GEMINI_API_KEY:-$GEMINI_API_KEY}}"
+        RESOLVED_OPENAI_KEY="${OPENAI_API_KEY_INPUT:-${ORG_OPENAI_API_KEY:-$OPENAI_API_KEY}}"
+        RESOLVED_ANTHROPIC_KEY="${ANTHROPIC_API_KEY_INPUT:-${ORG_ANTHROPIC_API_KEY:-$ANTHROPIC_API_KEY}}"
         RESOLVED_TOKEN="${GITHUB_TOKEN_INPUT:-$GITHUB_TOKEN}"
         
         # Resolve App Credentials (Input > Org Secret)
         RESOLVED_APP_ID="${APP_ID_INPUT:-$ORG_APP_ID}"
         RESOLVED_APP_PRIVATE_KEY="${APP_PRIVATE_KEY_INPUT:-$ORG_APP_PRIVATE_KEY}"
 
-        if [ -n "$RESOLVED_API_KEY" ]; then
-          echo "✅ API Key resolved (starts with: ${RESOLVED_API_KEY:0:4}...)"
+        if [ -n "$RESOLVED_API_KEY" ] || [ -n "$RESOLVED_OPENAI_KEY" ] || [ -n "$RESOLVED_ANTHROPIC_KEY" ]; then
+          echo "✅ API Key resolved for $RESOLVED_PROVIDER"
         else
-          echo "❌ Error: No Gemini API key found."
-          echo "Checked: inputs.gemini_api_key -> secrets.GEMINI_API_KEY -> env.GEMINI_API_KEY"
+          echo "❌ Error: No LLM API key found for $RESOLVED_PROVIDER."
           exit 1
         fi
 
         # Export for subsequent tool use
+        export LLM_PROVIDER="$RESOLVED_PROVIDER"
         export GEMINI_API_KEY="$RESOLVED_API_KEY"
+        export OPENAI_API_KEY="$RESOLVED_OPENAI_KEY"
+        export ANTHROPIC_API_KEY="$RESOLVED_ANTHROPIC_KEY"
         export GITHUB_TOKEN="$RESOLVED_TOKEN"
+        export APP_ID="$RESOLVED_APP_ID"
+        export APP_PRIVATE_KEY="$RESOLVED_APP_PRIVATE_KEY"
 
         echo "🏗️ Building AI Reviewer..."
         cd "${{ github.action_path }}/backend"
@@ -137,13 +158,11 @@ runs:
         fi
 
         "${{ github.action_path }}/ai-reviewer" \
-          --api-key "$RESOLVED_API_KEY" \
-          --github-token "$RESOLVED_TOKEN" \
+          --llm-provider "$RESOLVED_PROVIDER" \
           --pr-number "${PR_NUMBER_INPUT:-$PR_NUMBER}" \
           --repo "$GITHUB_REPOSITORY" \
           --sha "$GITHUB_SHA" \
           --base "$BASE_REF_INPUT" \
           --head "$HEAD_REF_INPUT" \
           --app-id "$RESOLVED_APP_ID" \
-          --app-private-key "$RESOLVED_APP_PRIVATE_KEY" \
           --review-rules "$REVIEW_RULES"

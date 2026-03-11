@@ -12,13 +12,13 @@ import (
 	"strings"
 )
 
-// AgentToolDeclarations returns the Gemini function_declarations for agent tool calls.
-func AgentToolDeclarations() []map[string]interface{} {
-	return []map[string]interface{}{
+// AgentToolDeclarations returns the tool declarations for agent tool calls.
+func AgentToolDeclarations() []ToolDeclaration {
+	return []ToolDeclaration{
 		{
-			"name":        "get_symbol_definition",
-			"description": "Get the source code definition of a symbol (function, type, struct, class, interface). Use this when you see a symbol in the diff that you need to understand.",
-			"parameters": map[string]interface{}{
+			Name:        "get_symbol_definition",
+			Description: "Get the source code definition of a symbol (function, type, struct, class, interface). Use this when you see a symbol in the diff that you need to understand.",
+			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"symbol": map[string]interface{}{
@@ -30,9 +30,9 @@ func AgentToolDeclarations() []map[string]interface{} {
 			},
 		},
 		{
-			"name":        "get_file_content",
-			"description": "Get the full content of a file from the repository. Use this to inspect files not included in the diff.",
-			"parameters": map[string]interface{}{
+			Name:        "get_file_content",
+			Description: "Get the full content of a file from the repository. Use this to inspect files not included in the diff.",
+			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"path": map[string]interface{}{
@@ -44,9 +44,9 @@ func AgentToolDeclarations() []map[string]interface{} {
 			},
 		},
 		{
-			"name":        "get_callers",
-			"description": "Find all files and locations that reference or call a given symbol. Use this to check if a function is used elsewhere.",
-			"parameters": map[string]interface{}{
+			Name:        "get_callers",
+			Description: "Find all files and locations that reference or call a given symbol. Use this to check if a function is used elsewhere.",
+			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"symbol": map[string]interface{}{
@@ -58,9 +58,9 @@ func AgentToolDeclarations() []map[string]interface{} {
 			},
 		},
 		{
-			"name":        "search_codebase",
-			"description": "Search the codebase for a text pattern using git grep. Returns matching lines with file paths.",
-			"parameters": map[string]interface{}{
+			Name:        "search_codebase",
+			Description: "Search the codebase for a text pattern using git grep. Returns matching lines with file paths.",
+			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"query": map[string]interface{}{
@@ -72,17 +72,17 @@ func AgentToolDeclarations() []map[string]interface{} {
 			},
 		},
 		{
-			"name":        "list_cross_repo_matches",
-			"description": "List all cross-repository matches available for this PR context. Use this to discover which other repositories share code with the current PR.",
-			"parameters": map[string]interface{}{
+			Name:        "list_cross_repo_matches",
+			Description: "List all cross-repository matches available for this PR context. Use this to discover which other repositories share code with the current PR.",
+			Parameters: map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
 			},
 		},
 		{
-			"name":        "resolve_repo_symbol",
-			"description": "Find which file defines a symbol inside a remote repository.",
-			"parameters": map[string]interface{}{
+			Name:        "resolve_repo_symbol",
+			Description: "Find which file defines a symbol inside a remote repository.",
+			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"repo_full_name": map[string]interface{}{
@@ -98,9 +98,9 @@ func AgentToolDeclarations() []map[string]interface{} {
 			},
 		},
 		{
-			"name":        "fetch_repo_snippet",
-			"description": "Fetch a specific snippet of code from a remote repository.",
-			"parameters": map[string]interface{}{
+			Name:        "fetch_repo_snippet",
+			Description: "Fetch a specific snippet of code from a remote repository.",
+			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"repo_full_name": map[string]interface{}{
@@ -124,9 +124,9 @@ func AgentToolDeclarations() []map[string]interface{} {
 			},
 		},
 		{
-			"name":        "search_repo_graph",
-			"description": "Search the lightweight graph of a remote repository to find package imports or simple types.",
-			"parameters": map[string]interface{}{
+			Name:        "search_repo_graph",
+			Description: "Search the lightweight graph of a remote repository to find package imports or simple types.",
+			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"repo_full_name": map[string]interface{}{

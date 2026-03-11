@@ -13,7 +13,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -203,7 +202,34 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 
 	// 3. Build context
 	ctx := context.Background()
-	client := &http.Client{}
+	providerStr := os.Getenv("LLM_PROVIDER")
+	var provider llm.LLMProvider
+
+	if providerStr == "openai" {
+		openaiKey := os.Getenv("OPENAI_API_KEY")
+		if openaiKey == "" {
+			openaiKey = apiKey // fallback only if no dedicated key
+		}
+		provider = llm.NewOpenAIProvider(openaiKey, "")
+	} else if providerStr == "claude" {
+		anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
+		if anthropicKey == "" {
+			anthropicKey = apiKey // fallback only if no dedicated key
+		}
+		provider = llm.NewClaudeProvider(anthropicKey, "")
+	} else {
+		provider, err = llm.NewGeminiProvider(apiKey, "")
+		if err != nil {
+			return Result{
+				Approach: approach,
+				CaseID:   caseID,
+				CaseDir:  caseDir,
+				Tags:     truth.BenchmarkTags,
+				Error:    fmt.Sprintf("Failed to init LLM provider: %v", err),
+			}
+		}
+	}
+
 	repoStructure := buildRepoStructure(repoPath)
 
 	settings := models.RepoSettings{
@@ -284,13 +310,12 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 	review, err := runReviewByApproach(
 		approach,
 		ctx,
-		client,
+		provider,
 		normalizedDiff,
 		changedFiles,
 		dependencies,
 		settings,
 		repoStructure,
-		apiKey,
 		prContext,
 		cgService,
 		repoPath,
@@ -352,13 +377,12 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 func runReviewByApproach(
 	approach string,
 	ctx context.Context,
-	client *http.Client,
+	provider llm.LLMProvider,
 	diff string,
 	changedFiles map[string]string,
 	dependencies map[string]string,
 	settings models.RepoSettings,
 	repoStructure string,
-	apiKey string,
 	prContext models.PRContext,
 	cgService *codegraph.Service,
 	repoPath string,
@@ -368,7 +392,7 @@ func runReviewByApproach(
 ) (*models.ReviewResult, error) {
 	switch approach {
 	case "baseline":
-		return llm.RunReview(ctx, client, diff, changedFiles, dependencies, settings, repoStructure, apiKey, prContext)
+		return llm.RunReview(ctx, provider, diff, changedFiles, dependencies, settings, repoStructure, prContext)
 	case "production":
 		var graphEdges []codegraph.Edge
 		if cgService.Graph != nil {
@@ -382,7 +406,7 @@ func runReviewByApproach(
 			scopedDeps := scopeDependencies(dependencies, chunk)
 			r, err := orchestrator.ReviewChunk(
 				ctx,
-				client,
+				provider,
 				chunk.Files,
 				chunk.Diff,
 				chunk.Index,
@@ -390,7 +414,6 @@ func runReviewByApproach(
 				chunk.CrossRefs,
 				scopedDeps,
 				repoStructure,
-				apiKey,
 				prContext,
 				cgService.Graph,
 				repoPath,
