@@ -32,22 +32,8 @@ func NewGeminiProvider(apiKey string, model string) (*GeminiProvider, error) {
 func (p *GeminiProvider) CreateCache(ctx context.Context, systemPrompt, staticContext string, tools []ToolDeclaration) (string, error) {
 	// genai SDK supports caching.
 	// Minimum tokens required is ~32k.
-	var declarations []*genai.FunctionDeclaration
-	for _, t := range tools {
-		// Convert parameters map to genai.Schema via JSON
-		bytes, _ := json.Marshal(t.Parameters)
-		var schema genai.Schema
-		json.Unmarshal(bytes, &schema)
-
-		declarations = append(declarations, &genai.FunctionDeclaration{
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  &schema,
-		})
-	}
-
 	systemContent := &genai.Content{
-		Role:  "user",
+		Role:  "system",
 		Parts: []*genai.Part{{Text: systemPrompt}},
 	}
 	userContent := &genai.Content{
@@ -111,22 +97,22 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 
 	if req.CachedContent != "" {
 		config.CachedContent = req.CachedContent
-	}
-
-	if req.SystemPrompt != "" {
-		config.SystemInstruction = &genai.Content{
-			Role:  "system",
-			Parts: []*genai.Part{{Text: req.SystemPrompt}},
+	} else {
+		if req.SystemPrompt != "" {
+			config.SystemInstruction = &genai.Content{
+				Role:  "system",
+				Parts: []*genai.Part{{Text: req.SystemPrompt}},
+			}
 		}
-	}
 
-	if len(req.Tools) > 0 {
-		config.Tools = []*genai.Tool{{FunctionDeclarations: p.toGenaiFunctionDeclarations(req.Tools)}}
-		// genai.ToolConfig requires setting mode
-		config.ToolConfig = &genai.ToolConfig{
-			FunctionCallingConfig: &genai.FunctionCallingConfig{
-				Mode: "AUTO",
-			},
+		if len(req.Tools) > 0 {
+			config.Tools = []*genai.Tool{{FunctionDeclarations: p.toGenaiFunctionDeclarations(req.Tools)}}
+			// genai.ToolConfig requires setting mode
+			config.ToolConfig = &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{
+					Mode: "AUTO",
+				},
+			}
 		}
 	}
 
