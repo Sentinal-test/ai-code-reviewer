@@ -8,6 +8,11 @@ import (
 	"github.com/liushuangls/go-anthropic/v2"
 )
 
+const (
+	// Default Claude model for code reviews
+	claudeModel = string(anthropic.ModelClaude3Dot5Sonnet20241022)
+)
+
 type ClaudeProvider struct {
 	client *anthropic.Client
 	model  string
@@ -16,7 +21,7 @@ type ClaudeProvider struct {
 func NewClaudeProvider(apiKey string, model string) *ClaudeProvider {
 	client := anthropic.NewClient(apiKey)
 	if model == "" {
-		model = string(anthropic.ModelClaude3Dot5Sonnet20241022)
+		model = claudeModel
 	}
 	return &ClaudeProvider{client: client, model: model}
 }

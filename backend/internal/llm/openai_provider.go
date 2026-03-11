@@ -9,6 +9,11 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+const (
+	// Default OpenAI model for code reviews
+	openAIModel = openai.GPT4o
+)
+
 type OpenAIProvider struct {
 	client *openai.Client
 	model  string
@@ -17,7 +22,7 @@ type OpenAIProvider struct {
 func NewOpenAIProvider(apiKey string, model string) *OpenAIProvider {
 	client := openai.NewClient(apiKey)
 	if model == "" {
-		model = openai.GPT4o // Note: using standard models
+		model = openAIModel // Note: using standard models
 	}
 	return &OpenAIProvider{client: client, model: model}
 }
