@@ -118,7 +118,7 @@ func (p *ClaudeProvider) GenerateContent(ctx context.Context, req GenerateReques
 				result.Text += *block.Text
 			}
 		} else if block.Type == anthropic.MessagesContentTypeToolUse {
-			result.FunctionCall = &FunctionCall{
+			fc := &FunctionCall{
 				ID:   block.ID,
 				Name: block.Name,
 			}
@@ -126,8 +126,11 @@ func (p *ClaudeProvider) GenerateContent(ctx context.Context, req GenerateReques
 			// Try to unmarshal args
 			var args map[string]interface{}
 			if err := json.Unmarshal(block.Input, &args); err == nil {
-				result.FunctionCall.Args = args
+				fc.Args = args
 			}
+			result.FunctionCalls = append(result.FunctionCalls, fc)
+			// Claude also needs ModelParts to replay assistant's tool calls
+			result.ModelParts = append(result.ModelParts, Part{FunctionCall: fc})
 		}
 	}
 

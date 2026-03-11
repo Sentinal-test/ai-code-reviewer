@@ -51,12 +51,12 @@ type FunctionResponse struct {
 
 // GenerateResponse represents the standardized output from any LLM provider
 type GenerateResponse struct {
-	Text         string
-	FunctionCall *FunctionCall
-	ModelParts   []Part // Full set of model response parts (preserves thought parts for Gemini)
-	InputTokens  int
-	OutputTokens int
-	FinishReason string
+	Text          string
+	FunctionCalls []*FunctionCall
+	ModelParts    []Part // Full set of model response parts (preserves thought parts for Gemini)
+	InputTokens   int
+	OutputTokens  int
+	FinishReason  string
 }
 
 // LLMProvider defines the interface that all underlying AI models must implement

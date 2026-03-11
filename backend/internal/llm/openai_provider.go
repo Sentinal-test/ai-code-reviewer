@@ -156,15 +156,16 @@ func (p *OpenAIProvider) GenerateContent(ctx context.Context, req GenerateReques
 	}
 
 	if len(choice.Message.ToolCalls) > 0 {
-		tc := choice.Message.ToolCalls[0]
-		var args map[string]interface{}
-		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil || args == nil {
-			args = make(map[string]interface{})
-		}
-		result.FunctionCall = &FunctionCall{
-			ID:   tc.ID,
-			Name: tc.Function.Name,
-			Args: args,
+		for _, tc := range choice.Message.ToolCalls {
+			var args map[string]interface{}
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil || args == nil {
+				args = make(map[string]interface{})
+			}
+			result.FunctionCalls = append(result.FunctionCalls, &FunctionCall{
+				ID:   tc.ID,
+				Name: tc.Function.Name,
+				Args: args,
+			})
 		}
 	}
 

@@ -205,7 +205,7 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 					Name: part.FunctionCall.Name,
 					Args: part.FunctionCall.Args,
 				}
-				result.FunctionCall = fc
+				result.FunctionCalls = append(result.FunctionCalls, fc)
 				result.ModelParts = append(result.ModelParts, Part{
 					FunctionCall: fc,
 					IsThought:    part.Thought,

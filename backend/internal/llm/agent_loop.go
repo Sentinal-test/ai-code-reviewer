@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -163,51 +164,56 @@ func RunAgentReview(
 		}
 
 		// If we have tool calls, execute them and build the conversation history
-		if resp.FunctionCall != nil {
+		if len(resp.FunctionCalls) > 0 {
 			// Append model turn — use ModelParts if available (Gemini includes
-			// thought parts that must be replayed), otherwise fall back to
-			// constructing a single-part message.
+			// thought parts that must be replayed), otherwise fall back to all tools.
 			modelParts := resp.ModelParts
 			if len(modelParts) == 0 {
-				modelParts = []Part{{FunctionCall: resp.FunctionCall}}
+				for _, fc := range resp.FunctionCalls {
+					modelParts = append(modelParts, Part{FunctionCall: fc})
+				}
 			}
 			messages = append(messages, Message{
 				Role:  "model",
 				Parts: modelParts,
 			})
 
-			fmt.Printf("  🔧 [%s] Tool call: %s(%v) [iter %d, %.1fs]\n",
-				config.Type, resp.FunctionCall.Name, resp.FunctionCall.Args, iteration+1, elapsed.Seconds())
+			fmt.Printf("  🔧 [%s] Executing %d parallel tool calls [iter %d, %.1fs]\n",
+				config.Type, len(resp.FunctionCalls), iteration+1, elapsed.Seconds())
 
-			callReq := agents.ToolCallRequest{
-				Name: resp.FunctionCall.Name,
-				Args: resp.FunctionCall.Args,
-			}
-			toolResult := toolExecutor.Execute(ctx, callReq)
-			result.ToolCalls++
+			var wg sync.WaitGroup
+			funcParts := make([]Part, len(resp.FunctionCalls))
 
-			fmt.Printf("  📨 [%s] Tool response (%s): %d chars\n",
-				config.Type, callReq.Name, len(toolResult.Content))
-			fmt.Println("  ────────────────────────────────────────")
-			responsePreview := toolResult.Content
-			if len(responsePreview) > 2000 {
-				responsePreview = responsePreview[:2000] + "\n  ...(truncated for display)"
-			}
-			fmt.Println(responsePreview)
-			fmt.Println("  ────────────────────────────────────────")
+			for i, fc := range resp.FunctionCalls {
+				wg.Add(1)
+				result.ToolCalls++
 
-			// Append function response turn
-			messages = append(messages, Message{
-				Role: "function",
-				Parts: []Part{
-					{
+				go func(idx int, call *FunctionCall) {
+					defer wg.Done()
+					req := agents.ToolCallRequest{
+						Name: call.Name,
+						Args: call.Args,
+					}
+
+					fmt.Printf("     ├── Call %d: %s(%v)\n", idx+1, call.Name, call.Args)
+					res := toolExecutor.Execute(ctx, req)
+					fmt.Printf("     └── Resp %d: %s (%d chars)\n", idx+1, call.Name, len(res.Content))
+
+					funcParts[idx] = Part{
 						FunctionResp: &FunctionResponse{
-							ID:      resp.FunctionCall.ID,
-							Name:    callReq.Name,
-							Content: toolResult.Content,
+							ID:      call.ID,
+							Name:    call.Name,
+							Content: res.Content,
 						},
-					},
-				},
+					}
+				}(i, fc)
+			}
+			wg.Wait()
+
+			// Append function response turn with all tool results safely ordered
+			messages = append(messages, Message{
+				Role:  "function",
+				Parts: funcParts,
 			})
 		} else if resp.Text != "" {
 			// Text-only response (final answer) — parse it
