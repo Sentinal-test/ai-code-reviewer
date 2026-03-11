@@ -119,6 +119,8 @@ runs:
         export OPENAI_API_KEY="$RESOLVED_OPENAI_KEY"
         export ANTHROPIC_API_KEY="$RESOLVED_ANTHROPIC_KEY"
         export GITHUB_TOKEN="$RESOLVED_TOKEN"
+        export APP_ID="$RESOLVED_APP_ID"
+        export APP_PRIVATE_KEY="$RESOLVED_APP_PRIVATE_KEY"
 
         echo "🏗️ Building AI Reviewer..."
         cd "${{ github.action_path }}/backend"

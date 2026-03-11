@@ -118,7 +118,9 @@ func (p *ClaudeProvider) GenerateContent(ctx context.Context, req GenerateReques
 
 	for _, block := range resp.Content {
 		if block.Type == anthropic.MessagesContentTypeText {
-			result.Text += *block.Text
+			if block.Text != nil {
+				result.Text += *block.Text
+			}
 		} else if block.Type == anthropic.MessagesContentTypeToolUse {
 			result.FunctionCall = &FunctionCall{
 				ID:   block.ID,

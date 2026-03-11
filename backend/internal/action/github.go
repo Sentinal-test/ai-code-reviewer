@@ -396,12 +396,12 @@ func (g *GitHubClient) GetPullRequest(ctx context.Context, prNumber int) (*model
 
 	var commitMsgs []string
 	opts := &github.ListOptions{
-		PerPage: 2, // User requested the last 2 commit messages
+		PerPage: 100, // Fetch all commits, we'll take the last 2
 	}
 
 	commits, _, commitErr := g.client.PullRequests.ListCommits(ctx, g.owner, g.repo, prNumber, opts)
 	if commitErr == nil {
-		// Since ListCommits returns them in chronological order, we take the last 2 if there are more
+		// Take the last 2 commits (most recent)
 		startIdx := 0
 		if len(commits) > 2 {
 			startIdx = len(commits) - 2

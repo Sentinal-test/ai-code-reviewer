@@ -206,9 +206,17 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 	var provider llm.LLMProvider
 
 	if providerStr == "openai" {
-		provider = llm.NewOpenAIProvider(apiKey, "")
+		openaiKey := os.Getenv("OPENAI_API_KEY")
+		if openaiKey == "" {
+			openaiKey = apiKey // fallback only if no dedicated key
+		}
+		provider = llm.NewOpenAIProvider(openaiKey, "")
 	} else if providerStr == "claude" {
-		provider = llm.NewClaudeProvider(apiKey, "")
+		anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
+		if anthropicKey == "" {
+			anthropicKey = apiKey // fallback only if no dedicated key
+		}
+		provider = llm.NewClaudeProvider(anthropicKey, "")
 	} else {
 		provider, err = llm.NewGeminiProvider(apiKey, "")
 		if err != nil {
