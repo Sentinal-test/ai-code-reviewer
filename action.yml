@@ -1,5 +1,6 @@
 name: 'AI Code Reviewer'
 description: 'AI-powered code review running entirely within GitHub Actions'
+inputs:
   llm_provider:
     description: 'LLM Provider to use (gemini, openai, claude)'
     required: false
