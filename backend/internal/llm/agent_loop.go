@@ -158,22 +158,25 @@ func RunAgentReview(
 				},
 			}
 
-			// Add tool declarations if we have a tool executor
+			// Add tool declarations if we have a tool executor and no cache
 			if toolExecutor != nil {
 				reqBody["tools"] = []map[string]interface{}{
 					{
 						"function_declarations": AgentToolDeclarations(),
 					},
 				}
-				// Allow the model to decide between text and tool calls
-				reqBody["tool_config"] = map[string]interface{}{
-					"function_calling_config": map[string]interface{}{
-						"mode": "AUTO",
-					},
-				}
-				// NOTE: Gemini does NOT support responseMimeType with function calling.
-				// JSON output is enforced via the hardened system prompt instead.
 			}
+		}
+
+		if toolExecutor != nil {
+			// Allow the model to decide between text and tool calls
+			reqBody["tool_config"] = map[string]interface{}{
+				"function_calling_config": map[string]interface{}{
+					"mode": "AUTO",
+				},
+			}
+			// NOTE: Gemini does NOT support responseMimeType with function calling.
+			// JSON output is enforced via the hardened system prompt instead.
 		}
 
 		bodyJSON, err := json.Marshal(reqBody)
@@ -236,12 +239,12 @@ func RunAgentReview(
 			// Retry once on empty candidates (Gemini safety filter)
 			if iteration == 0 {
 				fmt.Printf("  ⚠️ [%s] No candidates — retrying with nudge\n", config.Type)
-				messages = append(messages, map[string]interface{}{
-					"role": "user",
-					"parts": []map[string]interface{}{
-						{"text": "Please analyze the code changes and respond with a JSON object containing your findings. If you find no issues, respond with {\"summary\": \"No issues found\", \"comments\": []}."},
-					},
+				lastMsg := messages[len(messages)-1]
+				parts := lastMsg["parts"].([]map[string]interface{})
+				parts = append(parts, map[string]interface{}{
+					"text": "\n\nPlease analyze the code changes and respond with a JSON object containing your findings. If you find no issues, respond with {\"summary\": \"No issues found\", \"comments\": []}.",
 				})
+				lastMsg["parts"] = parts
 				continue
 			}
 			result.Summary = fmt.Sprintf("No findings from %s agent", config.Type)
@@ -341,12 +344,12 @@ func RunAgentReview(
 			// Empty response — retry once with a nudge
 			if iteration == 0 {
 				fmt.Printf("  ⚠️ [%s] Empty response — retrying with nudge\n", config.Type)
-				messages = append(messages, map[string]interface{}{
-					"role": "user",
-					"parts": []map[string]interface{}{
-						{"text": "Your previous response was empty. Please analyze the code changes shown above and respond with a JSON object. Focus on the diff hunks marked with '+'. If no issues found, respond with {\"summary\": \"No issues found\", \"comments\": []}."},
-					},
+				lastMsg := messages[len(messages)-1]
+				parts := lastMsg["parts"].([]map[string]interface{})
+				parts = append(parts, map[string]interface{}{
+					"text": "\n\nYour previous response was empty. Please analyze the code changes shown above and respond with a JSON object. Focus on the diff hunks marked with '+'. If no issues found, respond with {\"summary\": \"No issues found\", \"comments\": []}.",
 				})
+				lastMsg["parts"] = parts
 				continue
 			}
 			fmt.Printf("  ⚠️ [%s] Empty response after retry at iteration %d\n", config.Type, iteration+1)

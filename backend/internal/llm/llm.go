@@ -37,13 +37,16 @@ func truncateUTF8(s string, maxBytes int) string {
 	// Find the last valid UTF-8 character boundary before maxBytes
 	truncated := s[:maxBytes]
 
-	// Walk backwards to find a valid UTF-8 boundary
+	// Walk backwards to drop incomplete UTF-8 characters at the boundary
 	for len(truncated) > 0 {
-		if utf8.ValidString(truncated) {
-			return truncated + "\n...[TRUNCATED]..."
+		r, size := utf8.DecodeLastRuneInString(truncated)
+		if r == utf8.RuneError && size <= 1 {
+			// Incomplete rune; drop the byte and try again
+			truncated = truncated[:len(truncated)-1]
+		} else {
+			// Valid rune at the end, boundary is clean
+			break
 		}
-		// Remove one byte and try again
-		truncated = truncated[:len(truncated)-1]
 	}
 
 	return "\n...[TRUNCATED]..."

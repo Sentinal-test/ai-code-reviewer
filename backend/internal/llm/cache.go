@@ -68,11 +68,6 @@ func CreateCachedContent(
 	// Add tools if supported
 	if len(tools) > 0 {
 		reqBody["tools"] = tools
-		reqBody["tool_config"] = map[string]interface{}{
-			"function_calling_config": map[string]interface{}{
-				"mode": "AUTO",
-			},
-		}
 	}
 
 	jsonData, err := json.Marshal(reqBody)

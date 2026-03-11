@@ -48,9 +48,9 @@ func Parse(yamlContent string) (*models.DeveloperRules, error) {
 		return nil, nil
 	}
 
-	// Length guard before parsing
+	// Length guard before parsing -> Return error instead of naive truncation
 	if len(yamlContent) > MaxRulesLength {
-		yamlContent = yamlContent[:MaxRulesLength]
+		return nil, fmt.Errorf("developer rules YAML exceeds maximum allowed length of %d characters", MaxRulesLength)
 	}
 
 	var rules models.DeveloperRules
