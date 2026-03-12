@@ -2,6 +2,7 @@ package reposelect
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -93,13 +94,13 @@ type CandidateMatch struct {
 // MatchRepos runs the deterministic rules against remote facts using the local signals.
 // IdentifyRelevantRepos uses the GitHub API to fetch manifests and identify which repos are likely relevant.
 // This allows us to skip cloning 100s of irrelevant repositories.
-func IdentifyRelevantRepos(ctx context.Context, client *github.Client, owner string, signals LocalSignals, repos []multirepo.DiscoveredRepo) []multirepo.DiscoveredRepo {
+func IdentifyRelevantRepos(ctx context.Context, client *github.Client, signals LocalSignals, repos []multirepo.DiscoveredRepo) []multirepo.DiscoveredRepo {
 	var relevant []multirepo.DiscoveredRepo
 
 	// Manifests to check per language
 	manifests := []string{
-		"go.mod",         // Go
-		"package.json",   // JS/TS
+		"go.mod",                                         // Go
+		"package.json",                                   // JS/TS
 		"requirements.txt", "pyproject.toml", "setup.py", // Python
 		"pom.xml", "build.gradle", // Java
 	}
@@ -109,10 +110,9 @@ func IdentifyRelevantRepos(ctx context.Context, client *github.Client, owner str
 	for _, repo := range repos {
 		matched := false
 		for _, manifest := range manifests {
-			// Use GitHub API to fetch file content without cloning
 			fileContent, _, _, err := client.Repositories.GetContents(ctx, repo.Owner, repo.Name, manifest, nil)
-			if err != nil {
-				continue // File doesn't exist or error
+			if err != nil || fileContent == nil {
+				continue
 			}
 
 			content, err := fileContent.GetContent()
@@ -120,14 +120,17 @@ func IdentifyRelevantRepos(ctx context.Context, client *github.Client, owner str
 				continue
 			}
 
-			// Simple heuristic: does the manifest mention our project name or any changed imports?
 			if signals.ProjectName != "" && strings.Contains(content, signals.ProjectName) {
 				fmt.Printf("      ✅ %s matched via %s (depends on %s)\n", repo.FullName, manifest, signals.ProjectName)
 				matched = true
 				break
 			}
 
-			for imp := range signals.ChangedImports {
+			for imp, lang := range signals.ChangedImports {
+				// Avoid matching on very short or standard library imports (e.g., "io", "fmt", "os")
+				if len(imp) < 5 || IsStandardLibrary(lang, imp) {
+					continue
+				}
 				if strings.Contains(content, imp) {
 					fmt.Printf("      ✅ %s matched via %s (shares import: %s)\n", repo.FullName, manifest, imp)
 					matched = true
@@ -160,17 +163,12 @@ func ExtractProjectName(repoPath string) string {
 	}
 
 	// 2. JS/TS (package.json)
-	// We could use encoding/json, but for a simple "extract name" a string search is safer against malformed files.
 	if data, err := os.ReadFile(filepath.Join(repoPath, "package.json")); err == nil {
-		content := string(data)
-		if idx := strings.Index(content, "\"name\":"); idx != -1 {
-			sub := content[idx+7:]
-			if start := strings.Index(sub, "\""); start != -1 {
-				sub = sub[start+1:]
-				if end := strings.Index(sub, "\""); end != -1 {
-					return sub[:end]
-				}
-			}
+		var pkg struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(data, &pkg); err == nil && pkg.Name != "" {
+			return pkg.Name
 		}
 	}
 

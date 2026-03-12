@@ -261,11 +261,7 @@ func main() {
 			localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
 			localSignals.ProjectName = reposelect.ExtractProjectName(wd)
 
-			repoOwner := ""
-			if p := strings.Split(repoName, "/"); len(p) >= 1 {
-				repoOwner = p[0]
-			}
-			relevantRepos := reposelect.IdentifyRelevantRepos(context.Background(), ghClient.GetRawClient(), repoOwner, localSignals, filteredRepos)
+			relevantRepos := reposelect.IdentifyRelevantRepos(context.Background(), ghClient.GetRawClient(), localSignals, filteredRepos)
 			fmt.Printf("   ✅ Found %d repositories likely to be affected\n", len(relevantRepos))
 
 			// 3. Checkout & Graph Build
@@ -273,10 +269,12 @@ func main() {
 			workerPool := multirepo.NewWorkerPool(5)
 			remoteGraphs = make(map[string]*codegraph.RemoteRepoGraph)
 			// We need a temp dir to store the cloned repos.
-			baseTempDir, _ = os.MkdirTemp("", "ai-reviewer-multirepo-*")
+			baseTempDir, err = os.MkdirTemp("", "ai-reviewer-multirepo-*")
+			if err != nil {
+				fmt.Printf("   ⚠️ Failed to create temp directory: %v\n", err)
+				return
+			}
 			defer os.RemoveAll(baseTempDir)
-
-			fetchMap := make(map[string]string) // map repoFullName -> localPath for fetcher
 
 			checkoutPaths, err := workerPool.ProcessRepos(context.Background(), relevantRepos, ghClient.Token, baseTempDir)
 			if err != nil {
@@ -291,7 +289,6 @@ func main() {
 					continue
 				}
 				remoteGraphs[repoFullName] = graph
-				fetchMap[repoFullName] = localPath
 			}
 
 			fmt.Printf("   ✅ Built graphs for %d peer repositories\n", len(remoteGraphs))

@@ -181,8 +181,11 @@ func NewGitHubAppClient(ctx context.Context, appID int64, privateKeyString, owne
 
 	// Fetch actual token string to store manually if needed by scripts
 	token, _, err := appClient.Apps.CreateInstallationToken(ctx, install.GetID(), nil)
-	var rawToken string
-	if err == nil && token != nil {
+	if err != nil {
+		return nil, fmt.Errorf("creating installation token: %w", err)
+	}
+	rawToken := ""
+	if token != nil {
 		rawToken = token.GetToken()
 	}
 
