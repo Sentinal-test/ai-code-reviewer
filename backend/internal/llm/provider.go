@@ -36,10 +36,11 @@ type Part struct {
 
 // FunctionCall represents the LLM deciding to call a tool
 type FunctionCall struct {
-	ID      string
-	Name    string
-	Args    map[string]interface{}
-	Thought string // Used by Gemini for thought_signature
+	ID         string
+	Name       string
+	Args       map[string]interface{}
+	Thought    string // Used by Gemini for thought_signature
+	ResponseID string // Used by OpenAI Responses API tool continuation
 }
 
 // FunctionResponse represents the result of a tool execution sent back to the LLM

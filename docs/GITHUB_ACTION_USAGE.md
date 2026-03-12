@@ -24,6 +24,11 @@ Before your team can use this, you must **Publish** the Action by creating a rel
 
 Now your action is addressable as: `owner/repo-name@v1`.
 
+> [!IMPORTANT]
+> If your reviewer repository is **private**, you must go to **Settings > Actions > General > Access** and select "Accessible from repositories in the organization" to allow other repositories (including public ones) to use it.
+>
+> **For repositories outside your organization (e.g., where you are a collaborator), see the [External Setup Guide](./MULTI_REPO_SETUP.md#7-external-or-collaborator-repositories).**
+
 ## 2. Usage
 
 To enable AI code reviews, created a workflow file in your repository (e.g., `.github/workflows/review.yml`):

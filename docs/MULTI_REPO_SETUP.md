@@ -90,3 +90,48 @@ To verify that the multi-repo approach is working:
    - `🌐 [MultiRepo] Multi-repo review capability detected.`
    - `✅ Found cross-repo references for X peer repositories`
 5. Read the final AI review comment on the Pull Request. The AI should proactively point out that you changed a symbol used by **Repository B** and advise you on the downstream impacts.
+
+---
+
+## 6. Troubleshooting: Public Repositories
+
+If you are using the private AI Reviewer action in a **public repository** within the same organization, you may encounter an error (e.g., "Repository not found"). This is due to GitHub's default security policy for private actions.
+
+**Fix**:
+1. Go to the **Private AI Reviewer Repository** settings.
+2. Navigate to **Actions** > **General**.
+3. Scroll to the **Access** section.
+4. Select **"Accessible from repositories in the 'ORGANIZATION' organization"**.
+5. Click **Save**.
+
+This allows your public repositories to "see" and execute the code within your private action repository securely.
+
+---
+
+## 7. External or Collaborator Repositories
+
+If you are a collaborator on a repository that is **not** in your organization, the organization-level "Access" setting will not work. You must use the **PAT + Checkout** pattern.
+
+### Setup for External Repos:
+1. **Create a Fine-Grained PAT** in your account:
+   - Permissions: `Contents: Read-only` (scoped to your private AI Reviewer repo).
+2. **Add Secrets** to the external repository:
+   - `ACTION_ACCESS_TOKEN`: The PAT you just created.
+   - `GEMINI_API_KEY`: Your Gemini API key.
+3. **Update the Workflow** in the external repo:
+
+```yaml
+steps:
+  - name: Checkout AI Reviewer
+    uses: actions/checkout@v4
+    with:
+      repository: your-org/ai-code-reviewer
+      token: ${{ secrets.ACTION_ACCESS_TOKEN }}
+      path: .ai-reviewer-action
+
+  - name: Run AI Reviewer
+    uses: ./.ai-reviewer-action
+    with:
+      gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+      github_token: ${{ secrets.GITHUB_TOKEN }}
+```

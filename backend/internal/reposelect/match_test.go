@@ -65,6 +65,7 @@ func TestExtractRemoteFacts(t *testing.T) {
 
 func TestMatchRepos(t *testing.T) {
 	signals := LocalSignals{
+		ProjectName:    "auth-service",
 		ChangedExports: map[string]string{"ValidateToken": "go"},
 		ChangedImports: map[string]string{"github.com/google/uuid": "go"},
 	}

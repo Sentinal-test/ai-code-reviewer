@@ -1,14 +1,22 @@
 package reposelect
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"code-review/backend/internal/codegraph"
+	"code-review/backend/internal/multirepo"
+
+	"github.com/google/go-github/v60/github"
 )
 
 // LocalSignals contains facts extracted from the PR's local graph.
 // These represent the "surface area" of the PR changes that might affect other repos.
 type LocalSignals struct {
+	ProjectName    string            // e.g., module name from go.mod or name from package.json
 	ChangedExports map[string]string // map[SymbolName]Language
 	ChangedImports map[string]string // map[ImportPath]Language
 	// Placeholders for advanced extraction:
@@ -32,6 +40,9 @@ func ExtractLocalSignals(localGraph *codegraph.Graph, changedFiles map[string]st
 	}
 
 	for path := range changedFiles {
+		if localGraph == nil {
+			continue
+		}
 		if entry, ok := localGraph.Files[path]; ok {
 			// 1. Extract changed exports (Definitions)
 			for _, def := range entry.Definitions {
@@ -80,6 +91,93 @@ type CandidateMatch struct {
 }
 
 // MatchRepos runs the deterministic rules against remote facts using the local signals.
+// IdentifyRelevantRepos uses the GitHub API to fetch manifests and identify which repos are likely relevant.
+// This allows us to skip cloning 100s of irrelevant repositories.
+func IdentifyRelevantRepos(ctx context.Context, client *github.Client, owner string, signals LocalSignals, repos []multirepo.DiscoveredRepo) []multirepo.DiscoveredRepo {
+	var relevant []multirepo.DiscoveredRepo
+
+	// Manifests to check per language
+	manifests := []string{
+		"go.mod",         // Go
+		"package.json",   // JS/TS
+		"requirements.txt", "pyproject.toml", "setup.py", // Python
+		"pom.xml", "build.gradle", // Java
+	}
+
+	fmt.Printf("   🔍 [LightweightFilter] Checking %d repos for dependency match to '%s'...\n", len(repos), signals.ProjectName)
+
+	for _, repo := range repos {
+		matched := false
+		for _, manifest := range manifests {
+			// Use GitHub API to fetch file content without cloning
+			fileContent, _, _, err := client.Repositories.GetContents(ctx, repo.Owner, repo.Name, manifest, nil)
+			if err != nil {
+				continue // File doesn't exist or error
+			}
+
+			content, err := fileContent.GetContent()
+			if err != nil {
+				continue
+			}
+
+			// Simple heuristic: does the manifest mention our project name or any changed imports?
+			if signals.ProjectName != "" && strings.Contains(content, signals.ProjectName) {
+				fmt.Printf("      ✅ %s matched via %s (depends on %s)\n", repo.FullName, manifest, signals.ProjectName)
+				matched = true
+				break
+			}
+
+			for imp := range signals.ChangedImports {
+				if strings.Contains(content, imp) {
+					fmt.Printf("      ✅ %s matched via %s (shares import: %s)\n", repo.FullName, manifest, imp)
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
+		}
+
+		if matched {
+			relevant = append(relevant, repo)
+		}
+	}
+
+	return relevant
+}
+
+// ExtractProjectName identifies the name/module-id of the current repository.
+func ExtractProjectName(repoPath string) string {
+	// 1. Go (go.mod)
+	if data, err := os.ReadFile(filepath.Join(repoPath, "go.mod")); err == nil {
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "module ") {
+				return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+			}
+		}
+	}
+
+	// 2. JS/TS (package.json)
+	// We could use encoding/json, but for a simple "extract name" a string search is safer against malformed files.
+	if data, err := os.ReadFile(filepath.Join(repoPath, "package.json")); err == nil {
+		content := string(data)
+		if idx := strings.Index(content, "\"name\":"); idx != -1 {
+			sub := content[idx+7:]
+			if start := strings.Index(sub, "\""); start != -1 {
+				sub = sub[start+1:]
+				if end := strings.Index(sub, "\""); end != -1 {
+					return sub[:end]
+				}
+			}
+		}
+	}
+
+	// Fallback to directory name
+	return filepath.Base(repoPath)
+}
+
 func MatchRepos(signals LocalSignals, remoteGraphs map[string]*codegraph.RemoteRepoGraph) []CandidateMatch {
 	var candidates []CandidateMatch
 
