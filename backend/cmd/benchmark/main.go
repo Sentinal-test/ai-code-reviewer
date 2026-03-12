@@ -83,9 +83,9 @@ func main() {
 		fmt.Printf("Note: .env file not found, using system environment variables\n")
 	}
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		fmt.Println("❌ Error: GEMINI_API_KEY is required")
+	providerStr, apiKey, err := resolveBenchmarkProvider()
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
 		os.Exit(1)
 	}
 
@@ -106,6 +106,7 @@ func main() {
 	sort.Strings(tagFilters)
 
 	fmt.Printf("📊 Starting Benchmark Evaluation on: %s\n", absRoot)
+	fmt.Printf("🤖 Provider: %s\n", providerStr)
 	fmt.Printf("⚙️  Approaches: %s\n", strings.Join(approaches, ", "))
 	if len(tagFilters) > 0 {
 		fmt.Printf("🏷️  Tag Filter: %s\n", strings.Join(tagFilters, ", "))
@@ -149,7 +150,7 @@ func main() {
 		}
 
 		for _, approach := range approaches {
-			res := runEvalCase(truthPath, truth, apiKey, approach)
+			res := runEvalCase(truthPath, truth, providerStr, apiKey, approach)
 			results = append(results, res)
 		}
 
@@ -167,7 +168,37 @@ func main() {
 	printSummary(results)
 }
 
-func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result {
+func resolveBenchmarkProvider() (string, string, error) {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER")))
+	if provider == "" {
+		provider = "gemini"
+	}
+
+	switch provider {
+	case "openai":
+		key := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+		if key == "" {
+			return "", "", fmt.Errorf("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
+		}
+		return provider, key, nil
+	case "claude":
+		key := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+		if key == "" {
+			return "", "", fmt.Errorf("ANTHROPIC_API_KEY is required when LLM_PROVIDER=claude")
+		}
+		return provider, key, nil
+	case "gemini":
+		key := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+		if key == "" {
+			return "", "", fmt.Errorf("GEMINI_API_KEY is required when LLM_PROVIDER=gemini")
+		}
+		return provider, key, nil
+	default:
+		return "", "", fmt.Errorf("unsupported LLM_PROVIDER %q (expected gemini, openai, or claude)", provider)
+	}
+}
+
+func runEvalCase(truthPath string, truth Truth, providerStr, apiKey, approach string) Result {
 	caseDir := filepath.Dir(truthPath)
 	caseID := caseIDFromTruth(truth, truthPath)
 
@@ -202,21 +233,12 @@ func runEvalCase(truthPath string, truth Truth, apiKey, approach string) Result 
 
 	// 3. Build context
 	ctx := context.Background()
-	providerStr := os.Getenv("LLM_PROVIDER")
 	var provider llm.LLMProvider
 
 	if providerStr == "openai" {
-		openaiKey := os.Getenv("OPENAI_API_KEY")
-		if openaiKey == "" {
-			openaiKey = apiKey // fallback only if no dedicated key
-		}
-		provider = llm.NewOpenAIProvider(openaiKey, "")
+		provider = llm.NewOpenAIProvider(apiKey, "")
 	} else if providerStr == "claude" {
-		anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
-		if anthropicKey == "" {
-			anthropicKey = apiKey // fallback only if no dedicated key
-		}
-		provider = llm.NewClaudeProvider(anthropicKey, "")
+		provider = llm.NewClaudeProvider(apiKey, "")
 	} else {
 		provider, err = llm.NewGeminiProvider(apiKey, "")
 		if err != nil {

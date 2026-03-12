@@ -181,57 +181,6 @@ func main() {
 		}
 	}
 
-	// Phase 0/1/2/3: Multi-repo compatibility guard & execution
-	var matchSummary string
-	var remoteGraphs map[string]*codegraph.RemoteRepoGraph
-	var remoteFetch *remotefetch.Fetcher
-
-	multiRepoStartTime := time.Now()
-	var baseTempDir string
-	if checkMultiRepoAvailability(context.Background(), ghClient) {
-		fmt.Println("🌐 [MultiRepo] Multi-repo review capability detected.")
-
-		// 1. Discover accessible repositories
-		fmt.Println("   🔍 Discovering accessible repositories...")
-		repos, err := ghClient.ListAccessibleRepos(context.Background())
-		if err != nil {
-			fmt.Printf("   ⚠️  Failed to discover repos: %v (falling back to single-repo)\n", err)
-		} else {
-			filteredRepos := multirepo.DiscoverRepos(context.Background(), repos, repoName)
-			fmt.Printf("   ✅ Found %d accessible peer repositories\n", len(filteredRepos))
-
-			// 2. Checkout & Graph Build
-			fmt.Println("   📥 Fetching lightweight graphs for peer repositories...")
-			workerPool := multirepo.NewWorkerPool(5)
-			remoteGraphs = make(map[string]*codegraph.RemoteRepoGraph)
-			// We need a temp dir to store the cloned repos.
-			baseTempDir, _ = os.MkdirTemp("", "ai-reviewer-multirepo-*")
-			defer os.RemoveAll(baseTempDir)
-
-			fetchMap := make(map[string]string) // map repoFullName -> localPath for fetcher
-
-			checkoutPaths, err := workerPool.ProcessRepos(context.Background(), filteredRepos, ghClient.Token, baseTempDir)
-			if err != nil {
-				fmt.Printf("   ⚠️ Failed to process repos: %v\n", err)
-			}
-
-			for repoFullName, localPath := range checkoutPaths {
-				fmt.Printf("      - Building graph for %s...\n", repoFullName)
-				graph, err := codegraph.BuildRemoteGraph(context.Background(), repoFullName, localPath)
-				if err != nil {
-					fmt.Printf("        ⚠️ Failed to build graph for %s: %v\n", repoFullName, err)
-					continue
-				}
-				remoteGraphs[repoFullName] = graph
-				fetchMap[repoFullName] = localPath
-			}
-
-			fmt.Printf("   ✅ Built graphs for %d peer repositories\n", len(remoteGraphs))
-		}
-	} else {
-		fmt.Println("   (Running in standard single-repo mode)")
-	}
-
 	// 4.7 Code Graph: Deterministic Context Analysis
 	dependencies := make(map[string]string)
 	fmt.Printf("🚀 Starting Code Graph: Analyzing %d changed files...\n", len(changedFiles))
@@ -287,6 +236,70 @@ func main() {
 			fmt.Printf("⚠️ Failed to save graph: %v\n", err)
 		}
 	}
+
+	// Phase 0/1/2/3: Multi-repo compatibility guard & execution
+	var matchSummary string
+	var remoteGraphs map[string]*codegraph.RemoteRepoGraph
+	var remoteFetch *remotefetch.Fetcher
+
+	multiRepoStartTime := time.Now()
+	var baseTempDir string
+	if checkMultiRepoAvailability(context.Background(), ghClient) {
+		fmt.Println("🌐 [MultiRepo] Multi-repo review capability detected.")
+
+		// 1. Discover accessible repositories
+		fmt.Println("   🔍 Discovering accessible repositories...")
+		repos, err := ghClient.ListAccessibleRepos(context.Background())
+		if err != nil {
+			fmt.Printf("   ⚠️  Failed to discover repos: %v (falling back to single-repo)\n", err)
+		} else {
+			filteredRepos := multirepo.DiscoverRepos(context.Background(), repos, repoName)
+			fmt.Printf("   ✅ Found %d accessible peer repositories\n", len(filteredRepos))
+
+			// 2. Identify relevant repos BEFORE checkout (Lightweight Filter)
+			fmt.Println("   🔍 [LightweightFilter] identifying relevant repositories via manifest check...")
+			localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
+			localSignals.ProjectName = reposelect.ExtractProjectName(wd)
+
+			repoOwner := ""
+			if p := strings.Split(repoName, "/"); len(p) >= 1 {
+				repoOwner = p[0]
+			}
+			relevantRepos := reposelect.IdentifyRelevantRepos(context.Background(), ghClient.GetRawClient(), repoOwner, localSignals, filteredRepos)
+			fmt.Printf("   ✅ Found %d repositories likely to be affected\n", len(relevantRepos))
+
+			// 3. Checkout & Graph Build
+			fmt.Println("   📥 Fetching lightweight graphs for relevant repositories...")
+			workerPool := multirepo.NewWorkerPool(5)
+			remoteGraphs = make(map[string]*codegraph.RemoteRepoGraph)
+			// We need a temp dir to store the cloned repos.
+			baseTempDir, _ = os.MkdirTemp("", "ai-reviewer-multirepo-*")
+			defer os.RemoveAll(baseTempDir)
+
+			fetchMap := make(map[string]string) // map repoFullName -> localPath for fetcher
+
+			checkoutPaths, err := workerPool.ProcessRepos(context.Background(), relevantRepos, ghClient.Token, baseTempDir)
+			if err != nil {
+				fmt.Printf("   ⚠️ Failed to process repos: %v\n", err)
+			}
+
+			for repoFullName, localPath := range checkoutPaths {
+				fmt.Printf("      - Building graph for %s...\n", repoFullName)
+				graph, err := codegraph.BuildRemoteGraph(context.Background(), repoFullName, localPath)
+				if err != nil {
+					fmt.Printf("        ⚠️ Failed to build graph for %s: %v\n", repoFullName, err)
+					continue
+				}
+				remoteGraphs[repoFullName] = graph
+				fetchMap[repoFullName] = localPath
+			}
+
+			fmt.Printf("   ✅ Built graphs for %d peer repositories\n", len(remoteGraphs))
+		}
+	} else {
+		fmt.Println("   (Running in standard single-repo mode)")
+	}
+
 
 	// Multi-Repo Matching Execution (Phase 2 & 3 combined)
 	if baseTempDir != "" && ghClient != nil && cgService.Graph != nil && len(remoteGraphs) > 0 {

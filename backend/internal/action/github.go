@@ -139,6 +139,10 @@ func NewGitHubClient(ctx context.Context, token, owner, repo string) *GitHubClie
 	}
 }
 
+func (g *GitHubClient) GetRawClient() *github.Client {
+	return g.client
+}
+
 // NewGitHubAppClient initializes a GitHub client using an App Installation Token.
 // It authenticates as the App, finds its installation for the repo, and creates a client.
 func NewGitHubAppClient(ctx context.Context, appID int64, privateKeyString, owner, repo string) (*GitHubClient, error) {
