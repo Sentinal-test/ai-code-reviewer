@@ -2,6 +2,7 @@ package reposelect
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -93,13 +94,13 @@ type CandidateMatch struct {
 // MatchRepos runs the deterministic rules against remote facts using the local signals.
 // IdentifyRelevantRepos uses the GitHub API to fetch manifests and identify which repos are likely relevant.
 // This allows us to skip cloning 100s of irrelevant repositories.
-func IdentifyRelevantRepos(ctx context.Context, client *github.Client, owner string, signals LocalSignals, repos []multirepo.DiscoveredRepo) []multirepo.DiscoveredRepo {
+func IdentifyRelevantRepos(ctx context.Context, client *github.Client, signals LocalSignals, repos []multirepo.DiscoveredRepo) []multirepo.DiscoveredRepo {
 	var relevant []multirepo.DiscoveredRepo
 
 	// Manifests to check per language
 	manifests := []string{
-		"go.mod",         // Go
-		"package.json",   // JS/TS
+		"go.mod",                                         // Go
+		"package.json",                                   // JS/TS
 		"requirements.txt", "pyproject.toml", "setup.py", // Python
 		"pom.xml", "build.gradle", // Java
 	}
@@ -109,10 +110,9 @@ func IdentifyRelevantRepos(ctx context.Context, client *github.Client, owner str
 	for _, repo := range repos {
 		matched := false
 		for _, manifest := range manifests {
-			// Use GitHub API to fetch file content without cloning
 			fileContent, _, _, err := client.Repositories.GetContents(ctx, repo.Owner, repo.Name, manifest, nil)
-			if err != nil {
-				continue // File doesn't exist or error
+			if err != nil || fileContent == nil {
+				continue
 			}
 
 			content, err := fileContent.GetContent()
@@ -120,15 +120,18 @@ func IdentifyRelevantRepos(ctx context.Context, client *github.Client, owner str
 				continue
 			}
 
-			// Simple heuristic: does the manifest mention our project name or any changed imports?
-			if signals.ProjectName != "" && strings.Contains(content, signals.ProjectName) {
+			if signals.ProjectName != "" && manifestMatch(manifest, content, signals.ProjectName) {
 				fmt.Printf("      ✅ %s matched via %s (depends on %s)\n", repo.FullName, manifest, signals.ProjectName)
 				matched = true
 				break
 			}
 
-			for imp := range signals.ChangedImports {
-				if strings.Contains(content, imp) {
+			for imp, lang := range signals.ChangedImports {
+				// Avoid matching on very short or standard library imports (e.g., "io", "fmt", "os")
+				if len(imp) < 5 || IsStandardLibrary(lang, imp) {
+					continue
+				}
+				if manifestMatch(manifest, content, imp) {
 					fmt.Printf("      ✅ %s matched via %s (shares import: %s)\n", repo.FullName, manifest, imp)
 					matched = true
 					break
@@ -147,6 +150,83 @@ func IdentifyRelevantRepos(ctx context.Context, client *github.Client, owner str
 	return relevant
 }
 
+// manifestMatch performs a language-aware check to see if a dependency is present in a manifest file.
+// It avoids simple substring matches to prevent false positives like "log" matching "github.com/sirupsen/logrus".
+func manifestMatch(manifest, content, target string) bool {
+	if target == "" {
+		return false
+	}
+
+	switch filepath.Base(manifest) {
+	case "go.mod":
+		// Go dependencies are usually on their own line with leading whitespace, 
+		// or in a require block: "github.com/foo/bar v1.2.3" or "require github.com/foo/bar"
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "module ") {
+				continue
+			}
+			// require github.com/foo/bar v1.2.3
+			if strings.Contains(line, target) {
+				parts := strings.Fields(line)
+				for _, p := range parts {
+					if p == target {
+						return true
+					}
+				}
+			}
+		}
+
+	case "package.json":
+		// "dependencies": { "target": "version" }
+		// Simple quoted match for the key
+		quoted := fmt.Sprintf("\"%s\"", target)
+		return strings.Contains(content, quoted)
+
+	case "requirements.txt":
+		// target==version or target>=version
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			// requirements can have [extras], split by [ or == or >=
+			pkg := strings.FieldsFunc(line, func(r rune) bool {
+				return r == '=' || r == '>' || r == '<' || r == '[' || r == '~' || r == '!'
+			})[0]
+			if strings.TrimSpace(pkg) == target {
+				return true
+			}
+		}
+
+	case "pom.xml":
+		// Simple check for target inside <artifactId> or <groupId>
+		tag1 := fmt.Sprintf("<artifactId>%s</artifactId>", target)
+		tag2 := fmt.Sprintf("<groupId>%s</groupId>", target)
+		return strings.Contains(content, tag1) || strings.Contains(content, tag2)
+
+	case "build.gradle":
+		// implementation 'group:artifact:version' or "group:artifact:version"
+		quoted1 := fmt.Sprintf("'%s'", target)
+		quoted2 := fmt.Sprintf("\"%s\"", target)
+		if strings.Contains(content, quoted1) || strings.Contains(content, quoted2) {
+			return true
+		}
+		// Also check colon-separated format
+		return strings.Contains(content, ":"+target+":") || strings.Contains(content, ":"+target+"'") || strings.Contains(content, ":"+target+"\"")
+
+	default:
+		// Fallback for others (pyproject.toml, etc.)
+		quoted1 := fmt.Sprintf("'%s'", target)
+		quoted2 := fmt.Sprintf("\"%s\"", target)
+		return strings.Contains(content, quoted1) || strings.Contains(content, quoted2)
+	}
+
+	return false
+}
+
 // ExtractProjectName identifies the name/module-id of the current repository.
 func ExtractProjectName(repoPath string) string {
 	// 1. Go (go.mod)
@@ -160,17 +240,12 @@ func ExtractProjectName(repoPath string) string {
 	}
 
 	// 2. JS/TS (package.json)
-	// We could use encoding/json, but for a simple "extract name" a string search is safer against malformed files.
 	if data, err := os.ReadFile(filepath.Join(repoPath, "package.json")); err == nil {
-		content := string(data)
-		if idx := strings.Index(content, "\"name\":"); idx != -1 {
-			sub := content[idx+7:]
-			if start := strings.Index(sub, "\""); start != -1 {
-				sub = sub[start+1:]
-				if end := strings.Index(sub, "\""); end != -1 {
-					return sub[:end]
-				}
-			}
+		var pkg struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(data, &pkg); err == nil && pkg.Name != "" {
+			return pkg.Name
 		}
 	}
 

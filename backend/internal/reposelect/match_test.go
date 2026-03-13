@@ -116,3 +116,39 @@ func TestMatchRepos(t *testing.T) {
 		t.Errorf("expected both import and symbol matches, got reasons: %v", candidates)
 	}
 }
+
+func TestManifestMatch(t *testing.T) {
+	tests := []struct {
+		manifest string
+		content  string
+		target   string
+		expected bool
+	}{
+		// Go
+		{"go.mod", "module test\nrequire github.com/foo/bar v1.0.0", "github.com/foo/bar", true},
+		{"go.mod", "module test\nrequire github.com/foo/bar-service v1.0.0", "github.com/foo/bar", false},
+		{"go.mod", "module test\nrequire (\n\tgithub.com/foo/bar v1.0.0\n)", "github.com/foo/bar", true},
+
+		// JS/TS
+		{"package.json", `{"dependencies": {"express": "^4.17.1"}}`, "express", true},
+		{"package.json", `{"dependencies": {"express-session": "^1.17.1"}}`, "express", false},
+
+		// Python
+		{"requirements.txt", "requests==2.25.1", "requests", true},
+		{"requirements.txt", "requests-oauthlib==1.3.0", "requests", false},
+		{"requirements.txt", "requests[security]==2.25.1", "requests", true},
+
+		// Java
+		{"pom.xml", "<dependencies><dependency><artifactId>log4j</artifactId></dependency></dependencies>", "log4j", true},
+		{"pom.xml", "<dependencies><dependency><artifactId>log4j-api</artifactId></dependency></dependencies>", "log4j", false},
+		{"build.gradle", "implementation 'org.slf4j:slf4j-api:1.7.30'", "slf4j-api", true},
+		{"build.gradle", "implementation \"org.slf4j:slf4j-simple:1.7.30\"", "slf4j-api", false},
+	}
+
+	for _, tt := range tests {
+		got := manifestMatch(tt.manifest, tt.content, tt.target)
+		if got != tt.expected {
+			t.Errorf("manifestMatch(%s, ..., %s) = %v; want %v", tt.manifest, tt.target, got, tt.expected)
+		}
+	}
+}

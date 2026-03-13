@@ -2,8 +2,8 @@ package llm
 
 import "testing"
 
-func TestBuildRequest_UsesPreviousResponseIDForToolContinuation(t *testing.T) {
-	provider := &OpenAIProvider{model: "gpt-5.4"}
+func TestBuildRequest_MapsRolesAndToolsCorrectly(t *testing.T) {
+	provider := &OpenAIProvider{model: "gpt-4o"}
 	req := GenerateRequest{
 		SystemPrompt: "system",
 		Messages: []Message{
@@ -15,10 +15,9 @@ func TestBuildRequest_UsesPreviousResponseIDForToolContinuation(t *testing.T) {
 				Role: "model",
 				Parts: []Part{{
 					FunctionCall: &FunctionCall{
-						ID:         "call_123",
-						Name:       "search_codebase",
-						Args:       map[string]interface{}{"query": "foo"},
-						ResponseID: "resp_123",
+						ID:   "call_123",
+						Name: "search_codebase",
+						Args: map[string]interface{}{"query": "foo"},
 					},
 				}},
 			},
@@ -26,8 +25,8 @@ func TestBuildRequest_UsesPreviousResponseIDForToolContinuation(t *testing.T) {
 				Role: "function",
 				Parts: []Part{{
 					FunctionResp: &FunctionResponse{
-						ID:      "call_123",
-						Name:    "search_codebase",
+						ID:   "call_123",
+						Name: "search_codebase",
 						Content: "match",
 					},
 				}},
@@ -39,19 +38,28 @@ func TestBuildRequest_UsesPreviousResponseIDForToolContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
 	}
-	if apiReq.PreviousResponseID != "resp_123" {
-		t.Fatalf("expected previous_response_id resp_123, got %q", apiReq.PreviousResponseID)
+	
+	// system (1) + user (1) + assistant (1) + tool (1) = 4 messages
+	if len(apiReq.Messages) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(apiReq.Messages))
 	}
-	if len(apiReq.Input) != 1 {
-		t.Fatalf("expected only function output delta input, got %d items", len(apiReq.Input))
+
+	if apiReq.Messages[0].Role != "system" {
+		t.Errorf("expected msg 0 role system, got %s", apiReq.Messages[0].Role)
 	}
-	if apiReq.Input[0]["type"] != "function_call_output" {
-		t.Fatalf("expected function_call_output item, got %#v", apiReq.Input[0])
+	if apiReq.Messages[1].Role != "user" {
+		t.Errorf("expected msg 1 role user, got %s", apiReq.Messages[1].Role)
+	}
+	if apiReq.Messages[2].Role != "assistant" {
+		t.Errorf("expected msg 2 role assistant, got %s", apiReq.Messages[2].Role)
+	}
+	if apiReq.Messages[3].Role != "tool" {
+		t.Errorf("expected msg 3 role tool, got %s", apiReq.Messages[3].Role)
 	}
 }
 
-func TestBuildRequest_UsesFullConversationWithoutPreviousResponseID(t *testing.T) {
-	provider := &OpenAIProvider{model: "gpt-5.4"}
+func TestBuildRequest_IncludesToolsInPayload(t *testing.T) {
+	provider := &OpenAIProvider{model: "gpt-4o"}
 	req := GenerateRequest{
 		SystemPrompt: "system",
 		Messages: []Message{
@@ -60,7 +68,6 @@ func TestBuildRequest_UsesFullConversationWithoutPreviousResponseID(t *testing.T
 				Parts: []Part{{Text: "inspect diff"}},
 			},
 		},
-		ResponseJSON: true,
 		Tools: []ToolDeclaration{{
 			Name:        "search_codebase",
 			Description: "search",
@@ -72,22 +79,11 @@ func TestBuildRequest_UsesFullConversationWithoutPreviousResponseID(t *testing.T
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
 	}
-	if apiReq.PreviousResponseID != "" {
-		t.Fatalf("expected empty previous_response_id, got %q", apiReq.PreviousResponseID)
+	
+	if len(apiReq.Tools) != 1 || apiReq.Tools[0].Function.Name != "search_codebase" {
+		t.Fatalf("expected search_codebase tool, got %#v", apiReq.Tools)
 	}
-	if len(apiReq.Input) != 1 {
-		t.Fatalf("expected full input, got %d items", len(apiReq.Input))
-	}
-	if apiReq.Model != "gpt-5.4" {
-		t.Fatalf("expected model gpt-5.4, got %q", apiReq.Model)
-	}
-	if apiReq.Reasoning == nil || apiReq.Reasoning.Effort != "high" {
-		t.Fatalf("expected reasoning effort high, got %#v", apiReq.Reasoning)
-	}
-	if apiReq.Text == nil || apiReq.Text.Format == nil || apiReq.Text.Format.Type != "json_object" {
-		t.Fatalf("expected json_object text format, got %#v", apiReq.Text)
-	}
-	if len(apiReq.Tools) != 1 || apiReq.Tools[0].Type != "function" {
-		t.Fatalf("expected function tool declaration, got %#v", apiReq.Tools)
+	if apiReq.Model != "gpt-4o" {
+		t.Fatalf("expected model gpt-4o, got %q", apiReq.Model)
 	}
 }

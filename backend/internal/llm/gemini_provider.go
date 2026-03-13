@@ -186,6 +186,10 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 	if resp.UsageMetadata != nil {
 		result.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
 		result.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
+		result.CachedTokens = int(resp.UsageMetadata.CachedContentTokenCount)
+		result.ToolUsePromptTokens = int(resp.UsageMetadata.ToolUsePromptTokenCount)
+		result.ThoughtsTokens = int(resp.UsageMetadata.ThoughtsTokenCount)
+		result.TotalTokens = int(resp.UsageMetadata.TotalTokenCount)
 	}
 
 	// Capture ALL parts from the response — including thought parts.

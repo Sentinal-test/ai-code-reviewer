@@ -60,6 +60,7 @@ Instead of just sending a diff, we send the **Full File Content** with inline an
 
 ---
 
-## 🛡️ Noise Reduction Strategy
-- **Pre-Filtering**: Documentation (`.md`, `LICENSE`), configuration (`package.json`, `go.mod`), and static assets are stripped before the LLM even sees them.
+## 🛡️ Context Optimization Strategy
+- **Selective Inclusion**: Documentation (`.txt`, `.rst`), static assets (images, fonts), and standard boilerplate (`LICENSE`, generic `README`) are stripped.
+- **Critical Context**: Dependency manifests (`go.mod`, `package.json`, `pom.xml`) and infrastructure/configuration files (`.yaml`, `.json`, `.tf`) are **retained** if they are part of the change set. This allows agents to catch version drift, security vulnerabilities, and misconfigurations.
 - **Intent Awareness**: If a PR description says "temporary debug logging," the LLM is instructed not to flag the logs as security issues unless they expose sensitive data.

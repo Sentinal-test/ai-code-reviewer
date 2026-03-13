@@ -13,8 +13,8 @@ import (
 
 const (
 	// Default OpenAI model for code reviews
-	openAIModel        = "gpt-5.4"
-	openAIResponsesURL = "https://api.openai.com/v1/responses"
+	openAIModel = "gpt-4o"
+	openAIURL   = "https://api.openai.com/v1/chat/completions"
 )
 
 type OpenAIProvider struct {
@@ -32,7 +32,7 @@ func NewOpenAIProvider(apiKey string, model string) *OpenAIProvider {
 		httpClient: &http.Client{Timeout: 120 * time.Second},
 		apiKey:     apiKey,
 		model:      model,
-		baseURL:    openAIResponsesURL,
+		baseURL:    openAIURL,
 	}
 }
 
@@ -45,66 +45,52 @@ func (p *OpenAIProvider) DeleteCache(ctx context.Context, cacheID string) error 
 	return nil
 }
 
-type openAIResponsesRequest struct {
-	Model              string                 `json:"model"`
-	Instructions       string                 `json:"instructions,omitempty"`
-	Input              []map[string]any       `json:"input,omitempty"`
-	PreviousResponseID string                 `json:"previous_response_id,omitempty"`
-	Tools              []openAIResponsesTool  `json:"tools,omitempty"`
-	Reasoning          *openAIReasoningConfig `json:"reasoning,omitempty"`
-	Text               *openAITextConfig      `json:"text,omitempty"`
-	MaxOutputTokens    int                    `json:"max_output_tokens,omitempty"`
+type openAIChatRequest struct {
+	Model    string          `json:"model"`
+	Messages []openAIMessage `json:"messages"`
+	Tools    []openAITool    `json:"tools,omitempty"`
 }
 
-type openAIResponsesTool struct {
-	Type        string                 `json:"type"`
+type openAIMessage struct {
+	Role         string               `json:"role"`
+	Content      string               `json:"content,omitempty"`
+	ToolCalls    []openAIToolCall     `json:"tool_calls,omitempty"`
+	ToolCallID   string               `json:"tool_call_id,omitempty"`
+	Name         string               `json:"name,omitempty"`
+}
+
+type openAITool struct {
+	Type     string            `json:"type"`
+	Function openAIToolDetails `json:"function"`
+}
+
+type openAIToolDetails struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description,omitempty"`
 	Parameters  map[string]interface{} `json:"parameters,omitempty"`
-	Strict      bool                   `json:"strict"`
 }
 
-type openAIReasoningConfig struct {
-	Effort string `json:"effort,omitempty"`
+type openAIToolCall struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function openAIToolCallFunction `json:"function"`
 }
 
-type openAITextConfig struct {
-	Format *openAITextFormat `json:"format,omitempty"`
+type openAIToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
-type openAITextFormat struct {
-	Type string `json:"type"`
-}
-
-type openAIResponsesResponse struct {
-	ID                string                      `json:"id"`
-	Status            string                      `json:"status"`
-	Output            []openAIResponsesOutputItem `json:"output"`
-	IncompleteDetails *openAIIncompleteDetails    `json:"incomplete_details,omitempty"`
-	Usage             *openAIResponsesUsage       `json:"usage,omitempty"`
-}
-
-type openAIResponsesOutputItem struct {
-	Type      string                   `json:"type"`
-	ID        string                   `json:"id,omitempty"`
-	CallID    string                   `json:"call_id,omitempty"`
-	Name      string                   `json:"name,omitempty"`
-	Arguments string                   `json:"arguments,omitempty"`
-	Content   []openAIResponsesContent `json:"content,omitempty"`
-}
-
-type openAIResponsesContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-type openAIIncompleteDetails struct {
-	Reason string `json:"reason,omitempty"`
-}
-
-type openAIResponsesUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+type openAIChatResponse struct {
+	ID      string `json:"id"`
+	Choices []struct {
+		Message openAIMessage `json:"message"`
+		Reason  string        `json:"finish_reason"`
+	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
 }
 
 type openAIErrorEnvelope struct {
@@ -113,42 +99,82 @@ type openAIErrorEnvelope struct {
 	} `json:"error,omitempty"`
 }
 
-func (p *OpenAIProvider) buildRequest(req GenerateRequest) (openAIResponsesRequest, error) {
-	previousResponseID, startIdx := findPreviousOpenAIResponse(req.Messages)
-	input, err := buildOpenAIInputItems(req.Messages, startIdx)
-	if err != nil {
-		return openAIResponsesRequest{}, err
+func (p *OpenAIProvider) buildRequest(req GenerateRequest) (openAIChatRequest, error) {
+	var messages []openAIMessage
+
+	// 1. Add System Prompt as a developer/system message
+	if req.SystemPrompt != "" {
+		messages = append(messages, openAIMessage{
+			Role:    "system",
+			Content: req.SystemPrompt,
+		})
 	}
 
-	apiReq := openAIResponsesRequest{
-		Model:           p.model,
-		Instructions:    req.SystemPrompt,
-		Input:           input,
-		MaxOutputTokens: 8192,
-		Reasoning: &openAIReasoningConfig{
-			Effort: "high",
-		},
-	}
+	// 2. Add conversation history
+	for _, msg := range req.Messages {
+		role := msg.Role
+		if role == "model" {
+			role = "assistant"
+		}
+		
+		text := collectMessageText(msg.Parts)
+		
+		var toolCalls []openAIToolCall
+		isToolResp := false
+		for _, part := range msg.Parts {
+			if part.FunctionCall != nil {
+				argsBytes, _ := json.Marshal(part.FunctionCall.Args)
+				toolCalls = append(toolCalls, openAIToolCall{
+					ID:   part.FunctionCall.ID,
+					Type: "function",
+					Function: openAIToolCallFunction{
+						Name:      part.FunctionCall.Name,
+						Arguments: string(argsBytes),
+					},
+				})
+			}
+			if part.FunctionResp != nil {
+				isToolResp = true
+			}
+		}
 
-	if previousResponseID != "" {
-		apiReq.PreviousResponseID = previousResponseID
-	}
-
-	if req.ResponseJSON {
-		apiReq.Text = &openAITextConfig{
-			Format: &openAITextFormat{Type: "json_object"},
+		// Only append a base message if it has text, tool calls, or if it's NOT a tool response container
+		if text != "" || len(toolCalls) > 0 || !isToolResp {
+			messages = append(messages, openAIMessage{
+				Role:      role,
+				Content:   text,
+				ToolCalls: toolCalls,
+			})
+		}
+		
+		// Handle function responses (OpenAI "tool" messages)
+		for _, part := range msg.Parts {
+			if part.FunctionResp != nil {
+				messages = append(messages, openAIMessage{
+					Role:       "tool",
+					ToolCallID: part.FunctionResp.ID,
+					Name:       part.FunctionResp.Name,
+					Content:    part.FunctionResp.Content,
+				})
+			}
 		}
 	}
 
+	apiReq := openAIChatRequest{
+		Model:    p.model,
+		Messages: messages,
+	}
+
 	if len(req.Tools) > 0 {
-		apiReq.Tools = make([]openAIResponsesTool, 0, len(req.Tools))
+		apiReq.Tools = make([]openAITool, 0, len(req.Tools))
 		for _, tool := range req.Tools {
-			apiReq.Tools = append(apiReq.Tools, openAIResponsesTool{
-				Type:        "function",
-				Name:        tool.Name,
-				Description: tool.Description,
-				Parameters:  tool.Parameters,
-				Strict:      false,
+			apiReq.Tools = append(apiReq.Tools, openAITool{
+				Type: "function",
+				Function: openAIToolDetails{
+					Name:        tool.Name,
+					Description: tool.Description,
+					Parameters:  tool.Parameters,
+				},
 			})
 		}
 	}
@@ -156,98 +182,6 @@ func (p *OpenAIProvider) buildRequest(req GenerateRequest) (openAIResponsesReque
 	return apiReq, nil
 }
 
-func findPreviousOpenAIResponse(messages []Message) (string, int) {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role != "model" {
-			continue
-		}
-		for _, part := range messages[i].Parts {
-			if part.FunctionCall != nil && part.FunctionCall.ResponseID != "" {
-				return part.FunctionCall.ResponseID, i + 1
-			}
-		}
-	}
-	return "", 0
-}
-
-func buildOpenAIInputItems(messages []Message, startIdx int) ([]map[string]any, error) {
-	var input []map[string]any
-
-	for i := startIdx; i < len(messages); i++ {
-		items, err := buildOpenAIMessageItems(messages[i])
-		if err != nil {
-			return nil, err
-		}
-		input = append(input, items...)
-	}
-
-	return input, nil
-}
-
-func buildOpenAIMessageItems(message Message) ([]map[string]any, error) {
-	switch message.Role {
-	case "user":
-		text := collectMessageText(message.Parts)
-		if text == "" {
-			return nil, nil
-		}
-		return []map[string]any{
-			{
-				"role":    "user",
-				"content": text,
-			},
-		}, nil
-	case "model":
-		var items []map[string]any
-		text := collectMessageText(message.Parts)
-		if text != "" {
-			items = append(items, map[string]any{
-				"role":    "assistant",
-				"content": text,
-			})
-		}
-		for _, part := range message.Parts {
-			if part.FunctionCall == nil {
-				continue
-			}
-			argsBytes, err := json.Marshal(part.FunctionCall.Args)
-			if err != nil {
-				return nil, fmt.Errorf("marshal openai function args: %w", err)
-			}
-			items = append(items, map[string]any{
-				"type":      "function_call",
-				"call_id":   part.FunctionCall.ID,
-				"name":      part.FunctionCall.Name,
-				"arguments": string(argsBytes),
-			})
-		}
-		return items, nil
-	case "function":
-		var items []map[string]any
-		for _, part := range message.Parts {
-			if part.FunctionResp == nil {
-				continue
-			}
-			items = append(items, map[string]any{
-				"type":    "function_call_output",
-				"call_id": part.FunctionResp.ID,
-				"output":  part.FunctionResp.Content,
-			})
-		}
-		return items, nil
-	default:
-		text := collectMessageText(message.Parts)
-		if text == "" {
-			return nil, nil
-		}
-		return []map[string]any{
-			{
-				"role":    message.Role,
-				"content": text,
-			},
-		}, nil
-	}
-}
 
 func collectMessageText(parts []Part) string {
 	var chunks []string
@@ -296,47 +230,35 @@ func (p *OpenAIProvider) GenerateContent(ctx context.Context, req GenerateReques
 		return GenerateResponse{}, fmt.Errorf("openai error: status %d: %s", httpResp.StatusCode, strings.TrimSpace(string(respBytes)))
 	}
 
-	var resp openAIResponsesResponse
+	var resp openAIChatResponse
 	if err := json.Unmarshal(respBytes, &resp); err != nil {
 		return GenerateResponse{}, fmt.Errorf("decode openai response: %w", err)
 	}
 
-	if len(resp.Output) == 0 {
+	if len(resp.Choices) == 0 {
 		return GenerateResponse{FinishReason: "EMPTY"}, nil
 	}
 
-	result := GenerateResponse{FinishReason: strings.ToUpper(resp.Status)}
-	if resp.Usage != nil {
-		result.InputTokens = resp.Usage.InputTokens
-		result.OutputTokens = resp.Usage.OutputTokens
+	choice := resp.Choices[0]
+	result := GenerateResponse{
+		Text:         choice.Message.Content,
+		FinishReason: strings.ToUpper(choice.Reason),
+		InputTokens:  resp.Usage.PromptTokens,
+		OutputTokens: resp.Usage.CompletionTokens,
 	}
 
-	if resp.IncompleteDetails != nil && resp.IncompleteDetails.Reason == "max_output_tokens" {
-		result.FinishReason = "MAX_TOKENS"
-	}
-
-	for _, item := range resp.Output {
-		switch item.Type {
-		case "message":
-			for _, content := range item.Content {
-				if content.Text != "" {
-					result.Text += content.Text
-				}
-			}
-		case "function_call":
-			var args map[string]interface{}
-			if err := json.Unmarshal([]byte(item.Arguments), &args); err != nil || args == nil {
-				args = make(map[string]interface{})
-			}
-			fc := &FunctionCall{
-				ID:         item.CallID,
-				Name:       item.Name,
-				Args:       args,
-				ResponseID: resp.ID,
-			}
-			result.FunctionCalls = append(result.FunctionCalls, fc)
-			result.ModelParts = append(result.ModelParts, Part{FunctionCall: fc})
+	for _, tc := range choice.Message.ToolCalls {
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			args = make(map[string]interface{})
 		}
+		fc := &FunctionCall{
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Args: args,
+		}
+		result.FunctionCalls = append(result.FunctionCalls, fc)
+		result.ModelParts = append(result.ModelParts, Part{FunctionCall: fc})
 	}
 
 	return result, nil

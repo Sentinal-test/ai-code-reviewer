@@ -26,7 +26,8 @@ func IsExported(language string, symbol string) bool {
 	}
 }
 
-// IsStandardLibrary determines if an import path belongs to the standard library/built-ins of the given language.
+// IsStandardLibrary determines if an import path belongs to the standard library or is a ubiquitous 
+// utility package that should be ignored for cross-repo matching.
 func IsStandardLibrary(language string, importPath string) bool {
 	if importPath == "" {
 		return false
@@ -37,7 +38,21 @@ func IsStandardLibrary(language string, importPath string) bool {
 	case "go":
 		// Go stdlib packages typically don't have a dot in the first segment (e.g. "fmt", "net/http")
 		firstSegment := strings.Split(importPath, "/")[0]
-		return !strings.Contains(firstSegment, ".")
+		if !strings.Contains(firstSegment, ".") {
+			return true
+		}
+		// Ubiquitous third-party Go packages
+		ubiquitousGo := map[string]bool{
+			"github.com/sirupsen/logrus": true,
+			"github.com/stretchr/testify": true,
+			"github.com/spf13/cobra":      true,
+			"github.com/spf13/viper":      true,
+			"github.com/onsi/ginkgo":      true,
+			"github.com/onsi/gomega":      true,
+			"go.uber.org/zap":             true,
+			"github.com/rs/zerolog":       true,
+		}
+		return ubiquitousGo[importPath] || strings.HasPrefix(importPath, "github.com/stretchr/testify/")
 
 	case "python":
 		// Common python stdlib top-level modules
@@ -47,9 +62,21 @@ func IsStandardLibrary(language string, importPath string) bool {
 			"math": true, "typing": true, "collections": true, "functools": true,
 			"itertools": true, "pathlib": true, "random": true, "time": true,
 			"subprocess": true, "logging": true, "asyncio": true, "urllib": true,
-			"hashlib": true, "socket": true,
+			"hashlib": true, "socket": true, "abc": true, "argparse": true,
+			"base64": true, "copy": true, "csv": true, "enum": true, "glob": true,
+			"io": true, "pickle": true, "shutil": true, "sqlite3": true,
+			"tempfile": true, "threading": true, "uuid": true, "warnings": true,
 		}
-		return pyStdlib[firstSegment]
+		if pyStdlib[firstSegment] {
+			return true
+		}
+		// Ubiquitous Python packages
+		ubiquitousPy := map[string]bool{
+			"pytest": true, "requests": true, "numpy": true, "pandas": true,
+			"django": true, "flask": true, "pydantic": true, "black": true,
+			"flake8": true, "tox": true,
+		}
+		return ubiquitousPy[firstSegment]
 
 	case "javascript", "typescript":
 		// Node.js built-ins often start with "node:" or are explicitly named
@@ -57,14 +84,40 @@ func IsStandardLibrary(language string, importPath string) bool {
 			return true
 		}
 		firstSegment := strings.Split(importPath, "/")[0]
+		if strings.HasPrefix(firstSegment, "@types/") {
+			return true
+		}
 		jsBuiltins := map[string]bool{
 			"fs": true, "path": true, "http": true, "crypto": true, "os": true,
 			"util": true, "events": true, "stream": true, "url": true, "child_process": true,
+			"assert": true, "buffer": true, "console": true, "dns": true, "net": true,
+			"querystring": true, "readline": true, "tls": true, "zlib": true,
 		}
-		return jsBuiltins[firstSegment]
+		if jsBuiltins[firstSegment] {
+			return true
+		}
+		// Ubiquitous JS/TS packages
+		ubiquitousJS := map[string]bool{
+			"jest": true, "mocha": true, "chai": true, "eslint": true, "prettier": true,
+			"lodash": true, "axios": true, "react": true, "vue": true, "express": true,
+			"typescript": true, "next": true,
+		}
+		return ubiquitousJS[firstSegment]
 
 	case "java":
-		return strings.HasPrefix(importPath, "java.") || strings.HasPrefix(importPath, "javax.")
+		if strings.HasPrefix(importPath, "java.") || strings.HasPrefix(importPath, "javax.") {
+			return true
+		}
+		// Ubiquitous Java packages
+		ubiquitousJava := []string{
+			"org.junit.", "org.slf4j.", "org.apache.log4j.", "org.mockito.", "com.google.common.",
+		}
+		for _, prefix := range ubiquitousJava {
+			if strings.HasPrefix(importPath, prefix) {
+				return true
+			}
+		}
+		return false
 
 	default:
 		return false
