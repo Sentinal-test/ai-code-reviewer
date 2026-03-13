@@ -120,7 +120,7 @@ func IdentifyRelevantRepos(ctx context.Context, client *github.Client, signals L
 				continue
 			}
 
-			if signals.ProjectName != "" && strings.Contains(content, signals.ProjectName) {
+			if signals.ProjectName != "" && manifestMatch(manifest, content, signals.ProjectName) {
 				fmt.Printf("      ✅ %s matched via %s (depends on %s)\n", repo.FullName, manifest, signals.ProjectName)
 				matched = true
 				break
@@ -131,7 +131,7 @@ func IdentifyRelevantRepos(ctx context.Context, client *github.Client, signals L
 				if len(imp) < 5 || IsStandardLibrary(lang, imp) {
 					continue
 				}
-				if strings.Contains(content, imp) {
+				if manifestMatch(manifest, content, imp) {
 					fmt.Printf("      ✅ %s matched via %s (shares import: %s)\n", repo.FullName, manifest, imp)
 					matched = true
 					break
@@ -148,6 +148,83 @@ func IdentifyRelevantRepos(ctx context.Context, client *github.Client, signals L
 	}
 
 	return relevant
+}
+
+// manifestMatch performs a language-aware check to see if a dependency is present in a manifest file.
+// It avoids simple substring matches to prevent false positives like "log" matching "github.com/sirupsen/logrus".
+func manifestMatch(manifest, content, target string) bool {
+	if target == "" {
+		return false
+	}
+
+	switch filepath.Base(manifest) {
+	case "go.mod":
+		// Go dependencies are usually on their own line with leading whitespace, 
+		// or in a require block: "github.com/foo/bar v1.2.3" or "require github.com/foo/bar"
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "module ") {
+				continue
+			}
+			// require github.com/foo/bar v1.2.3
+			if strings.Contains(line, target) {
+				parts := strings.Fields(line)
+				for _, p := range parts {
+					if p == target {
+						return true
+					}
+				}
+			}
+		}
+
+	case "package.json":
+		// "dependencies": { "target": "version" }
+		// Simple quoted match for the key
+		quoted := fmt.Sprintf("\"%s\"", target)
+		return strings.Contains(content, quoted)
+
+	case "requirements.txt":
+		// target==version or target>=version
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			// requirements can have [extras], split by [ or == or >=
+			pkg := strings.FieldsFunc(line, func(r rune) bool {
+				return r == '=' || r == '>' || r == '<' || r == '[' || r == '~' || r == '!'
+			})[0]
+			if strings.TrimSpace(pkg) == target {
+				return true
+			}
+		}
+
+	case "pom.xml":
+		// Simple check for target inside <artifactId> or <groupId>
+		tag1 := fmt.Sprintf("<artifactId>%s</artifactId>", target)
+		tag2 := fmt.Sprintf("<groupId>%s</groupId>", target)
+		return strings.Contains(content, tag1) || strings.Contains(content, tag2)
+
+	case "build.gradle":
+		// implementation 'group:artifact:version' or "group:artifact:version"
+		quoted1 := fmt.Sprintf("'%s'", target)
+		quoted2 := fmt.Sprintf("\"%s\"", target)
+		if strings.Contains(content, quoted1) || strings.Contains(content, quoted2) {
+			return true
+		}
+		// Also check colon-separated format
+		return strings.Contains(content, ":"+target+":") || strings.Contains(content, ":"+target+"'") || strings.Contains(content, ":"+target+"\"")
+
+	default:
+		// Fallback for others (pyproject.toml, etc.)
+		quoted1 := fmt.Sprintf("'%s'", target)
+		quoted2 := fmt.Sprintf("\"%s\"", target)
+		return strings.Contains(content, quoted1) || strings.Contains(content, quoted2)
+	}
+
+	return false
 }
 
 // ExtractProjectName identifies the name/module-id of the current repository.
