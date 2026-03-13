@@ -297,7 +297,6 @@ func main() {
 		fmt.Println("   (Running in standard single-repo mode)")
 	}
 
-
 	// Multi-Repo Matching Execution (Phase 2 & 3 combined)
 	if baseTempDir != "" && ghClient != nil && cgService.Graph != nil && len(remoteGraphs) > 0 {
 		fmt.Println("   🔄 Analyzing cross-repo dependencies...")
@@ -367,6 +366,7 @@ func main() {
 
 	var provider llm.LLMProvider
 	var initErr error
+	var costLedger *llm.UsageLedger
 
 	switch llmProvider {
 	case "openai":
@@ -389,6 +389,9 @@ func main() {
 		fmt.Printf("❌ Failed to initialize provider %s: %v\n", llmProvider, initErr)
 		os.Exit(1)
 	}
+
+	// Instrument provider to track actual token usage + cost.
+	provider, costLedger = llm.WrapWithCostTracking(provider)
 
 	// Get graph edges for smart chunk grouping
 	var graphEdges []codegraph.Edge
@@ -489,6 +492,11 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("✅ Review posted successfully!")
+	}
+
+	// End-of-run cost log (includes all LLM calls + Gemini cache pricing).
+	if costLedger != nil {
+		costLedger.PrintSummary("💰 [LLM Cost]")
 	}
 }
 

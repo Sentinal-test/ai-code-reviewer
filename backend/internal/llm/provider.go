@@ -57,7 +57,14 @@ type GenerateResponse struct {
 	ModelParts    []Part // Full set of model response parts (preserves thought parts for Gemini)
 	InputTokens   int
 	OutputTokens  int
-	FinishReason  string
+	// Provider-specific token details (best-effort; 0 if unavailable).
+	// For Gemini: InputTokens typically corresponds to prompt tokens; these fields
+	// allow accurate cached-token and thinking/tool token cost attribution.
+	CachedTokens        int
+	ToolUsePromptTokens int
+	ThoughtsTokens      int
+	TotalTokens         int
+	FinishReason        string
 }
 
 // LLMProvider defines the interface that all underlying AI models must implement

@@ -328,11 +328,12 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 	// 5. Run LLM Review (With PR Context & Dependencies)
 	fmt.Printf("🧠 Running LLM review for PR #%d (with %d changed files, %d deps)...\n", pr.GetNumber(), len(changedFiles), len(dependencies))
 
-	provider, err := llm.NewGeminiProvider(apiKey, "")
+	rawProvider, err := llm.NewGeminiProvider(apiKey, "")
 	if err != nil {
 		fmt.Printf("❌ Failed to initialize Gemini provider: %v\n", err)
 		return
 	}
+	provider, costLedger := llm.WrapWithCostTracking(rawProvider)
 
 	review, err := llm.RunReview(ctx, provider, diff, changedFiles, dependencies, settings, repoStructure, prContext)
 	if err != nil {
@@ -410,6 +411,11 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 	if checkRunID != 0 {
 		summary := fmt.Sprintf("Review complete. Posted %d comments.", successCount)
 		internalGH.UpdateCheckRun(ctx, client, repo.GetOwner().GetLogin(), repo.GetName(), checkRunID, "success", summary)
+	}
+
+	// End-of-run cost log (includes all LLM calls + Gemini cache pricing).
+	if costLedger != nil {
+		costLedger.PrintSummary("💰 [LLM Cost]")
 	}
 }
 
