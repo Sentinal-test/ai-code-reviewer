@@ -19,19 +19,17 @@ func isDocOrConfigFile(path string) bool {
 	lower := strings.ToLower(path)
 	base := strings.ToLower(filepath.Base(path))
 
-	// Skip by extension
-	skipExts := []string{".md", ".txt", ".rst", ".adoc", ".gitignore", ".dockerignore"}
+	// Skip by extension (non-semantic/binary/static)
+	skipExts := []string{".txt", ".rst", ".adoc", ".gitignore", ".dockerignore", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico"}
 	for _, ext := range skipExts {
 		if strings.HasSuffix(lower, ext) {
 			return true
 		}
 	}
 
-	// Skip known config files
+	// Skip non-meaningful boilerplate/documentation
 	skipFiles := []string{
-		"go.mod", "go.sum", "package.json", "package-lock.json",
-		"yarn.lock", "pnpm-lock.yaml", "tsconfig.json",
-		"license", "changelog", "readme",
+		"license", "changelog", "readme", "notice", "copying",
 	}
 	baseNoExt := strings.TrimSuffix(base, filepath.Ext(base))
 	for _, skip := range skipFiles {

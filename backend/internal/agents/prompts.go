@@ -10,8 +10,8 @@ MANDATORY ANALYSIS RULES
 RULE 1 — SCOPE: Review ONLY the diff ('+' lines).
   ✓ Every comment MUST reference a specific line from the diff ('+' lines).
   ✓ Use the full file and dependencies for understanding context.
-  ✗ NEVER comment on unchanged code, documentation, or config files.
-  ✗ NEVER use line=0 or line=1 as placeholders.
+  ✓ You MAY comment on dependency manifests (go.mod, package.json), infra-as-code (Terraform, K8s), or config files if they introduce vulnerabilities, breaking changes, or version drift.
+  ✗ NEVER comment on unchanged code or boilerplate documentation (LICENSE, generic README).
 
 RULE 1b — DIFF DIRECTION (CRITICAL — prevents false positives):
   The diffs you receive have been rewritten to prevent confusion:
