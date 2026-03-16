@@ -13,6 +13,18 @@ type Graph struct {
 	Symbols     map[string]Symbol    `json:"symbols,omitempty"`
 	SymbolEdges []SymbolEdge         `json:"symbol_edges,omitempty"`
 	PackageDeps []PackageDependency  `json:"package_deps,omitempty"`
+
+	// InvertedReferences is a non-serializable index: symbol -> list of calling locations.
+	// Populated during rebuildGraphIndexes to speed up get_callers.
+	InvertedReferences map[string][]SymbolLocation `json:"-"`
+}
+
+// SymbolLocation represents a specific place where a symbol is referenced.
+type SymbolLocation struct {
+	File           string `json:"file"`
+	Line           int    `json:"line"`
+	ScopeQualified string `json:"scope_qualified"`
+	Kind           string `json:"kind"`
 }
 
 // FileEntry stores parsed metadata for a single source file.
@@ -135,6 +147,25 @@ func (g *Graph) ReferenceCount() int {
 	return count
 }
 
+// FindDefinitions returns all definitions matching a given symbol name.
+// Used to handle ambiguity in tool calls.
+func (g *Graph) FindDefinitions(symbol string) map[string]*Definition {
+	results := make(map[string]*Definition)
+	if g == nil {
+		return results
+	}
+
+	for path, entry := range g.Files {
+		for i := range entry.Definitions {
+			def := &entry.Definitions[i]
+			if def.Symbol == symbol || def.QualifiedSymbol == symbol {
+				results[path+":"+def.Symbol] = def
+			}
+		}
+	}
+	return results
+}
+
 // FindDefinition looks up which file defines a given symbol.
 // Returns the file path and definition, or empty string if not found.
 func (g *Graph) FindDefinition(symbol string) (string, *Definition) {
@@ -153,8 +184,8 @@ func (g *Graph) FindDefinition(symbol string) (string, *Definition) {
 			def := &entry.Definitions[i]
 			if def.Symbol == symbol || def.QualifiedSymbol == symbol {
 				if fallbackDef != nil {
-					// Ambiguous plain-name lookup. Avoid returning a random definition.
-					return "", nil
+					// Ambiguous plain-name lookup.
+					return "AMBIGUOUS", nil
 				}
 				fallbackPath = path
 				fallbackDef = def

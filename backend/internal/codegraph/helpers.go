@@ -78,6 +78,94 @@ func isTestFile(path string) bool {
 	return false
 }
 
+// IsStandardLibraryImport determines if an import path belongs to the standard library
+// or a ubiquitous framework dependency that should not be treated as a meaningful
+// cross-repository signal.
+func IsStandardLibraryImport(language string, importPath string) bool {
+	if importPath == "" {
+		return false
+	}
+
+	lng := strings.ToLower(language)
+	switch lng {
+	case "go":
+		firstSegment := strings.Split(importPath, "/")[0]
+		if !strings.Contains(firstSegment, ".") {
+			return true
+		}
+		ubiquitousGo := map[string]bool{
+			"github.com/sirupsen/logrus":  true,
+			"github.com/stretchr/testify": true,
+			"github.com/spf13/cobra":      true,
+			"github.com/spf13/viper":      true,
+			"github.com/onsi/ginkgo":      true,
+			"github.com/onsi/gomega":      true,
+			"go.uber.org/zap":             true,
+			"github.com/rs/zerolog":       true,
+		}
+		return ubiquitousGo[importPath] || strings.HasPrefix(importPath, "github.com/stretchr/testify/")
+	case "python":
+		firstSegment := strings.Split(strings.Split(importPath, ".")[0], " ")[0]
+		pyStdlib := map[string]bool{
+			"os": true, "sys": true, "json": true, "re": true, "datetime": true,
+			"math": true, "typing": true, "collections": true, "functools": true,
+			"itertools": true, "pathlib": true, "random": true, "time": true,
+			"subprocess": true, "logging": true, "asyncio": true, "urllib": true,
+			"hashlib": true, "socket": true, "abc": true, "argparse": true,
+			"base64": true, "copy": true, "csv": true, "enum": true, "glob": true,
+			"io": true, "pickle": true, "shutil": true, "sqlite3": true,
+			"tempfile": true, "threading": true, "uuid": true, "warnings": true,
+		}
+		if pyStdlib[firstSegment] {
+			return true
+		}
+		ubiquitousPy := map[string]bool{
+			"pytest": true, "requests": true, "numpy": true, "pandas": true,
+			"django": true, "flask": true, "pydantic": true, "black": true,
+			"flake8": true, "tox": true,
+		}
+		return ubiquitousPy[firstSegment]
+	case "javascript", "typescript":
+		if strings.HasPrefix(importPath, "node:") {
+			return true
+		}
+		firstSegment := strings.Split(importPath, "/")[0]
+		if strings.HasPrefix(firstSegment, "@types/") {
+			return true
+		}
+		jsBuiltins := map[string]bool{
+			"fs": true, "path": true, "http": true, "crypto": true, "os": true,
+			"util": true, "events": true, "stream": true, "url": true, "child_process": true,
+			"assert": true, "buffer": true, "console": true, "dns": true, "net": true,
+			"querystring": true, "readline": true, "tls": true, "zlib": true,
+		}
+		if jsBuiltins[firstSegment] {
+			return true
+		}
+		ubiquitousJS := map[string]bool{
+			"jest": true, "mocha": true, "chai": true, "eslint": true, "prettier": true,
+			"lodash": true, "axios": true, "react": true, "vue": true, "express": true,
+			"typescript": true, "next": true,
+		}
+		return ubiquitousJS[firstSegment]
+	case "java":
+		if strings.HasPrefix(importPath, "java.") || strings.HasPrefix(importPath, "javax.") {
+			return true
+		}
+		ubiquitousJava := []string{
+			"org.junit.", "org.slf4j.", "org.apache.log4j.", "org.mockito.", "com.google.common.",
+		}
+		for _, prefix := range ubiquitousJava {
+			if strings.HasPrefix(importPath, prefix) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
 func loadGoModulePath(repoPath string) string {
 	if repoPath == "" {
 		return ""
@@ -129,6 +217,25 @@ func normalizeImportPath(langName, importPath string) string {
 		normalized = strings.TrimSuffix(normalized, ";")
 	}
 	return normalized
+}
+
+func importAliasForSpec(langName string, spec ImportSpec) string {
+	alias := strings.TrimSpace(spec.Alias)
+	if alias != "" && alias != "." && alias != "_" {
+		return alias
+	}
+
+	path := normalizeImportPath(langName, spec.Path)
+	if path == "" {
+		return ""
+	}
+
+	switch langName {
+	case "go", "java":
+		return lastSegment(path)
+	default:
+		return ""
+	}
 }
 
 func isResolvableProjectImport(repoPath string, graph *Graph, sourcePath, importPath, langName, goModulePath string) bool {

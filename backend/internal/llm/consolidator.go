@@ -28,7 +28,7 @@ func RunConsolidation(
 
 	// Build the consolidation prompt
 	prompt := buildConsolidationPrompt(agentResults)
-	systemPrompt := fmt.Sprintf(agents.ConsolidatorSystemPrompt, maxComments)
+	systemPrompt := agents.BuildConsolidatorSystemPrompt(maxComments)
 
 	fmt.Printf("🔄 [Consolidator] Sending %d agent results to LLM for intelligent consolidation\n",
 		len(agentResults))

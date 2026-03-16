@@ -82,7 +82,7 @@ func AgentToolDeclarations() []ToolDeclaration {
 		},
 		{
 			Name:        "resolve_repo_symbol",
-			Description: "Find which file defines a symbol inside a remote repository.",
+			Description: "Find which file defines a symbol inside a remote repository. Supports both plain and qualified symbols.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -93,6 +93,28 @@ func AgentToolDeclarations() []ToolDeclaration {
 					"symbol": map[string]interface{}{
 						"type":        "string",
 						"description": "The symbol to find (e.g. 'AuthService').",
+					},
+				},
+				"required": []string{"repo_full_name", "symbol"},
+			},
+		},
+		{
+			Name:        "get_repo_callers",
+			Description: "Find call-sites inside a remote repository that reference a symbol. Optionally constrain the match to a specific imported package path.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"repo_full_name": map[string]interface{}{
+						"type":        "string",
+						"description": "The target repository. Must be retrieved from `list_cross_repo_matches`.",
+					},
+					"symbol": map[string]interface{}{
+						"type":        "string",
+						"description": "The symbol to find callers for.",
+					},
+					"import_path": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional package/module import path to restrict the search to a specific external dependency.",
 					},
 				},
 				"required": []string{"repo_full_name", "symbol"},
@@ -126,7 +148,7 @@ func AgentToolDeclarations() []ToolDeclaration {
 		},
 		{
 			Name:        "search_repo_graph",
-			Description: "Search the lightweight graph of a remote repository to find package imports or simple types.",
+			Description: "Search the runtime graph of a remote repository for definitions, callers, imports, and package dependencies.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -186,6 +208,8 @@ func (te *ToolExecutor) Execute(ctx context.Context, call agents.ToolCallRequest
 		return te.listCrossRepoMatches()
 	case "resolve_repo_symbol":
 		return te.resolveRepoSymbol(call.Args)
+	case "get_repo_callers":
+		return te.getRepoCallers(call.Args)
 	case "fetch_repo_snippet":
 		return te.fetchRepoSnippet(ctx, call.Args)
 	case "search_repo_graph":
@@ -209,10 +233,20 @@ func (te *ToolExecutor) getSymbolDefinition(args map[string]interface{}) agents.
 	}
 
 	path, def := te.Graph.FindDefinition(symbol)
+	if path == "AMBIGUOUS" {
+		candidates := te.Graph.FindDefinitions(symbol)
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("Symbol '%s' is ambiguous. Please use one of the qualified names below:\n", symbol))
+		for candPath, candDef := range candidates {
+			b.WriteString(fmt.Sprintf("  - %s (File: %s, Line: %d, Kind: %s)\n", candDef.QualifiedSymbol, candPath, candDef.Line, candDef.Kind))
+		}
+		return agents.ToolCallResponse{Name: "get_symbol_definition", Content: b.String()}
+	}
+
 	if def == nil {
 		return agents.ToolCallResponse{
 			Name:    "get_symbol_definition",
-			Content: fmt.Sprintf("Symbol '%s' not found or is ambiguous in the code graph index. Use a more specific qualified symbol if available.", symbol),
+			Content: fmt.Sprintf("Symbol '%s' not found. Use search_codebase if you are unsure of the exact name.", symbol),
 		}
 	}
 
@@ -233,8 +267,9 @@ func (te *ToolExecutor) getSymbolDefinition(args map[string]interface{}) agents.
 				endIdx = len(lines)
 			}
 			snippet := strings.Join(lines[startIdx:endIdx], "\n")
-			if len(snippet) > 3000 {
-				snippet = snippet[:3000] + "\n// ... (truncated)"
+			const maxSnippet = 5000 // Increased from 3000
+			if len(snippet) > maxSnippet {
+				snippet = snippet[:maxSnippet] + "\n// ... (truncated)"
 			}
 			result += fmt.Sprintf("\nSource:\n%s", snippet)
 		}
@@ -259,10 +294,40 @@ func (te *ToolExecutor) getFileContent(args map[string]interface{}) agents.ToolC
 	}
 
 	content := string(data)
-	// Cap file content to prevent massive responses
-	const maxChars = 20000
+	lines := strings.Split(content, "\n")
+
+	// Support windowed reading
+	startLineF, hasStart := args["start_line"].(float64)
+	endLineF, hasEnd := args["end_line"].(float64)
+
+	if hasStart || hasEnd {
+		start := 1
+		if hasStart {
+			start = int(startLineF)
+		}
+		end := len(lines)
+		if hasEnd {
+			end = int(endLineF)
+		}
+
+		if start < 1 {
+			start = 1
+		}
+		if end > len(lines) {
+			end = len(lines)
+		}
+		if start > end {
+			return agents.ToolCallResponse{Name: "get_file_content", Content: "Error: start_line cannot be greater than end_line"}
+		}
+
+		content = strings.Join(lines[start-1:end], "\n")
+		return agents.ToolCallResponse{Name: "get_file_content", Content: content}
+	}
+
+	// Cap full file content to prevent massive responses
+	const maxChars = 40000 // Increased from 20000
 	if len(content) > maxChars {
-		content = content[:maxChars] + "\n... (truncated at 20K chars)"
+		content = content[:maxChars] + "\n... (truncated at 40K chars. Use start_line/end_line to read specific sections.)"
 	}
 
 	return agents.ToolCallResponse{Name: "get_file_content", Content: content}
@@ -278,12 +343,19 @@ func (te *ToolExecutor) getCallers(args map[string]interface{}) agents.ToolCallR
 		return agents.ToolCallResponse{Name: "get_callers", Content: "Error: code graph not available"}
 	}
 
-	// Find all files that reference this symbol
+	// USE the inverted index for O(1) lookups if available
 	var callers []string
-	for path, entry := range te.Graph.Files {
-		for _, ref := range entry.References {
-			if ref.ResolvedQualified == symbol || ref.Symbol == symbol {
-				callers = append(callers, fmt.Sprintf("  %s:%d -> %s (kind: %s)", path, ref.Line, ref.ScopeQualified, ref.Kind))
+	if te.Graph.InvertedReferences != nil {
+		for _, loc := range te.Graph.InvertedReferences[symbol] {
+			callers = append(callers, fmt.Sprintf("  %s:%d -> %s (kind: %s)", loc.File, loc.Line, loc.ScopeQualified, loc.Kind))
+		}
+	} else {
+		// Fallback for non-indexed graph
+		for path, entry := range te.Graph.Files {
+			for _, ref := range entry.References {
+				if ref.ResolvedQualified == symbol || ref.Symbol == symbol {
+					callers = append(callers, fmt.Sprintf("  %s:%d -> %s (kind: %s)", path, ref.Line, ref.ScopeQualified, ref.Kind))
+				}
 			}
 		}
 	}
@@ -296,9 +368,19 @@ func (te *ToolExecutor) getCallers(args map[string]interface{}) agents.ToolCallR
 	}
 
 	sort.Strings(callers)
+	// Deduplicate if needed (same location might be indexed twice by symbol and qualified symbol)
+	uniqueCallers := make([]string, 0, len(callers))
+	last := ""
+	for _, c := range callers {
+		if c != last {
+			uniqueCallers = append(uniqueCallers, c)
+			last = c
+		}
+	}
+
 	return agents.ToolCallResponse{
 		Name:    "get_callers",
-		Content: fmt.Sprintf("Symbol '%s' is referenced at %d call-sites:\n%s", symbol, len(callers), strings.Join(callers, "\n")),
+		Content: fmt.Sprintf("Symbol '%s' is referenced at %d call-sites:\n%s", symbol, len(uniqueCallers), strings.Join(uniqueCallers, "\n")),
 	}
 }
 
@@ -356,31 +438,126 @@ func (te *ToolExecutor) resolveRepoSymbol(args map[string]interface{}) agents.To
 		return agents.ToolCallResponse{Name: "resolve_repo_symbol", Content: "Error: repo_full_name and symbol are required"}
 	}
 
-	if te.RemoteGraphs == nil {
-		return agents.ToolCallResponse{Name: "resolve_repo_symbol", Content: "Error: remote graphs not initialized"}
+	graph, err := te.lookupRemoteGraph(repoFullName)
+	if err != nil {
+		return agents.ToolCallResponse{Name: "resolve_repo_symbol", Content: err.Error()}
 	}
 
-	graph, ok := te.RemoteGraphs[repoFullName]
-	if !ok {
-		return agents.ToolCallResponse{Name: "resolve_repo_symbol", Content: fmt.Sprintf("Error: repository %s not found in cross-repo match list", repoFullName)}
-	}
-
-	var found []string
-	for path, entry := range graph.Files {
-		for _, def := range entry.Definitions {
-			if def.Symbol == symbol {
-				found = append(found, fmt.Sprintf("File: %s (Lines %d-%d, Kind: %s)", path, def.Line, def.EndLine, def.Kind))
-			}
+	if sym, ok := graph.Symbols[symbol]; ok {
+		return agents.ToolCallResponse{
+			Name: "resolve_repo_symbol",
+			Content: fmt.Sprintf(
+				"Symbol: %s\nQualified: %s\nFile: %s\nPackage: %s\nKind: %s\nLine: %d",
+				sym.Symbol,
+				sym.QualifiedSymbol,
+				sym.File,
+				sym.Package,
+				sym.Kind,
+				sym.Line,
+			),
 		}
 	}
+
+	var found []codegraph.Symbol
+	for _, sym := range graph.Symbols {
+		if sym.Symbol == symbol || sym.QualifiedSymbol == symbol {
+			found = append(found, sym)
+		}
+	}
+	sort.Slice(found, func(i, j int) bool {
+		if found[i].QualifiedSymbol == found[j].QualifiedSymbol {
+			return found[i].File < found[j].File
+		}
+		return found[i].QualifiedSymbol < found[j].QualifiedSymbol
+	})
 
 	if len(found) == 0 {
 		return agents.ToolCallResponse{Name: "resolve_repo_symbol", Content: fmt.Sprintf("Symbol %s not found in remote repository %s", symbol, repoFullName)}
 	}
 
+	if len(found) > 1 {
+		lines := make([]string, 0, len(found))
+		for _, sym := range found {
+			lines = append(lines, fmt.Sprintf("  - %s (%s:%d, kind: %s)", sym.QualifiedSymbol, sym.File, sym.Line, sym.Kind))
+		}
+		return agents.ToolCallResponse{
+			Name:    "resolve_repo_symbol",
+			Content: fmt.Sprintf("Symbol %s is ambiguous in %s. Use one of:\n%s", symbol, repoFullName, strings.Join(lines, "\n")),
+		}
+	}
+
+	sym := found[0]
 	return agents.ToolCallResponse{
-		Name:    "resolve_repo_symbol",
-		Content: "Found definitions:\n" + strings.Join(found, "\n"),
+		Name: "resolve_repo_symbol",
+		Content: fmt.Sprintf(
+			"Symbol: %s\nQualified: %s\nFile: %s\nPackage: %s\nKind: %s\nLine: %d",
+			sym.Symbol,
+			sym.QualifiedSymbol,
+			sym.File,
+			sym.Package,
+			sym.Kind,
+			sym.Line,
+		),
+	}
+}
+
+func (te *ToolExecutor) getRepoCallers(args map[string]interface{}) agents.ToolCallResponse {
+	repoFullName, _ := args["repo_full_name"].(string)
+	symbol, _ := args["symbol"].(string)
+	importPath, _ := args["import_path"].(string)
+
+	if repoFullName == "" || symbol == "" {
+		return agents.ToolCallResponse{Name: "get_repo_callers", Content: "Error: repo_full_name and symbol are required"}
+	}
+
+	graph, err := te.lookupRemoteGraph(repoFullName)
+	if err != nil {
+		return agents.ToolCallResponse{Name: "get_repo_callers", Content: err.Error()}
+	}
+
+	var callers []string
+	if importPath == "" && graph.InvertedReferences != nil {
+		for _, loc := range graph.InvertedReferences[symbol] {
+			callers = append(callers, fmt.Sprintf("  %s:%d -> %s (kind: %s)", loc.File, loc.Line, loc.ScopeQualified, loc.Kind))
+		}
+		if sym, ok := graph.Symbols[symbol]; ok {
+			for _, loc := range graph.InvertedReferences[sym.QualifiedSymbol] {
+				callers = append(callers, fmt.Sprintf("  %s:%d -> %s (kind: %s)", loc.File, loc.Line, loc.ScopeQualified, loc.Kind))
+			}
+		}
+	}
+
+	if importPath != "" || len(callers) == 0 {
+		for path, entry := range graph.Files {
+			for _, ref := range entry.References {
+				if ref.Symbol != symbol {
+					continue
+				}
+				if importPath != "" && !matchesRemoteImportReference(entry, ref, importPath) {
+					continue
+				}
+				callers = append(callers, fmt.Sprintf("  %s:%d -> %s (kind: %s)", path, ref.Line, ref.ScopeQualified, ref.Kind))
+			}
+		}
+	}
+
+	sort.Strings(callers)
+	callers = dedupeStrings(callers)
+
+	if len(callers) == 0 {
+		scope := ""
+		if importPath != "" {
+			scope = " via " + importPath
+		}
+		return agents.ToolCallResponse{
+			Name:    "get_repo_callers",
+			Content: fmt.Sprintf("No callers/references found for symbol '%s' in %s%s.", symbol, repoFullName, scope),
+		}
+	}
+
+	return agents.ToolCallResponse{
+		Name:    "get_repo_callers",
+		Content: fmt.Sprintf("Symbol '%s' is referenced at %d call-sites in %s:\n%s", symbol, len(callers), repoFullName, strings.Join(callers, "\n")),
 	}
 }
 
@@ -417,25 +594,44 @@ func (te *ToolExecutor) searchRepoGraph(args map[string]interface{}) agents.Tool
 		return agents.ToolCallResponse{Name: "search_repo_graph", Content: "Error: repo_full_name and query are required"}
 	}
 
-	graph, ok := te.RemoteGraphs[repoFullName]
-	if !ok {
-		return agents.ToolCallResponse{Name: "search_repo_graph", Content: fmt.Sprintf("Error: repository %s not found", repoFullName)}
+	graph, err := te.lookupRemoteGraph(repoFullName)
+	if err != nil {
+		return agents.ToolCallResponse{Name: "search_repo_graph", Content: err.Error()}
 	}
 
 	queryLower := strings.ToLower(query)
 	var matches []string
 
-	for path, entry := range graph.Files {
-		// Search definitions
-		for _, def := range entry.Definitions {
-			if strings.Contains(strings.ToLower(def.Symbol), queryLower) {
-				matches = append(matches, fmt.Sprintf("[DEF] %s at %s:%d (%s)", def.Symbol, path, def.Line, def.Kind))
-			}
+	for _, sym := range graph.Symbols {
+		if strings.Contains(strings.ToLower(sym.Symbol), queryLower) || strings.Contains(strings.ToLower(sym.QualifiedSymbol), queryLower) {
+			matches = append(matches, fmt.Sprintf("[DEF] %s at %s:%d (%s)", sym.QualifiedSymbol, sym.File, sym.Line, sym.Kind))
 		}
-		// Search imports
+	}
+	for _, edge := range graph.SymbolEdges {
+		if strings.Contains(strings.ToLower(edge.From), queryLower) || strings.Contains(strings.ToLower(edge.To), queryLower) || strings.Contains(strings.ToLower(edge.Symbol), queryLower) {
+			matches = append(matches, fmt.Sprintf("[EDGE] %s -> %s (%s via %s)", edge.From, edge.To, edge.Relation, edge.Symbol))
+		}
+	}
+	for _, dep := range graph.PackageDeps {
+		if strings.Contains(strings.ToLower(dep.From), queryLower) || strings.Contains(strings.ToLower(dep.To), queryLower) || strings.Contains(strings.ToLower(dep.Via), queryLower) {
+			matches = append(matches, fmt.Sprintf("[PKG] %s -> %s (via %s)", dep.From, dep.To, dep.Via))
+		}
+	}
+	for path, entry := range graph.Files {
 		for _, imp := range entry.Imports {
 			if strings.Contains(strings.ToLower(imp), queryLower) {
 				matches = append(matches, fmt.Sprintf("[IMPORT] %s in %s", imp, path))
+			}
+		}
+		for _, ref := range entry.References {
+			if strings.Contains(strings.ToLower(ref.Symbol), queryLower) {
+				label := ref.Symbol
+				if importPath, ok := entry.ImportAliases[ref.Qualifier]; ok && ref.Qualifier != "" {
+					label = fmt.Sprintf("%s via %s", ref.Symbol, importPath)
+				} else if importPath, ok := entry.ImportAliases[ref.Symbol]; ok {
+					label = fmt.Sprintf("%s via %s", ref.Symbol, importPath)
+				}
+				matches = append(matches, fmt.Sprintf("[REF] %s:%d uses %s", path, ref.Line, label))
 			}
 		}
 	}
@@ -443,6 +639,9 @@ func (te *ToolExecutor) searchRepoGraph(args map[string]interface{}) agents.Tool
 	if len(matches) == 0 {
 		return agents.ToolCallResponse{Name: "search_repo_graph", Content: fmt.Sprintf("No graph nodes matched '%s' in %s", query, repoFullName)}
 	}
+
+	sort.Strings(matches)
+	matches = dedupeStrings(matches)
 
 	// Cap at 50 results
 	if len(matches) > 50 {
@@ -454,4 +653,43 @@ func (te *ToolExecutor) searchRepoGraph(args map[string]interface{}) agents.Tool
 		Name:    "search_repo_graph",
 		Content: strings.Join(matches, "\n"),
 	}
+}
+
+func (te *ToolExecutor) lookupRemoteGraph(repoFullName string) (*codegraph.RemoteRepoGraph, error) {
+	if te.RemoteGraphs == nil {
+		return nil, fmt.Errorf("Error: remote graphs not initialized")
+	}
+	graph, ok := te.RemoteGraphs[repoFullName]
+	if !ok {
+		return nil, fmt.Errorf("Error: repository %s not found in cross-repo match list", repoFullName)
+	}
+	return graph, nil
+}
+
+func matchesRemoteImportReference(entry codegraph.RemoteFileEntry, ref codegraph.Reference, importPath string) bool {
+	if ref.Qualifier != "" {
+		if candidate, ok := entry.ImportAliases[ref.Qualifier]; ok && candidate == importPath {
+			return true
+		}
+	}
+	if candidate, ok := entry.ImportAliases[ref.Symbol]; ok && candidate == importPath {
+		return true
+	}
+	return false
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return values
+	}
+	out := values[:0]
+	last := ""
+	for _, value := range values {
+		if value == last {
+			continue
+		}
+		out = append(out, value)
+		last = value
+	}
+	return out
 }

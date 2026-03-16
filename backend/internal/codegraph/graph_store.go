@@ -273,8 +273,8 @@ func parseFileEntry(ctx context.Context, parser *Parser, content []byte, langCon
 	importAliases := make(map[string]string, len(importSpecs))
 	for _, spec := range importSpecs {
 		imports = append(imports, spec.Path)
-		if spec.Alias != "" {
-			importAliases[spec.Alias] = spec.Path
+		if alias := importAliasForSpec(langName, spec); alias != "" {
+			importAliases[alias] = spec.Path
 		}
 	}
 
@@ -341,6 +341,32 @@ func rebuildGraphIndexes(g *Graph, repoPath string) {
 	g.SymbolEdges = symbolEdges
 	g.Edges = fileEdges
 	g.PackageDeps = packageDeps
+
+	// Build InvertedReferences index for $O(1)$ caller lookups
+	g.InvertedReferences = make(map[string][]SymbolLocation)
+	for path, entry := range g.Files {
+		for _, ref := range entry.References {
+			if ref.ResolvedQualified != "" {
+				loc := SymbolLocation{
+					File:           path,
+					Line:           ref.Line,
+					ScopeQualified: ref.ScopeQualified,
+					Kind:           ref.Kind,
+				}
+				g.InvertedReferences[ref.ResolvedQualified] = append(g.InvertedReferences[ref.ResolvedQualified], loc)
+			}
+			// Also index by plain symbol name for unresolved/ambiguous lookups
+			if ref.Symbol != "" {
+				loc := SymbolLocation{
+					File:           path,
+					Line:           ref.Line,
+					ScopeQualified: ref.ScopeQualified,
+					Kind:           ref.Kind,
+				}
+				g.InvertedReferences[ref.Symbol] = append(g.InvertedReferences[ref.Symbol], loc)
+			}
+		}
+	}
 }
 
 type symbolLookup struct {

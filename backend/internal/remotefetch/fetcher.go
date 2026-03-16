@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -52,8 +53,8 @@ func (f *Fetcher) FetchSnippet(ctx context.Context, repoFullName string, filePat
 	if endLine < startLine {
 		endLine = startLine + 50 // sensible default window if endLine is misconfigured
 	}
-	if endLine-startLine > f.maxLines {
-		endLine = startLine + f.maxLines
+	if endLine-startLine+1 > f.maxLines {
+		endLine = startLine + f.maxLines - 1
 	}
 
 	parts := strings.SplitN(repoFullName, "/", 2)
@@ -61,7 +62,15 @@ func (f *Fetcher) FetchSnippet(ctx context.Context, repoFullName string, filePat
 		return "", fmt.Errorf("invalid repo full name %s", repoFullName)
 	}
 
-	fullPath := filepath.Join(f.baseTempDir, parts[0], parts[1], filePath)
+	repoRoot := filepath.Join(f.baseTempDir, parts[0], parts[1])
+	cleanPath := filepath.Clean(filePath)
+	if cleanPath == "." || strings.HasPrefix(cleanPath, "..") || filepath.IsAbs(cleanPath) {
+		return "", fmt.Errorf("invalid remote file path %s", filePath)
+	}
+	fullPath := filepath.Join(repoRoot, cleanPath)
+	if fullPath != repoRoot && !strings.HasPrefix(fullPath, repoRoot+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid remote file path %s", filePath)
+	}
 
 	contentBytes, err := os.ReadFile(fullPath)
 	if err != nil {
@@ -80,7 +89,17 @@ func (f *Fetcher) FetchSnippet(ctx context.Context, repoFullName string, filePat
 		actualEnd = len(lines)
 	}
 
-	snippet := strings.Join(lines[startLine-1:actualEnd], "\n")
+	var body strings.Builder
+	for i, line := range lines[startLine-1 : actualEnd] {
+		lineNo := startLine + i
+		body.WriteString(strconv.Itoa(lineNo))
+		body.WriteString(": ")
+		body.WriteString(line)
+		if lineNo < actualEnd {
+			body.WriteByte('\n')
+		}
+	}
+	snippet := fmt.Sprintf("Repo: %s\nFile: %s\nLines: %d-%d\n\n%s", repoFullName, cleanPath, startLine, actualEnd, body.String())
 
 	f.usedBytes += len(snippet)
 	f.fetchCount++

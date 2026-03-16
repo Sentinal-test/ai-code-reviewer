@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -17,30 +16,38 @@ type RemoteRepoGraph struct {
 	CommitSHA     string                     `json:"commit_sha"`
 	IndexedAt     time.Time                  `json:"indexed_at"`
 	Files         map[string]RemoteFileEntry `json:"files"`
+	Symbols       map[string]Symbol          `json:"symbols,omitempty"`
+	SymbolEdges   []SymbolEdge               `json:"symbol_edges,omitempty"`
+	PackageDeps   []PackageDependency        `json:"package_deps,omitempty"`
+
+	// InvertedReferences accelerates remote caller lookups. It is rebuilt at index time.
+	InvertedReferences map[string][]SymbolLocation `json:"-"`
 }
 
 // RemoteFileEntry contains the extracted metadata for a single remote source file.
 type RemoteFileEntry struct {
-	Language    string       `json:"language"`
-	Definitions []Definition `json:"definitions"`
-	Imports     []string     `json:"imports,omitempty"`
-	// Placeholders for future advanced extraction:
-	// HTTPRoutes []string
-	// EventTopics []string
-	// gRPCServices []string
+	Language      string            `json:"language"`
+	Package       string            `json:"package,omitempty"`
+	Definitions   []Definition      `json:"definitions"`
+	References    []Reference       `json:"references,omitempty"`
+	Imports       []string          `json:"imports,omitempty"`
+	ImportAliases map[string]string `json:"import_aliases,omitempty"`
 }
 
-// BuildRemoteGraph creates a lightweight graph representation of the repository at rootDir.
-// It uses existing parsers to extract only definitions and imports.
+// BuildRemoteGraph creates a symbol-aware graph representation of a peer repository.
+// It preserves internal symbol/package edges and keeps high-signal unresolved external
+// references so multi-repo matching can identify real downstream consumers.
 func BuildRemoteGraph(ctx context.Context, repoFullName string, rootDir string) (*RemoteRepoGraph, error) {
-	graph := &RemoteRepoGraph{
+	remote := &RemoteRepoGraph{
 		RepoFullName: repoFullName,
 		IndexedAt:    time.Now(),
 		Files:        make(map[string]RemoteFileEntry),
+		Symbols:      make(map[string]Symbol),
 	}
 
-	// Fetch current commit SHA if .git is present
+	graph := NewGraph()
 	graph.CommitSHA = GetCurrentCommitSHA(rootDir)
+	graph.IndexedAt = remote.IndexedAt
 
 	var files []string
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
@@ -48,7 +55,7 @@ func BuildRemoteGraph(ctx context.Context, repoFullName string, rootDir string) 
 			return err
 		}
 		if info.IsDir() {
-			if info.Name() == ".git" || info.Name() == "node_modules" || info.Name() == "vendor" {
+			if info.Name() == ".git" || skipDirs[info.Name()] {
 				return filepath.SkipDir
 			}
 			return nil
@@ -64,7 +71,6 @@ func BuildRemoteGraph(ctx context.Context, repoFullName string, rootDir string) 
 	}
 
 	parser := NewParser()
-
 	for _, path := range files {
 		select {
 		case <-ctx.Done():
@@ -86,29 +92,77 @@ func BuildRemoteGraph(ctx context.Context, repoFullName string, rootDir string) 
 			continue
 		}
 
-		rootNode, err := parser.ParseFile(ctx, content, langConfig)
-		if err != nil || rootNode == nil {
-			fmt.Printf("BuildRemoteGraph Error ParseFile %s: %v\n", path, err)
-			continue
-		}
-
-		langName := strings.ToLower(langConfig.Name)
-		defs, err := parser.ExtractDefinitionEntries(rootNode, content, langName, path)
+		entry, err := parseFileEntry(ctx, parser, content, langConfig, path)
 		if err != nil {
-			fmt.Printf("BuildRemoteGraph Error ExtractDefinitionEntries %s: %v\n", path, err)
+			fmt.Printf("BuildRemoteGraph Error parseFileEntry %s: %v\n", path, err)
 			continue
 		}
+		graph.Files[path] = *entry
+	}
 
-		imports := parser.ExtractImports(rootNode, content, langName)
+	resolveRemoteReferences(graph, rootDir)
+	rebuildGraphIndexes(graph, rootDir)
 
-		// Filter for exported/public symbols depending on language logic if desired.
-		// For now we store all parser.ExtractDefinitionEntries which might be broad, but is acceptable.
-		graph.Files[path] = RemoteFileEntry{
-			Language:    langName,
-			Definitions: defs,
-			Imports:     imports,
+	remote.CommitSHA = graph.CommitSHA
+	remote.Symbols = graph.Symbols
+	remote.SymbolEdges = graph.SymbolEdges
+	remote.PackageDeps = graph.PackageDeps
+	remote.InvertedReferences = graph.InvertedReferences
+	for path, entry := range graph.Files {
+		remote.Files[path] = RemoteFileEntry{
+			Language:      entry.Language,
+			Package:       entry.Package,
+			Definitions:   entry.Definitions,
+			References:    entry.References,
+			Imports:       entry.Imports,
+			ImportAliases: entry.ImportAliases,
 		}
 	}
 
-	return graph, nil
+	return remote, nil
+}
+
+func resolveRemoteReferences(g *Graph, repoPath string) {
+	if g == nil {
+		return
+	}
+
+	lookup := buildSymbolLookup(g)
+	goModulePath := loadGoModulePath(repoPath)
+
+	for path, entry := range g.Files {
+		filtered := make([]Reference, 0, len(entry.References))
+		for _, ref := range entry.References {
+			resolved, keep := resolveReference(g, path, entry, ref, lookup, repoPath, goModulePath)
+			if keep {
+				filtered = append(filtered, resolved)
+				continue
+			}
+			if keepRemoteExternalReference(entry, ref) {
+				filtered = append(filtered, ref)
+			}
+		}
+		entry.References = filtered
+		g.Files[path] = entry
+	}
+}
+
+func keepRemoteExternalReference(entry FileEntry, ref Reference) bool {
+	if ref.Symbol == "" || isBuiltinSymbol(ref.Symbol) {
+		return false
+	}
+
+	if ref.Qualifier != "" {
+		importPath, ok := entry.ImportAliases[ref.Qualifier]
+		if !ok {
+			return false
+		}
+		return !IsStandardLibraryImport(entry.Language, importPath)
+	}
+
+	if importPath, ok := entry.ImportAliases[ref.Symbol]; ok {
+		return !IsStandardLibraryImport(entry.Language, importPath)
+	}
+
+	return false
 }

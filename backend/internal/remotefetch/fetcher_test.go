@@ -28,7 +28,7 @@ func TestFetchSnippet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if snippet != "Line 2\nLine 3\nLine 4" {
+	if !strings.Contains(snippet, "Repo: org/repo") || !strings.Contains(snippet, "2: Line 2\n3: Line 3\n4: Line 4") {
 		t.Errorf("unexpected snippet: %q", snippet)
 	}
 
@@ -37,9 +37,8 @@ func TestFetchSnippet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	lines := strings.Split(snippet2, "\n")
-	if len(lines) != 6 { // startLine + 5 = elements 1..6
-		t.Errorf("expected max line clamping to 6 lines, got %d", len(lines))
+	if !strings.Contains(snippet2, "Lines: 1-5") {
+		t.Errorf("expected max line clamping to line 5, got %q", snippet2)
 	}
 
 	// Test 3: Fetch limits
@@ -49,5 +48,12 @@ func TestFetchSnippet(t *testing.T) {
 	_, err = fetcher.FetchSnippet(context.Background(), "org/repo", "test.txt", 1, 2)
 	if err == nil || !strings.Contains(err.Error(), "remote fetch budget exceeded") {
 		t.Errorf("expected fetch budget exceeded error, got: %v", err)
+	}
+
+	// Test 4: Path traversal rejected
+	safeFetcher := NewFetcher(tmpDir, 5, 5, 1000)
+	_, err = safeFetcher.FetchSnippet(context.Background(), "org/repo", "../repo/test.txt", 1, 2)
+	if err == nil || !strings.Contains(err.Error(), "invalid remote file path") {
+		t.Errorf("expected invalid remote file path error, got: %v", err)
 	}
 }

@@ -314,7 +314,9 @@ func runEvalCase(truthPath string, truth Truth, providerStr, apiKey, approach st
 	}
 
 	if cgService.Graph != nil && len(remoteGraphs) > 0 {
-		matches := reposelect.MatchRepos(reposelect.ExtractLocalSignals(cgService.Graph, changedFiles), remoteGraphs)
+		localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
+		localSignals.ProjectName = reposelect.ExtractProjectName(repoPath)
+		matches := reposelect.MatchRepos(localSignals, remoteGraphs)
 		matchSummary = reposelect.FormatMatchSummary(matches)
 		crossRepoRecall = crossRepoRecallScore(truth.ExpectedCrossRepo, matches)
 		remoteFetch = remotefetch.NewFetcher(remoteBaseDir, 10, 250, 500000)

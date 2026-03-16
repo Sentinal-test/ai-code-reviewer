@@ -99,7 +99,9 @@ func TestMultiRepoDatasetFixtures(t *testing.T) {
 				defer os.RemoveAll(remoteBaseDir)
 			}
 
-			matches := reposelect.MatchRepos(reposelect.ExtractLocalSignals(graph, changedFiles), remoteGraphs)
+			localSignals := reposelect.ExtractLocalSignals(graph, changedFiles)
+			localSignals.ProjectName = reposelect.ExtractProjectName(repoPath)
+			matches := reposelect.MatchRepos(localSignals, remoteGraphs)
 			score := crossRepoRecallScore(truth.ExpectedCrossRepo, matches)
 			if score != 1.0 {
 				t.Fatalf("expected full cross-repo recall, got %.2f with matches %+v", score, matches)

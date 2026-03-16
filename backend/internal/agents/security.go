@@ -41,6 +41,6 @@ RULE 0 — MULTI-REPO / MICROSERVICES CONTEXT (Active for this review):
 `, base.MatchSummary)
 	}
 
-	base.SystemPrompt = SecuritySystemPrompt + fmt.Sprintf(sharedRules, multiRepoBlock)
+	base.SystemPrompt = BuildSpecialistSystemPrompt("security", SecuritySystemPrompt, multiRepoBlock)
 	return base
 }

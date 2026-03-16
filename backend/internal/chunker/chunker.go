@@ -10,7 +10,7 @@ import (
 
 // DefaultTokenBudget is the target max tokens per chunk.
 // Each chunk gets its own set of 3 specialist agent reviews.
-const DefaultTokenBudget = 10_000
+const DefaultTokenBudget = 180_000
 
 // Chunk represents a group of related files to be reviewed together.
 type Chunk struct {

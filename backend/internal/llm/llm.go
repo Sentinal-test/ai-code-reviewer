@@ -465,7 +465,7 @@ func getFileKeys(m map[string]string) []string {
 func buildPrompt(diff string, changedFiles map[string]string, dependencies map[string]string, settings models.RepoSettings, repoStructure string, prContext models.PRContext) string {
 	// Context Window Management
 	// Priority order: Changed Files (highest) > Dependencies > Repo Structure (lowest)
-	// When over budget, drop the LARGEST dependency files first — never cut mid-file.
+	// When over budget, drop the LARGEST dependency files first.
 	// Budget: 720K chars ≈ 180K tokens, aligned with chunker's DefaultTokenBudget
 	const MaxContextChars = 720_000
 
@@ -475,22 +475,26 @@ func buildPrompt(diff string, changedFiles map[string]string, dependencies map[s
 		for _, path := range getFileKeys(files) {
 			content := files[path]
 			b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
-			b.WriteString(fmt.Sprintf("FILE: %s (Full Content with Line Numbers)\n", path))
+			b.WriteString(fmt.Sprintf("FILE: %s (Focused Context ±50 Lines Around Changes)\n", path))
 			b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 
-			// Add full content with line numbers
-			lines := strings.Split(content, "\n")
-			for i, line := range lines {
-				b.WriteString(fmt.Sprintf("%d: %s\n", i+1, line))
-			}
-
-			// Add diff hunks for focus
+			// Use extractDiffWithContext to show only what matters, saving token budget
+			// and reducing noise for the LLM. 50 lines is plenty for local reasoning.
 			if diffSections, hasDiff := diffMap[path]; hasDiff && len(diffSections) > 0 {
-				b.WriteString("\n--------------------------------------------------------------------------------\n")
-				b.WriteString(fmt.Sprintf("RECENT CHANGES IN: %s\n", path))
-				b.WriteString("--------------------------------------------------------------------------------\n")
-				for i, section := range diffSections {
-					b.WriteString(fmt.Sprintf("/* Change Block %d:\n%s\n*/\n\n", i+1, section))
+				focusedContent := extractDiffWithContext(content, diffSections, 50)
+				b.WriteString(focusedContent)
+			} else {
+				// Rare case: changed but no diff sections found? Show first 100 lines.
+				lines := strings.Split(content, "\n")
+				limit := 100
+				if len(lines) < limit {
+					limit = len(lines)
+				}
+				for i := 0; i < limit; i++ {
+					b.WriteString(fmt.Sprintf("%d: %s\n", i+1, lines[i]))
+				}
+				if len(lines) > limit {
+					b.WriteString(fmt.Sprintf("\n... (%d lines total, showing first %d) ...\n", len(lines), limit))
 				}
 			}
 		}
@@ -634,12 +638,12 @@ Your SOLE objective is to identify defects, vulnerabilities, bugs, and code qual
 ═══════════════════════════════════════════════════════════════════════════════
 PRIMARY ANALYSIS TARGET: Changed Code Files
 ═══════════════════════════════════════════════════════════════════════════════
-Below are the changed files with their import headers and diff hunks showing
-exactly what changed. Focus your analysis on the CHANGED SECTIONS marked in comments.
+Below are the changed files. You are 
+provided with a FOCUSED VIEW: the package/import header and ±50 lines of context 
+around each change hunk.
 
-The import/package header helps you understand:
-- What packages and types are imported
-- The language and module context
+If you need more context to understand a type, function, or caller that is outside 
+this window, YOU MUST USE THE PROVIDED TOOLS (get_symbol_definition, get_file_content, etc.).
 
 The diff hunks show exactly what was added (+) and removed (-).
 
