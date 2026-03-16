@@ -1,0 +1,50 @@
+# AI Code Reviewer - Improvement Roadmap
+
+Based on the current architecture and recent enhancements (multi-repo matching + config inclusion), here are the **immediate next steps** to significantly improve accuracy and trust.
+
+---
+
+## 🚀 Priority 1: Hunk Coverage Accountability
+**Goal**: Guarantee that 100% of the PR's code changes are actually reviewed.
+
+- **Current Gap**: Changes are chunked and processed, but there's no deterministic "audit trail" proving every added line was seen by the agents.
+- **Action**: 
+    1. Generate a **Hunk Manifest** at the start of the review.
+    2. Track which specialist agent processed which hunk.
+    3. Include a "Coverage Report" at the end (e.g., "100% of 42 changed lines reviewed").
+- **Benefit**: Eliminates the risk of the model "forgetting" or skipping a chunk of code.
+
+## 🧠 Priority 2: Structured Requirement Ingestion
+**Goal**: Match the implementation against the actual user story and business intent.
+
+- **Current Gap**: The model reviewers based on general "good code" rules but doesn't know the *why* (business rules, acceptance criteria).
+- **Action**:
+    1. Parse the PR body for `Acceptance Criteria` or `User Stories`.
+    2. Add a dedicated **Business Rules** context block to the agent prompts.
+- **Benefit**: Moves the AI from "is this code buggy?" to "is this code solving the right problem?"
+
+## 🕒 Priority 3: Historical Context (PR Persistence)
+**Goal**: Make the AI aware of previous review iterations.
+
+- **Current Gap**: Each review run is stateless. If a developer fixes a bug based on a previous comment, the AI doesn't recognize it as a follow-up.
+- **Action**:
+    1. Retrieve and index previous review comments for the current PR.
+    2. Provide a "Previous Findings" context to the consolidator.
+- **Benefit**: Dramatically reduces repetitive comments and feels more like "pair programming."
+
+## 🏗️ Priority 4: Dedicated "Non-Code" Specialist Agent
+**Goal**: Expert review for dependencies, infrastructure-as-code, and config.
+
+- **Current Gap**: Now that we include [go.mod](file:///Users/tegi/Desktop/code-review/backend/go.mod) and `.yaml`, they are reviewed by code specialists.
+- **Action**:
+    1. Create a **Config & Manifest Specialist** agent.
+    2. Focus on: Dependency vulnerabilities (CVEs), IaC security (S3 bucket visibility), and contract drift.
+- **Benefit**: Prevents general agents from being distracted by config while ensuring specialized rigor for infra changes.
+
+## 📊 Priority 5: Semantic Graph Enrichment
+**Goal**: Move from "symbol definitions" to "system blueprints."
+
+- **Current Gap**: The code graph knows that `HandleGetOrder` exists, but doesn't know it's a `GET /orders` endpoint.
+- **Action**:
+    1. Extend parsers to extract **High-Level Nodes**: HTTP routes, Event Topics (Kafka/NATS), and Environment Variable usage.
+- **Benefit**: Allows the AI to detect cross-service breaking changes (e.g., "Field X removed from response, but service B expects it on route Y").

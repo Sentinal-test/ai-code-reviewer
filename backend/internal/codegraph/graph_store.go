@@ -89,6 +89,9 @@ func LoadGraph(dir string) (*Graph, error) {
 	if g.Files == nil {
 		g.Files = make(map[string]FileEntry)
 	}
+	if g.Symbols == nil {
+		g.Symbols = make(map[string]Symbol)
+	}
 
 	fmt.Printf("📂 [CodeGraph] Loaded cached graph from %s (%d files, %d definitions, commit: %.7s)\n",
 		path, g.FileCount(), g.DefinitionCount(), g.CommitSHA)
@@ -104,7 +107,7 @@ func BuildFull(ctx context.Context, repoPath string) (*Graph, error) {
 
 	parser := NewParser()
 	g := NewGraph()
-	g.Version = 3
+	g.Version = 4
 	g.CommitSHA = GetCurrentCommitSHA(repoPath)
 	g.IndexedAt = time.Now()
 
@@ -134,13 +137,17 @@ func BuildFull(ctx context.Context, repoPath string) (*Graph, error) {
 			stats.SkippedFiles++
 			return nil
 		}
+		if isTestFile(relPath) {
+			stats.SkippedFiles++
+			return nil
+		}
 
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
 
-		entry, err := parseFileEntry(ctx, parser, content, langConfig)
+		entry, err := parseFileEntry(ctx, parser, content, langConfig, relPath)
 		if err != nil {
 			fmt.Printf("⚠️ [CodeGraph] Failed to parse %s: %v\n", relPath, err)
 			return nil
@@ -159,13 +166,12 @@ func BuildFull(ctx context.Context, repoPath string) (*Graph, error) {
 	}
 
 	// Prune references that don't match any definition in the repo
-	pruned := pruneUnresolvedReferences(g)
+	pruned := pruneUnresolvedReferences(g, repoPath)
 	if pruned > 0 {
 		fmt.Printf("  🧹 [CodeGraph] Pruned %d unresolved references (stdlib/external)\n", pruned)
 	}
 
-	// Build cross-file edges
-	g.Edges = buildEdges(g)
+	rebuildGraphIndexes(g, repoPath)
 	stats.Edges = len(g.Edges)
 	stats.Duration = time.Since(startTime)
 	stats.Print()
@@ -188,6 +194,10 @@ func DeltaUpdate(ctx context.Context, g *Graph, repoPath string, changedFiles []
 	parser := NewParser()
 
 	for _, relPath := range changedFiles {
+		if isTestFile(relPath) {
+			g.RemoveFile(relPath)
+			continue
+		}
 		// 1. Remove old entries
 		g.RemoveFile(relPath)
 
@@ -205,7 +215,7 @@ func DeltaUpdate(ctx context.Context, g *Graph, repoPath string, changedFiles []
 			continue
 		}
 
-		entry, err := parseFileEntry(ctx, parser, content, langConfig)
+		entry, err := parseFileEntry(ctx, parser, content, langConfig, relPath)
 		if err != nil {
 			fmt.Printf("  ⚠️  %s: parse error: %v\n", relPath, err)
 			continue
@@ -218,16 +228,16 @@ func DeltaUpdate(ctx context.Context, g *Graph, repoPath string, changedFiles []
 	}
 
 	// 4. Prune unresolved references
-	pruned := pruneUnresolvedReferences(g)
+	pruned := pruneUnresolvedReferences(g, repoPath)
 	if pruned > 0 {
 		fmt.Printf("  🧹 [CodeGraph] Pruned %d unresolved references (stdlib/external)\n", pruned)
 	}
 
-	// 5. Rebuild all edges
-	g.Edges = buildEdges(g)
+	// 5. Rebuild all indexes and edges
+	rebuildGraphIndexes(g, repoPath)
 	g.CommitSHA = GetCurrentCommitSHA(repoPath)
 	g.IndexedAt = time.Now()
-	g.Version = 3
+	g.Version = 4
 
 	stats.Edges = len(g.Edges)
 	stats.Duration = time.Since(startTime)
@@ -237,38 +247,41 @@ func DeltaUpdate(ctx context.Context, g *Graph, repoPath string, changedFiles []
 }
 
 // parseFileEntry parses a single file and returns its FileEntry.
-func parseFileEntry(ctx context.Context, parser *Parser, content []byte, langConfig *LanguageConfig) (*FileEntry, error) {
+func parseFileEntry(ctx context.Context, parser *Parser, content []byte, langConfig *LanguageConfig, filePath string) (*FileEntry, error) {
 	root, err := parser.ParseFile(ctx, content, langConfig)
 	if err != nil {
 		return nil, err
 	}
 
 	langName := strings.ToLower(langConfig.Name)
+	namespace := parser.ExtractNamespace(root, content, langName, filePath)
 
 	// Extract definitions with line numbers
-	defs, err := parser.ExtractDefinitionEntries(root, content, langName)
+	defs, err := parser.ExtractDefinitionEntries(root, content, langName, filePath)
 	if err != nil {
 		defs = nil
 	}
 
 	// Extract references
-	refs, err := parser.ExtractReferenceDetails(root, content, langName)
+	refs, err := parser.ExtractReferenceDetailsWithDefinitions(root, content, langName, defs)
 	if err != nil {
 		refs = nil
 	}
 
-	// Extract imports for stdlib-aware filtering
-	imports := parser.ExtractImports(root, content, langName)
+	importSpecs := parser.ExtractImportSpecs(content, langName)
+	imports := make([]string, 0, len(importSpecs))
+	importAliases := make(map[string]string, len(importSpecs))
+	for _, spec := range importSpecs {
+		imports = append(imports, spec.Path)
+		if spec.Alias != "" {
+			importAliases[spec.Alias] = spec.Path
+		}
+	}
 
-	// Filter out builtins from references
+	// Filter out builtins before graph-level resolution.
 	filteredRefs := make([]Reference, 0, len(refs))
 	for _, ref := range refs {
 		if isBuiltinSymbol(ref.Symbol) {
-			continue
-		}
-		// Filter method calls that match stdlib package names
-		// e.g., if "fmt" is imported and we see a method_call for "Sprintf", it's likely stdlib
-		if ref.Kind == "method_call" && isLikelyStdlibMethodCall(ref.Symbol, imports, langName) {
 			continue
 		}
 		filteredRefs = append(filteredRefs, ref)
@@ -278,37 +291,39 @@ func parseFileEntry(ctx context.Context, parser *Parser, content []byte, langCon
 	hash := fmt.Sprintf("%x", sha256.Sum256(content))
 
 	return &FileEntry{
-		Hash:        hash,
-		Language:    langName,
-		Definitions: defs,
-		References:  filteredRefs,
-		Imports:     imports,
+		Hash:          hash,
+		Language:      langName,
+		Package:       namespace,
+		Definitions:   defs,
+		References:    filteredRefs,
+		Imports:       imports,
+		ImportAliases: importAliases,
 	}, nil
 }
 
-// pruneUnresolvedReferences removes references from the graph that don't match
-// any definition in any file. This eliminates stdlib/external references that
-// slipped past the builtin filter, keeping graph.json clean and compact.
-func pruneUnresolvedReferences(g *Graph) int {
-	// Build global definition index
-	allDefs := make(map[string]struct{})
-	for _, entry := range g.Files {
-		for _, def := range entry.Definitions {
-			allDefs[def.Symbol] = struct{}{}
-		}
-	}
+// pruneUnresolvedReferences resolves references against the symbol index and drops
+// builtin / external / ambiguous edges before they ever reach graph.json.
+func pruneUnresolvedReferences(g *Graph, repoPath string) int {
+	lookup := buildSymbolLookup(g)
+	goModulePath := loadGoModulePath(repoPath)
 
 	totalPruned := 0
 	for path, entry := range g.Files {
 		filtered := make([]Reference, 0, len(entry.References))
+		changed := false
 		for _, ref := range entry.References {
-			if _, exists := allDefs[ref.Symbol]; exists {
-				filtered = append(filtered, ref)
-			} else {
+			resolved, keep := resolveReference(g, path, entry, ref, lookup, repoPath, goModulePath)
+			if !keep {
 				totalPruned++
+				changed = true
+				continue
 			}
+			if resolved != ref {
+				changed = true
+			}
+			filtered = append(filtered, resolved)
 		}
-		if len(filtered) != len(entry.References) {
+		if changed || len(filtered) != len(entry.References) {
 			entry.References = filtered
 			g.Files[path] = entry
 		}
@@ -316,64 +331,200 @@ func pruneUnresolvedReferences(g *Graph) int {
 	return totalPruned
 }
 
-// buildEdges creates cross-file edges by matching references to definitions.
-// Uses an automatic frequency-based filter to skip generic symbol names:
-// if a symbol is defined in 3+ files, it's too generic to create meaningful edges.
-func buildEdges(g *Graph) []Edge {
-	// Build definition index: symbol -> file path
-	// Also count how many files define each symbol (frequency filter).
-	defIndex := make(map[string]string)
-	defFrequency := make(map[string]int) // symbol -> number of files defining it
+func rebuildGraphIndexes(g *Graph, repoPath string) {
+	_ = repoPath
+	if g == nil {
+		return
+	}
+	symbols, symbolEdges, fileEdges, packageDeps := buildIndexes(g)
+	g.Symbols = symbols
+	g.SymbolEdges = symbolEdges
+	g.Edges = fileEdges
+	g.PackageDeps = packageDeps
+}
+
+type symbolLookup struct {
+	byQualified      map[string]Symbol
+	byName           map[string][]Symbol
+	byPackageAndName map[string][]Symbol
+	byOwnerAndName   map[string][]Symbol
+	byFileAndName    map[string][]Symbol
+}
+
+func buildSymbolLookup(g *Graph) symbolLookup {
+	lookup := symbolLookup{
+		byQualified:      make(map[string]Symbol),
+		byName:           make(map[string][]Symbol),
+		byPackageAndName: make(map[string][]Symbol),
+		byOwnerAndName:   make(map[string][]Symbol),
+		byFileAndName:    make(map[string][]Symbol),
+	}
 	for path, entry := range g.Files {
 		for _, def := range entry.Definitions {
-			defFrequency[def.Symbol]++
-			if _, exists := defIndex[def.Symbol]; !exists {
-				defIndex[def.Symbol] = path
+			sym := Symbol{
+				QualifiedSymbol: def.QualifiedSymbol,
+				Symbol:          def.Symbol,
+				Package:         def.Package,
+				File:            path,
+				Owner:           def.Owner,
+				Kind:            def.Kind,
+				Line:            def.Line,
+				EndLine:         def.EndLine,
+			}
+			lookup.byQualified[sym.QualifiedSymbol] = sym
+			lookup.byName[sym.Symbol] = append(lookup.byName[sym.Symbol], sym)
+			lookup.byPackageAndName[sym.Package+"\x00"+sym.Symbol] = append(lookup.byPackageAndName[sym.Package+"\x00"+sym.Symbol], sym)
+			if sym.Owner != "" {
+				key := sym.Package + "\x00" + sym.Owner + "\x00" + sym.Symbol
+				lookup.byOwnerAndName[key] = append(lookup.byOwnerAndName[key], sym)
+			}
+			lookup.byFileAndName[path+"\x00"+sym.Symbol] = append(lookup.byFileAndName[path+"\x00"+sym.Symbol], sym)
+		}
+	}
+	return lookup
+}
+
+func resolveReference(g *Graph, filePath string, entry FileEntry, ref Reference, lookup symbolLookup, repoPath, goModulePath string) (Reference, bool) {
+	if ref.Symbol == "" {
+		return ref, false
+	}
+
+	if importPath, ok := entry.ImportAliases[ref.Qualifier]; ok && ref.Qualifier != "" {
+		if !isResolvableProjectImport(repoPath, g, filePath, importPath, entry.Language, goModulePath) {
+			return ref, false
+		}
+
+		namespace := namespaceForImportPath(importPath, entry.Language, goModulePath)
+		candidates := lookup.byPackageAndName[namespace+"\x00"+ref.Symbol]
+		if len(candidates) == 1 {
+			return attachResolvedReference(ref, candidates[0]), true
+		}
+	}
+
+	if ref.Qualifier != "" {
+		key := entry.Package + "\x00" + ref.Qualifier + "\x00" + ref.Symbol
+		if candidates := lookup.byOwnerAndName[key]; len(candidates) == 1 {
+			return attachResolvedReference(ref, candidates[0]), true
+		}
+	}
+
+	if ref.ScopeQualified != "" {
+		if scope, ok := lookup.byQualified[ref.ScopeQualified]; ok {
+			key := scope.Package + "\x00" + ref.Symbol
+			if candidates := lookup.byPackageAndName[key]; len(candidates) == 1 {
+				return attachResolvedReference(ref, candidates[0]), true
 			}
 		}
 	}
 
-	// Automatic noise filter: skip symbols defined in 3+ files.
-	// These are generic names like "String", "Close", "Error", "main"
-	// that create meaningless cross-file edges.
-	const maxDefFrequency = 3
-	var skippedNoisy int
+	if candidates := lookup.byFileAndName[filePath+"\x00"+ref.Symbol]; len(candidates) == 1 {
+		return attachResolvedReference(ref, candidates[0]), true
+	}
+	if candidates := lookup.byPackageAndName[entry.Package+"\x00"+ref.Symbol]; len(candidates) == 1 {
+		return attachResolvedReference(ref, candidates[0]), true
+	}
+	if candidates := lookup.byName[ref.Symbol]; len(candidates) == 1 {
+		return attachResolvedReference(ref, candidates[0]), true
+	}
 
-	// Build edges: for each file's references, find the definition file
-	var edges []Edge
-	seen := make(map[string]struct{})
+	return ref, false
+}
+
+func attachResolvedReference(ref Reference, sym Symbol) Reference {
+	ref.ResolvedSymbol = sym.Symbol
+	ref.ResolvedQualified = sym.QualifiedSymbol
+	ref.ResolvedFile = sym.File
+	return ref
+}
+
+func namespaceForImportPath(importPath, langName, goModulePath string) string {
+	importPath = normalizeImportPath(langName, importPath)
+	switch langName {
+	case "go":
+		trimmed := strings.TrimPrefix(importPath, goModulePath)
+		trimmed = strings.Trim(trimmed, "/")
+		if trimmed == "" {
+			return lastSegment(importPath)
+		}
+		return lastSegment(trimmed)
+	case "java":
+		return importPath
+	default:
+		return strings.ReplaceAll(strings.Trim(importPath, "."), "/", ".")
+	}
+}
+
+func buildIndexes(g *Graph) (map[string]Symbol, []SymbolEdge, []Edge, []PackageDependency) {
+	lookup := buildSymbolLookup(g)
+	symbols := lookup.byQualified
+
+	fileEdgesSeen := make(map[string]struct{})
+	symbolEdgesSeen := make(map[string]struct{})
+	packageDepsSeen := make(map[string]struct{})
+
+	var symbolEdges []SymbolEdge
+	var fileEdges []Edge
+	var packageDeps []PackageDependency
+
 	for fromPath, entry := range g.Files {
 		for _, ref := range entry.References {
-			toPath, ok := defIndex[ref.Symbol]
-			if !ok || toPath == fromPath {
+			if ref.ResolvedQualified == "" {
+				continue
+			}
+			target, ok := lookup.byQualified[ref.ResolvedQualified]
+			if !ok {
+				continue
+			}
+			fromQualified := ref.ScopeQualified
+			if fromQualified == "" {
+				continue
+			}
+			source, ok := lookup.byQualified[fromQualified]
+			if !ok {
 				continue
 			}
 
-			// Skip generic symbols defined in many files
-			if defFrequency[ref.Symbol] >= maxDefFrequency {
-				skippedNoisy++
-				continue
+			symbolKey := fromQualified + "\x00" + target.QualifiedSymbol + "\x00" + ref.Kind
+			if _, exists := symbolEdgesSeen[symbolKey]; !exists {
+				symbolEdgesSeen[symbolKey] = struct{}{}
+				symbolEdges = append(symbolEdges, SymbolEdge{
+					From:     fromQualified,
+					To:       target.QualifiedSymbol,
+					Symbol:   ref.Symbol,
+					FromFile: fromPath,
+					ToFile:   target.File,
+					Relation: relationForReferenceKind(ref.Kind),
+				})
 			}
 
-			key := fromPath + "\x00" + toPath + "\x00" + ref.Symbol
-			if _, exists := seen[key]; exists {
-				continue
+			if source.File != target.File {
+				fileKey := source.File + "\x00" + target.File + "\x00" + ref.Symbol
+				if _, exists := fileEdgesSeen[fileKey]; !exists {
+					fileEdgesSeen[fileKey] = struct{}{}
+					fileEdges = append(fileEdges, Edge{
+						From:     source.File,
+						To:       target.File,
+						Symbol:   ref.Symbol,
+						Relation: relationForReferenceKind(ref.Kind),
+					})
+				}
 			}
-			seen[key] = struct{}{}
-			edges = append(edges, Edge{
-				From:     fromPath,
-				To:       toPath,
-				Symbol:   ref.Symbol,
-				Relation: relationForReferenceKind(ref.Kind),
-			})
+
+			if source.Package != "" && target.Package != "" && source.Package != target.Package {
+				pkgKey := source.Package + "\x00" + target.Package
+				if _, exists := packageDepsSeen[pkgKey]; !exists {
+					packageDepsSeen[pkgKey] = struct{}{}
+					packageDeps = append(packageDeps, PackageDependency{
+						From: source.Package,
+						To:   target.Package,
+						Via:  ref.Symbol,
+					})
+				}
+			}
 		}
 	}
 
-	if skippedNoisy > 0 {
-		fmt.Printf("  🔇 [CodeGraph] Filtered %d noisy edges (symbols defined in %d+ files)\n",
-			skippedNoisy, maxDefFrequency)
-	}
-	return edges
+	return symbols, symbolEdges, fileEdges, packageDeps
 }
 
 // GetCurrentCommitSHA returns the current HEAD commit SHA of the repo.

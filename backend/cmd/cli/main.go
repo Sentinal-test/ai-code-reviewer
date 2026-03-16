@@ -221,7 +221,7 @@ func main() {
 		}
 	}
 
-	cgContext, err := cgService.GetContext(context.Background(), changedFiles)
+	cgContext, err := cgService.GetContext(context.Background(), changedFiles, diff)
 	if err != nil {
 		fmt.Printf("⚠️ Code Graph failed: %v\n", err)
 	} else {

@@ -1,7 +1,10 @@
 package codegraph
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -27,18 +30,6 @@ func isBuiltinSymbol(symbol string) bool {
 		"print": true, "println": true, "real": true, "imag": true, "complex": true,
 		"clear": true, "min": true, "max": true,
 
-		// Go fmt/log package (extremely common stdlib)
-		"Printf": true, "Println": true, "Sprintf": true, "Fprintf": true,
-		"Errorf": true, "Print": true, "Sprint": true, "Sprintln": true,
-		"Fatalf": true, "Fatal": true, "Fatalln": true,
-
-		// Go os/env
-		"Getenv": true, "Exit": true, "Setenv": true,
-
-		// Go common stdlib types that are strictly stdlib
-		"Background": true, "TODO": true, "WithCancel": true,
-		"WithTimeout": true, "WithDeadline": true, "WithValue": true,
-
 		// Python builtins
 		"range": true, "self": true, "None": true, "cls": true,
 		"super": true, "type": true, "list": true, "dict": true,
@@ -61,133 +52,167 @@ func isBuiltinSymbol(symbol string) bool {
 		"System": true, "Integer": true, "Long": true, "Double": true, "Float": true,
 		"Boolean": true, "Character": true, "Byte": true, "Short": true,
 		"Override": true, "Deprecated": true, "SuppressWarnings": true,
-		"ArrayList": true, "HashMap": true, "HashSet": true, "LinkedList": true,
-		"Collections": true, "Arrays": true, "Objects": true, "Optional": true,
-		"Collectors": true, "Stream": true,
-
-		// Go stdlib method/type names (extremely common noise)
-		"String": true, "Error": true, "Close": true, "Read": true, "Write": true,
-		"Scan": true, "Query": true, "QueryRow": true, "Exec": true,
-		"Get": true, "Set": true, "Add": true, "Do": true, "Put": true,
-		"Now": true, "Since": true, "After": true, "Sleep": true,
-		"Split": true, "Join": true, "Contains": true, "TrimSpace": true,
-		"HasPrefix": true, "HasSuffix": true, "Replace": true,
-		"ToLower": true, "ToUpper": true, "Trim": true,
-		"Marshal": true, "Unmarshal": true, "Encode": true, "Decode": true,
-		"NewReader": true, "NewWriter": true, "NewRequest": true,
-		"ReadAll": true, "WriteFile": true, "ReadFile": true, "MkdirAll": true,
-		"Handle": true, "HandleFunc": true, "ListenAndServe": true,
-		"Header": true, "ResponseWriter": true, "Request": true,
-		"DB": true, "Prepare": true, "Begin": true, "Commit": true, "Rollback": true,
-		"Context": true, "Client": true,
 	}
 
 	return builtins[symbol]
 }
 
-// isLikelyStdlibMethodCall checks if a method_call reference is likely calling a
-// stdlib/external function rather than a project-defined function. It cross-references
-// the symbol name against known exports of imported stdlib packages.
-func isLikelyStdlibMethodCall(symbol string, imports []string, langName string) bool {
-	if len(imports) == 0 {
+func isTestFile(path string) bool {
+	lower := strings.ToLower(filepath.Base(path))
+	switch {
+	case strings.HasSuffix(lower, "_test.go"):
+		return true
+	case strings.HasSuffix(lower, "_test.py"):
+		return true
+	case strings.HasSuffix(lower, ".test.js"), strings.HasSuffix(lower, ".spec.js"):
+		return true
+	case strings.HasSuffix(lower, ".test.ts"), strings.HasSuffix(lower, ".spec.ts"):
+		return true
+	case strings.HasSuffix(lower, ".test.jsx"), strings.HasSuffix(lower, ".spec.jsx"):
+		return true
+	case strings.HasSuffix(lower, ".test.tsx"), strings.HasSuffix(lower, ".spec.tsx"):
+		return true
+	case strings.HasSuffix(lower, "test.java"), strings.HasSuffix(lower, "tests.java"):
+		return true
+	}
+	return false
+}
+
+func loadGoModulePath(repoPath string) string {
+	if repoPath == "" {
+		return ""
+	}
+
+	file, err := os.Open(filepath.Join(repoPath, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
+}
+
+func namespaceFromPath(path string) string {
+	clean := strings.TrimSuffix(filepath.ToSlash(path), filepath.Ext(path))
+	clean = strings.TrimPrefix(clean, "./")
+	return strings.ReplaceAll(clean, "/", ".")
+}
+
+func lastSegment(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = strings.Trim(value, ".")
+	value = strings.TrimSuffix(value, filepath.Ext(value))
+	parts := strings.FieldsFunc(value, func(r rune) bool { return r == '/' || r == '.' })
+	if len(parts) == 0 {
+		return value
+	}
+	return parts[len(parts)-1]
+}
+
+func normalizeImportPath(langName, importPath string) string {
+	normalized := strings.TrimSpace(strings.Trim(importPath, "\"'`"))
+	if normalized == "" {
+		return ""
+	}
+	switch langName {
+	case "java":
+		normalized = strings.TrimSuffix(normalized, ";")
+	}
+	return normalized
+}
+
+func isResolvableProjectImport(repoPath string, graph *Graph, sourcePath, importPath, langName, goModulePath string) bool {
+	importPath = normalizeImportPath(langName, importPath)
+	if importPath == "" {
 		return false
 	}
 
-	// Build a set of imported packages for fast lookup
-	importSet := make(map[string]bool, len(imports))
-	for _, imp := range imports {
-		importSet[imp] = true
-		// Also store the package name (last segment) for Go - e.g., "path/filepath" → "filepath"
-		if langName == "go" {
-			parts := strings.Split(imp, "/")
-			importSet[parts[len(parts)-1]] = true
+	switch langName {
+	case "go":
+		if goModulePath != "" && strings.HasPrefix(importPath, goModulePath) {
+			trimmed := strings.TrimPrefix(importPath, goModulePath)
+			trimmed = strings.TrimPrefix(trimmed, "/")
+			targetDir := filepath.Join(repoPath, filepath.FromSlash(trimmed))
+			if hasProjectSourceFiles(targetDir) {
+				return true
+			}
 		}
-	}
-
-	// Map of symbol → packages that export it (Go stdlib).
-	// We only need to check if ANY of the listed packages are imported.
-	goStdlibExports := map[string][]string{
-		// os package
-		"Stat": {"os"}, "Open": {"os"}, "OpenFile": {"os"},
-		"ReadFile": {"os"}, "WriteFile": {"os"}, "MkdirAll": {"os"},
-		"RemoveAll": {"os"}, "Remove": {"os"}, "Rename": {"os"},
-		"MkdirTemp": {"os"}, "CreateTemp": {"os"}, "Getwd": {"os"},
-		"Chdir": {"os"}, "Chmod": {"os"}, "Mkdir": {"os"},
-		"Stdin": {"os"}, "Stdout": {"os"}, "Stderr": {"os"},
-		"IsNotExist": {"os"}, "IsExist": {"os"},
-		// filepath package
-		"Abs": {"filepath"}, "Base": {"filepath"}, "Dir": {"filepath"},
-		"Ext": {"filepath"}, "Walk": {"filepath"}, "Rel": {"filepath"},
-		"ToSlash": {"filepath"}, "FromSlash": {"filepath"},
-		"Match": {"filepath"},
-		// strings package
-		"Fields": {"strings"}, "Repeat": {"strings"},
-		"Index": {"strings"}, "Count": {"strings"}, "Title": {"strings"},
-		"EqualFold": {"strings"}, "Map": {"strings"},
-		"NewReplacer": {"strings"}, "TrimRight": {"strings"},
-		"TrimLeft": {"strings"}, "ReplaceAll": {"strings"},
-		"TrimSuffix": {"strings"}, "TrimPrefix": {"strings"},
-		"Builder": {"strings"},
-		// fmt package
-		"Sscanf": {"fmt"}, "Sscan": {"fmt"},
-		// exec package
-		"Command": {"exec"}, "CommandContext": {"exec"},
-		"CombinedOutput": {"exec"},
-		// io package
-		"Copy": {"io"}, "ReadAll": {"io"}, "NopCloser": {"io"},
-		"Pipe": {"io"}, "LimitReader": {"io"},
-		// net/http package
-		"NewRequest": {"http"}, "StatusText": {"http"},
-		// encoding/json
-		"NewDecoder": {"json"}, "NewEncoder": {"json"},
-		"MarshalIndent": {"json"},
-		// regexp
-		"MustCompile": {"regexp"}, "Compile": {"regexp"},
-		"FindAllStringIndex": {"regexp"}, "FindStringSubmatch": {"regexp"},
-		// sort
-		"Slice": {"sort"}, "SliceStable": {"sort"},
-		// sync
-		"WaitGroup": {"sync"}, "Mutex": {"sync"}, "RWMutex": {"sync"},
-		"Once": {"sync"},
-		// time
-		"Duration": {"time"}, "Ticker": {"time"}, "Timer": {"time"},
-		"Parse": {"time"},
-		// bytes
-		"Buffer": {"bytes"},
-		// encoding/pem
-		"EncodeToMemory": {"pem"}, "Block": {"pem"},
-		// crypto
-		"GenerateKey": {"rsa", "ecdsa", "ed25519"},
-		// context
-		"CancelFunc": {"context"},
-		// strconv
-		"Atoi": {"strconv"}, "Itoa": {"strconv"},
-		"FormatInt": {"strconv"}, "ParseInt": {"strconv"},
-		// reflect
-		"TypeOf": {"reflect"}, "ValueOf": {"reflect"},
-		// errors
-		"As": {"errors"}, "Is": {"errors"}, "Unwrap": {"errors"},
-		// testing
-		"Errorf": {"testing"},
-		// Common interface methods on stdlib types
-		"Mode": {"os"}, "Name": {"os"}, "IsDir": {"os"},
-		"IsRegular": {"os"}, "Size": {"os"}, "ModTime": {"os"},
-		// Misc
-		"Bool": {"flag"}, "IntVar": {"flag"}, "StringVar": {"flag"},
-		"Int":    {"github"}, // also flag
-		"String": {"github"}, // also flag, github.String()
-	}
-
-	if langName == "go" {
-		if pkgs, ok := goStdlibExports[symbol]; ok {
-			for _, pkg := range pkgs {
-				if importSet[pkg] {
+		return false
+	case "python":
+		if strings.HasPrefix(importPath, ".") {
+			return true
+		}
+		target := filepath.Join(repoPath, filepath.FromSlash(strings.ReplaceAll(importPath, ".", "/")))
+		if hasProjectSourceFiles(target) || hasProjectSourceFiles(target+".py") {
+			return true
+		}
+		return hasPackageInGraph(graph, importPath)
+	case "javascript", "typescript":
+		if strings.HasPrefix(importPath, ".") {
+			baseDir := filepath.Dir(sourcePath)
+			target := filepath.Join(repoPath, filepath.FromSlash(baseDir), filepath.FromSlash(importPath))
+			if hasProjectSourceFiles(target) {
+				return true
+			}
+			for _, ext := range []string{".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"} {
+				if hasProjectSourceFiles(target + ext) {
 					return true
 				}
 			}
+			return false
+		}
+		target := filepath.Join(repoPath, filepath.FromSlash(importPath))
+		return hasProjectSourceFiles(target) || hasPackageInGraph(graph, namespaceFromPath(importPath))
+	case "java":
+		target := filepath.Join(repoPath, filepath.FromSlash(strings.ReplaceAll(importPath, ".", "/")))
+		return hasProjectSourceFiles(target) || hasProjectSourceFiles(target+".java") || hasPackageInGraph(graph, importPath)
+	default:
+		return false
+	}
+}
+
+func hasProjectSourceFiles(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if !info.IsDir() {
+		return true
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if _, ok := GetLanguageForFile(entry.Name()); ok {
+			return true
 		}
 	}
+	return false
+}
 
+func hasPackageInGraph(graph *Graph, pkg string) bool {
+	if graph == nil || pkg == "" {
+		return false
+	}
+	for _, file := range graph.Files {
+		if file.Package == pkg {
+			return true
+		}
+	}
 	return false
 }
 

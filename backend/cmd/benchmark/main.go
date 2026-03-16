@@ -286,7 +286,7 @@ func runEvalCase(truthPath string, truth Truth, providerStr, apiKey, approach st
 	crossRepoRecall := 1.0
 	var remoteGraphs map[string]*codegraph.RemoteRepoGraph
 	var remoteFetch *remotefetch.Fetcher
-	cgContext, contextErr := cgService.GetContext(ctx, changedFiles)
+	cgContext, contextErr := cgService.GetContext(ctx, changedFiles, normalizedDiff)
 	if contextErr != nil {
 		fmt.Printf("   ⚠️  Code Graph context failed: %v\n", contextErr)
 	} else {

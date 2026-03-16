@@ -314,7 +314,7 @@ func processPR(event *github.PullRequestEvent, db *sql.DB) {
 	wd, _ := os.Getwd()
 	cgService := codegraph.NewService(wd)
 
-	cgContext, err := cgService.GetContext(ctx, changedFiles)
+	cgContext, err := cgService.GetContext(ctx, changedFiles, diff)
 
 	if err != nil {
 		fmt.Printf("⚠️ Code Graph failed: %v\n", err)

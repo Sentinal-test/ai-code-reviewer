@@ -76,6 +76,9 @@ func BuildRemoteGraph(ctx context.Context, repoFullName string, rootDir string) 
 		if !ok || langConfig == nil {
 			continue // Skip unsupported file types
 		}
+		if isTestFile(path) {
+			continue
+		}
 
 		fullPath := filepath.Join(rootDir, path)
 		content, err := os.ReadFile(fullPath)
@@ -90,7 +93,7 @@ func BuildRemoteGraph(ctx context.Context, repoFullName string, rootDir string) 
 		}
 
 		langName := strings.ToLower(langConfig.Name)
-		defs, err := parser.ExtractDefinitionEntries(rootNode, content, langName)
+		defs, err := parser.ExtractDefinitionEntries(rootNode, content, langName, path)
 		if err != nil {
 			fmt.Printf("BuildRemoteGraph Error ExtractDefinitionEntries %s: %v\n", path, err)
 			continue

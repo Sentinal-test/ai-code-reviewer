@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -211,11 +212,12 @@ func (te *ToolExecutor) getSymbolDefinition(args map[string]interface{}) agents.
 	if def == nil {
 		return agents.ToolCallResponse{
 			Name:    "get_symbol_definition",
-			Content: fmt.Sprintf("Symbol '%s' not found in code graph index.", symbol),
+			Content: fmt.Sprintf("Symbol '%s' not found or is ambiguous in the code graph index. Use a more specific qualified symbol if available.", symbol),
 		}
 	}
 
-	result := fmt.Sprintf("Symbol: %s\nFile: %s\nKind: %s\nLine: %d\n", symbol, path, def.Kind, def.Line)
+	result := fmt.Sprintf("Symbol: %s\nQualified: %s\nFile: %s\nKind: %s\nLine: %d\n",
+		def.Symbol, def.QualifiedSymbol, path, def.Kind, def.Line)
 
 	// Read the actual source from the file using line ranges
 	if def.EndLine > 0 && te.RepoPath != "" {
@@ -280,9 +282,8 @@ func (te *ToolExecutor) getCallers(args map[string]interface{}) agents.ToolCallR
 	var callers []string
 	for path, entry := range te.Graph.Files {
 		for _, ref := range entry.References {
-			if ref.Symbol == symbol {
-				callers = append(callers, fmt.Sprintf("  %s (kind: %s)", path, ref.Kind))
-				break // one entry per file
+			if ref.ResolvedQualified == symbol || ref.Symbol == symbol {
+				callers = append(callers, fmt.Sprintf("  %s:%d -> %s (kind: %s)", path, ref.Line, ref.ScopeQualified, ref.Kind))
 			}
 		}
 	}
@@ -294,9 +295,10 @@ func (te *ToolExecutor) getCallers(args map[string]interface{}) agents.ToolCallR
 		}
 	}
 
+	sort.Strings(callers)
 	return agents.ToolCallResponse{
 		Name:    "get_callers",
-		Content: fmt.Sprintf("Symbol '%s' is referenced in %d files:\n%s", symbol, len(callers), strings.Join(callers, "\n")),
+		Content: fmt.Sprintf("Symbol '%s' is referenced at %d call-sites:\n%s", symbol, len(callers), strings.Join(callers, "\n")),
 	}
 }
 

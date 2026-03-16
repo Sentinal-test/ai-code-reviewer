@@ -228,7 +228,7 @@ func (c *Config) Validate() error {
 	root, err := p.ParseFile(ctx, []byte(code), &langConfig)
 	assert.NoError(t, err)
 
-	defs, err := p.ExtractDefinitionEntries(root, []byte(code), "go")
+	defs, err := p.ExtractDefinitionEntries(root, []byte(code), "go", "config.go")
 	assert.NoError(t, err)
 	assert.True(t, len(defs) >= 3, "Expected at least 3 definitions (add, Config, Validate)")
 
@@ -247,4 +247,148 @@ func (c *Config) Validate() error {
 
 	assert.Equal(t, "method", defMap["Validate"].Kind)
 	assert.True(t, defMap["Validate"].EndLine >= defMap["Validate"].Line)
+}
+
+func TestBuildFull_IgnoresTestFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "real.go"), []byte(`package main
+
+func Real() {}
+`), 0644)
+	assert.NoError(t, err)
+
+	err = os.WriteFile(filepath.Join(dir, "real_test.go"), []byte(`package main
+
+func TestReal() {}
+`), 0644)
+	assert.NoError(t, err)
+
+	g, err := BuildFull(context.Background(), dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, g)
+	assert.Equal(t, 1, g.FileCount())
+	_, hasTest := g.Files["real_test.go"]
+	assert.False(t, hasTest)
+}
+
+func TestBuildFull_BuildsSymbolEdgesAndPackageDeps(t *testing.T) {
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/reviewer\n\ngo 1.22\n"), 0644)
+	assert.NoError(t, err)
+
+	err = os.MkdirAll(filepath.Join(dir, "helper"), 0755)
+	assert.NoError(t, err)
+
+	err = os.WriteFile(filepath.Join(dir, "helper", "add.go"), []byte(`package helper
+
+func Add(a, b int) int {
+	return a + b
+}
+`), 0644)
+	assert.NoError(t, err)
+
+	err = os.WriteFile(filepath.Join(dir, "main.go"), []byte(`package main
+
+import "example.com/reviewer/helper"
+
+func Compute() int {
+	return helper.Add(1, 2)
+}
+`), 0644)
+	assert.NoError(t, err)
+
+	g, err := BuildFull(context.Background(), dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, g)
+	assert.NotEmpty(t, g.SymbolEdges)
+	assert.NotEmpty(t, g.PackageDeps)
+
+	var foundSymbolEdge bool
+	for _, edge := range g.SymbolEdges {
+		if edge.From == "main.Compute" && edge.To == "helper.Add" {
+			foundSymbolEdge = true
+			break
+		}
+	}
+	assert.True(t, foundSymbolEdge, "expected symbol edge main.Compute -> helper.Add")
+
+	var foundPackageDep bool
+	for _, dep := range g.PackageDeps {
+		if dep.From == "main" && dep.To == "helper" {
+			foundPackageDep = true
+			break
+		}
+	}
+	assert.True(t, foundPackageDep, "expected package dependency main -> helper")
+}
+
+func TestBuildRuntimeGraphView_UsesChangedFunctions(t *testing.T) {
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/reviewer\n\ngo 1.22\n"), 0644)
+	assert.NoError(t, err)
+	err = os.MkdirAll(filepath.Join(dir, "helper"), 0755)
+	assert.NoError(t, err)
+
+	err = os.WriteFile(filepath.Join(dir, "helper", "add.go"), []byte(`package helper
+
+func Add(a, b int) int {
+	return a + b
+}
+`), 0644)
+	assert.NoError(t, err)
+
+	mainCode := `package main
+
+import "example.com/reviewer/helper"
+
+func Compute() int {
+	value := helper.Add(1, 2)
+	return value * 2
+}
+
+func IgnoreMe() int {
+	return 1
+}
+`
+	err = os.WriteFile(filepath.Join(dir, "main.go"), []byte(mainCode), 0644)
+	assert.NoError(t, err)
+
+	g, err := BuildFull(context.Background(), dir)
+	assert.NoError(t, err)
+
+	diff := `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -4,3 +4,4 @@
+ func Compute() int {
++	value := helper.Add(1, 2)
+ 	return value * 2
+ }
+`
+	view := g.BuildRuntimeGraphView(diff, map[string]string{"main.go": mainCode}, 2)
+	assert.NotNil(t, view)
+	assert.NotEmpty(t, view.ChangedSymbols)
+
+	var changedCompute bool
+	for _, sym := range view.ChangedSymbols {
+		if sym.QualifiedSymbol == "main.Compute" {
+			changedCompute = true
+			break
+		}
+	}
+	assert.True(t, changedCompute, "expected changed symbol main.Compute")
+
+	var includesCallee bool
+	for _, edges := range view.Callees {
+		for _, edge := range edges {
+			if edge.To == "helper.Add" {
+				includesCallee = true
+				break
+			}
+		}
+	}
+	assert.True(t, includesCallee, "expected runtime view to include helper.Add callee")
 }
