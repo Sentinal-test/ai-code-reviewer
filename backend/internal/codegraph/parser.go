@@ -10,6 +10,17 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
+var (
+	goImportRe      = regexp.MustCompile(`(?m)^\s*(?:import\s+)?(?:(\w+)\s+)?"([^"]+)"`)
+	pyImportRe      = regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z0-9_.,\s]+)$`)
+	pyFromImportRe  = regexp.MustCompile(`(?m)^\s*from\s+([A-Za-z0-9_\.]+)\s+import\s+([A-Za-z0-9_,\s\*()]+)`)
+	jsNsImportRe    = regexp.MustCompile(`(?m)^\s*import\s+\*\s+as\s+([A-Za-z0-9_$]+)\s+from\s+['"]([^'"]+)['"]`)
+	jsDefaultImportRe = regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z0-9_$]+)\s*(?:,\s*\{[^}]+\})?\s+from\s+['"]([^'"]+)['"]`)
+	jsNamedImportRe = regexp.MustCompile(`(?m)^\s*import\s+(?:[A-Za-z0-9_$]+\s*,\s*)?\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]`)
+	javaImportRe    = regexp.MustCompile(`(?m)^\s*import\s+(?:static\s+)?([A-Za-z0-9_.]+)\s*;`)
+	goOwnerRe       = regexp.MustCompile(`func\s*\(\s*[^)]*\*?([A-Za-z_][A-Za-z0-9_]*)\s*\)\s+[A-Za-z_][A-Za-z0-9_]*`)
+)
+
 // Parser handles AST parsing and symbol extraction
 type Parser struct {
 	// We could cache parsers here if needed
@@ -400,14 +411,12 @@ func (p *Parser) ExtractImportSpecs(content []byte, langName string) []ImportSpe
 
 	switch langName {
 	case "go":
-		re := regexp.MustCompile(`(?m)^\s*(?:import\s+)?(?:(\w+)\s+)?"([^"]+)"`)
-		matches := re.FindAllStringSubmatch(text, -1)
+		matches := goImportRe.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			add(m[2], m[1])
 		}
 	case "python":
-		importRe := regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z0-9_.,\s]+)$`)
-		for _, m := range importRe.FindAllStringSubmatch(text, -1) {
+		for _, m := range pyImportRe.FindAllStringSubmatch(text, -1) {
 			parts := strings.Split(m[1], ",")
 			for _, part := range parts {
 				part = strings.TrimSpace(part)
@@ -423,10 +432,15 @@ func (p *Parser) ExtractImportSpecs(content []byte, langName string) []ImportSpe
 				add(path, alias)
 			}
 		}
-		fromRe := regexp.MustCompile(`(?m)^\s*from\s+([A-Za-z0-9_\.]+)\s+import\s+([A-Za-z0-9_,\s\*]+)$`)
-		for _, m := range fromRe.FindAllStringSubmatch(text, -1) {
+		for _, m := range pyFromImportRe.FindAllStringSubmatch(text, -1) {
 			modulePath := strings.TrimSpace(m[1])
-			parts := strings.Split(m[2], ",")
+			// Support multi-line parenthesized imports by cleaning up m[2]
+			importContent := m[2]
+			importContent = strings.ReplaceAll(importContent, "(", "")
+			importContent = strings.ReplaceAll(importContent, ")", "")
+			importContent = strings.ReplaceAll(importContent, "\n", " ")
+
+			parts := strings.Split(importContent, ",")
 			for _, part := range parts {
 				part = strings.TrimSpace(part)
 				if part == "" || part == "*" {
@@ -442,16 +456,13 @@ func (p *Parser) ExtractImportSpecs(content []byte, langName string) []ImportSpe
 			}
 		}
 	case "javascript", "typescript":
-		nsRe := regexp.MustCompile(`(?m)^\s*import\s+\*\s+as\s+([A-Za-z0-9_$]+)\s+from\s+['"]([^'"]+)['"]`)
-		for _, m := range nsRe.FindAllStringSubmatch(text, -1) {
+		for _, m := range jsNsImportRe.FindAllStringSubmatch(text, -1) {
 			add(m[2], m[1])
 		}
-		defaultRe := regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z0-9_$]+)\s+from\s+['"]([^'"]+)['"]`)
-		for _, m := range defaultRe.FindAllStringSubmatch(text, -1) {
+		for _, m := range jsDefaultImportRe.FindAllStringSubmatch(text, -1) {
 			add(m[2], m[1])
 		}
-		namedRe := regexp.MustCompile(`(?m)^\s*import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]`)
-		for _, m := range namedRe.FindAllStringSubmatch(text, -1) {
+		for _, m := range jsNamedImportRe.FindAllStringSubmatch(text, -1) {
 			for _, part := range strings.Split(m[1], ",") {
 				part = strings.TrimSpace(part)
 				if part == "" {
@@ -466,8 +477,7 @@ func (p *Parser) ExtractImportSpecs(content []byte, langName string) []ImportSpe
 			}
 		}
 	case "java":
-		re := regexp.MustCompile(`(?m)^\s*import\s+(?:static\s+)?([A-Za-z0-9_.]+)\s*;`)
-		for _, m := range re.FindAllStringSubmatch(text, -1) {
+		for _, m := range javaImportRe.FindAllStringSubmatch(text, -1) {
 			add(m[1], lastSegment(m[1]))
 		}
 	}
@@ -526,8 +536,7 @@ func extractDefinitionOwner(node *sitter.Node, content []byte, langName, kind st
 			parent := node.Parent()
 			if parent != nil {
 				methodText := parent.Content(content)
-				re := regexp.MustCompile(`func\s*\(\s*[^)]*\*?([A-Za-z_][A-Za-z0-9_]*)\s*\)\s+[A-Za-z_][A-Za-z0-9_]*`)
-				if m := re.FindStringSubmatch(methodText); len(m) == 2 {
+				if m := goOwnerRe.FindStringSubmatch(methodText); len(m) == 2 {
 					return m[1]
 				}
 			}

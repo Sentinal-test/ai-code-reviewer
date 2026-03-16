@@ -247,6 +247,8 @@ func sortedRuntimeEdges(m map[string][]SymbolEdge) []SymbolEdge {
 
 func extractChangedLines(diff string) map[string]map[int]struct{} {
 	result := make(map[string]map[int]struct{})
+	// Normalize line endings for Windows compatibility
+	diff = strings.ReplaceAll(diff, "\r", "")
 	lines := strings.Split(diff, "\n")
 	var currentFile string
 	currentLine := 0

@@ -399,6 +399,9 @@ func resolveReference(g *Graph, filePath string, entry FileEntry, ref Reference,
 		if len(candidates) == 1 {
 			return attachResolvedReference(ref, candidates[0]), true
 		}
+		// Severe fix: If alias matched but symbol not found, DO NOT fall through to global search.
+		// This prevents "uniquely" resolving to a random same-named symbol in another repo.
+		return ref, false
 	}
 
 	if ref.Qualifier != "" {
@@ -475,26 +478,36 @@ func buildIndexes(g *Graph) (map[string]Symbol, []SymbolEdge, []Edge, []PackageD
 			if !ok {
 				continue
 			}
+
+			// Severe fix: If ref is top-level (no ScopeQualified), use file/package as source.
+			// This ensures fileEdges and packageDeps are created for non-encapsulated code.
 			fromQualified := ref.ScopeQualified
+			var source Symbol
 			if fromQualified == "" {
-				continue
-			}
-			source, ok := lookup.byQualified[fromQualified]
-			if !ok {
-				continue
+				source = Symbol{
+					File:    fromPath,
+					Package: entry.Package,
+				}
+			} else {
+				source, ok = lookup.byQualified[fromQualified]
+				if !ok {
+					continue
+				}
 			}
 
-			symbolKey := fromQualified + "\x00" + target.QualifiedSymbol + "\x00" + ref.Kind
-			if _, exists := symbolEdgesSeen[symbolKey]; !exists {
-				symbolEdgesSeen[symbolKey] = struct{}{}
-				symbolEdges = append(symbolEdges, SymbolEdge{
-					From:     fromQualified,
-					To:       target.QualifiedSymbol,
-					Symbol:   ref.Symbol,
-					FromFile: fromPath,
-					ToFile:   target.File,
-					Relation: relationForReferenceKind(ref.Kind),
-				})
+			if fromQualified != "" {
+				symbolKey := fromQualified + "\x00" + target.QualifiedSymbol + "\x00" + ref.Kind
+				if _, exists := symbolEdgesSeen[symbolKey]; !exists {
+					symbolEdgesSeen[symbolKey] = struct{}{}
+					symbolEdges = append(symbolEdges, SymbolEdge{
+						From:     fromQualified,
+						To:       target.QualifiedSymbol,
+						Symbol:   ref.Symbol,
+						FromFile: fromPath,
+						ToFile:   target.File,
+						Relation: relationForReferenceKind(ref.Kind),
+					})
+				}
 			}
 
 			if source.File != target.File {
