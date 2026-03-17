@@ -49,6 +49,17 @@ func RunConsolidation(
 		ResponseJSON: true,
 	}
 
+	// DIRECT VERBOSE LOGGING (Requested by USER)
+	fmt.Println("\n" + strings.Repeat("!", 80))
+	fmt.Println("📢 [LLM DEBUG] CONSOLIDATOR SYSTEM PROMPT")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println(systemPrompt)
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println("📢 [LLM DEBUG] CONSOLIDATOR USER PROMPT")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println(prompt)
+	fmt.Println(strings.Repeat("!", 80) + "\n")
+
 	start := time.Now()
 	resp, err := provider.GenerateContent(ctx, req)
 	elapsed := time.Since(start)
@@ -81,6 +92,13 @@ func RunConsolidation(
 		len(result.Comments), elapsed.Seconds(),
 		resp.InputTokens,
 		resp.OutputTokens)
+
+	// DIRECT VERBOSE LOGGING (Requested by USER)
+	fmt.Println("\n" + strings.Repeat("*", 80))
+	fmt.Println("🤖 [LLM DEBUG] CONSOLIDATOR RAW RESPONSE")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println(resp.Text)
+	fmt.Println(strings.Repeat("*", 80) + "\n")
 
 	return &result
 }

@@ -376,6 +376,13 @@ func RunReview(ctx context.Context, provider LLMProvider, diff string, changedFi
 	fmt.Printf("  - PR Intent Context:   %d chars\n", len(buildPRContextSummary(prContext)))
 	fmt.Printf("  - Total Prompt Size:   %d chars\n", len(prompt))
 	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+
+	// DIRECT VERBOSE LOGGING (Requested by USER)
+	fmt.Println("\n" + strings.Repeat("#", 80))
+	fmt.Println("🧠 [LLM DEBUG] RUN_REVIEW FULL PROMPT")
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println(prompt)
+	fmt.Println(strings.Repeat("#", 80) + "\n")
 	fmt.Println()
 
 	// 2. Prepare Request
