@@ -12,8 +12,9 @@ func TestExtractLocalSignals(t *testing.T) {
 		Files: map[string]codegraph.FileEntry{
 			"auth/client.go": {
 				Language: "go",
+				Package:  "auth",
 				Definitions: []codegraph.Definition{
-					{Symbol: "ValidateToken", Kind: "function"},
+					{Symbol: "ValidateToken", QualifiedSymbol: "auth.ValidateToken", Kind: "function"},
 					{Symbol: "internalCheck", Kind: "function"},
 				},
 				Imports: []string{"fmt", "github.com/google/go-github/v60/github"},
@@ -36,6 +37,12 @@ func TestExtractLocalSignals(t *testing.T) {
 	if signals.ChangedImports["fmt"] == "" {
 		t.Error(" expected fmt to be in ChangedImports")
 	}
+	if signals.ChangedQualifiedExports["auth.ValidateToken"] == "" {
+		t.Error(" expected auth.ValidateToken to be in ChangedQualifiedExports")
+	}
+	if signals.ChangedPackages["auth"] == "" {
+		t.Error(" expected auth package to be in ChangedPackages")
+	}
 }
 
 func TestExtractRemoteFacts(t *testing.T) {
@@ -44,8 +51,9 @@ func TestExtractRemoteFacts(t *testing.T) {
 		Files: map[string]codegraph.RemoteFileEntry{
 			"main.go": {
 				Language: "go",
+				Package:  "servicea",
 				Definitions: []codegraph.Definition{
-					{Symbol: "ServiceAHandler", Kind: "function"},
+					{Symbol: "ServiceAHandler", QualifiedSymbol: "servicea.ServiceAHandler", Kind: "function"},
 				},
 				Imports: []string{"fmt"},
 			},
@@ -61,36 +69,51 @@ func TestExtractRemoteFacts(t *testing.T) {
 	if len(facts.Imports) != 1 || facts.Imports["fmt"] == "" {
 		t.Errorf("unexpected imports: %v", facts.Imports)
 	}
+	if facts.QualifiedExports["servicea.ServiceAHandler"] == "" {
+		t.Errorf("unexpected qualified exports: %v", facts.QualifiedExports)
+	}
+	if facts.Packages["servicea"] == "" {
+		t.Errorf("unexpected packages: %v", facts.Packages)
+	}
 }
 
 func TestMatchRepos(t *testing.T) {
 	signals := LocalSignals{
-		ProjectName:    "auth-service",
-		ChangedExports: map[string]string{"ValidateToken": "go"},
-		ChangedImports: map[string]string{"github.com/google/uuid": "go"},
+		ProjectName:        "auth-service",
+		ChangedExports:     map[string]string{"ValidateToken": "go"},
+		ChangedImports:     map[string]string{"github.com/google/uuid": "go"},
+		ChangedPackageDirs: map[string]string{"auth": "go"},
 	}
 
 	remoteGraphs := map[string]*codegraph.RemoteRepoGraph{
-		"org/consumer-repo": {
-			RepoFullName: "org/consumer-repo",
+		"org/consumer-uses-export": {
+			RepoFullName: "org/consumer-uses-export",
 			Files: map[string]codegraph.RemoteFileEntry{
 				"main.go": {
-					Language: "go",
-					Imports:  []string{"github.com/google/uuid"},
-					Definitions: []codegraph.Definition{
-						{Symbol: "UnrelatedSymbol"},
+					Language:      "go",
+					Imports:       []string{"auth-service/auth"},
+					ImportAliases: map[string]string{"auth": "auth-service/auth"},
+					References: []codegraph.Reference{
+						{Symbol: "ValidateToken", Qualifier: "auth", Line: 9},
 					},
 				},
 			},
 		},
-		"org/consumer-symbol": {
-			RepoFullName: "org/consumer-symbol",
+		"org/consumer-imports-package": {
+			RepoFullName: "org/consumer-imports-package",
 			Files: map[string]codegraph.RemoteFileEntry{
 				"main.go": {
 					Language: "go",
-					Definitions: []codegraph.Definition{
-						{Symbol: "ValidateToken"},
-					},
+					Imports:  []string{"auth-service/auth"},
+				},
+			},
+		},
+		"org/consumer-shared-dep-only": {
+			RepoFullName: "org/consumer-shared-dep-only",
+			Files: map[string]codegraph.RemoteFileEntry{
+				"main.go": {
+					Language: "go",
+					Imports:  []string{"fmt"},
 				},
 			},
 		},
@@ -102,17 +125,17 @@ func TestMatchRepos(t *testing.T) {
 		t.Fatalf("expected 2 candidates, got %d", len(candidates))
 	}
 
-	var foundImport, foundSymbol bool
+	var foundConsumer, foundImport bool
 	for _, c := range candidates {
-		if strings.Contains(c.Reason, "Shared import context match") {
-			foundImport = true
+		if strings.Contains(c.Reason, "Consumes changed exported symbol") {
+			foundConsumer = true
 		}
-		if strings.Contains(c.Reason, "Shared symbol match") {
-			foundSymbol = true
+		if strings.Contains(c.Reason, "Imports changed project package") {
+			foundImport = true
 		}
 	}
 
-	if !foundImport || !foundSymbol {
+	if !foundImport || !foundConsumer {
 		t.Errorf("expected both import and symbol matches, got reasons: %v", candidates)
 	}
 }

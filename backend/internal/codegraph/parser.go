@@ -3,9 +3,22 @@ package codegraph
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
+)
+
+var (
+	goImportRe      = regexp.MustCompile(`(?m)^\s*(?:import\s+)?(?:(\w+)\s+)?"([^"]+)"`)
+	pyImportRe      = regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z0-9_.,\s]+)$`)
+	pyFromImportRe  = regexp.MustCompile(`(?m)^\s*from\s+([A-Za-z0-9_\.]+)\s+import\s+([A-Za-z0-9_,\s\*()]+)`)
+	jsNsImportRe    = regexp.MustCompile(`(?m)^\s*import\s+\*\s+as\s+([A-Za-z0-9_$]+)\s+from\s+['"]([^'"]+)['"]`)
+	jsDefaultImportRe = regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z0-9_$]+)\s*(?:,\s*\{[^}]+\})?\s+from\s+['"]([^'"]+)['"]`)
+	jsNamedImportRe = regexp.MustCompile(`(?m)^\s*import\s+(?:[A-Za-z0-9_$]+\s*,\s*)?\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]`)
+	javaImportRe    = regexp.MustCompile(`(?m)^\s*import\s+(?:static\s+)?([A-Za-z0-9_.]+)\s*;`)
+	goOwnerRe       = regexp.MustCompile(`func\s*\(\s*[^)]*\*?([A-Za-z_][A-Za-z0-9_]*)\s*\)\s+[A-Za-z_][A-Za-z0-9_]*`)
 )
 
 // Parser handles AST parsing and symbol extraction
@@ -14,8 +27,20 @@ type Parser struct {
 }
 
 type Reference struct {
-	Symbol string `json:"symbol"`
-	Kind   string `json:"kind"`
+	Symbol            string `json:"symbol"`
+	Kind              string `json:"kind"`
+	Line              int    `json:"line,omitempty"`
+	Qualifier         string `json:"qualifier,omitempty"`
+	ScopeSymbol       string `json:"scope_symbol,omitempty"`
+	ScopeQualified    string `json:"scope_qualified,omitempty"`
+	ResolvedSymbol    string `json:"resolved_symbol,omitempty"`
+	ResolvedQualified string `json:"resolved_qualified,omitempty"`
+	ResolvedFile      string `json:"resolved_file,omitempty"`
+}
+
+type ImportSpec struct {
+	Path  string `json:"path"`
+	Alias string `json:"alias"`
 }
 
 func NewParser() *Parser {
@@ -49,6 +74,15 @@ func (p *Parser) ExtractReferences(root *sitter.Node, content []byte, langName s
 
 // ExtractReferenceDetails returns symbol references with semantic usage kind.
 func (p *Parser) ExtractReferenceDetails(root *sitter.Node, content []byte, langName string) ([]Reference, error) {
+	return p.extractReferenceDetails(root, content, langName, nil)
+}
+
+// ExtractReferenceDetailsWithDefinitions annotates references with their enclosing symbol.
+func (p *Parser) ExtractReferenceDetailsWithDefinitions(root *sitter.Node, content []byte, langName string, defs []Definition) ([]Reference, error) {
+	return p.extractReferenceDetails(root, content, langName, defs)
+}
+
+func (p *Parser) extractReferenceDetails(root *sitter.Node, content []byte, langName string, defs []Definition) ([]Reference, error) {
 	type referenceQuery struct {
 		Kind  string
 		Query string
@@ -112,17 +146,35 @@ func (p *Parser) ExtractReferenceDetails(root *sitter.Node, content []byte, lang
 				break
 			}
 			for _, capture := range m.Captures {
-				symbol := capture.Node.Content(content)
+				node := capture.Node
+				symbol := node.Content(content)
 				if symbol == "" {
 					continue
 				}
 
-				key := refQuery.Kind + "\x00" + symbol
+				line := int(node.StartPoint().Row) + 1
+				qualifier := extractQualifier(node, content, langName)
+				scope := findEnclosingDefinition(defs, line)
+
+				key := strings.Join([]string{
+					refQuery.Kind,
+					symbol,
+					qualifier,
+					fmt.Sprintf("%d", line),
+					scope.QualifiedSymbol,
+				}, "\x00")
 				if _, exists := seen[key]; exists {
 					continue
 				}
 				seen[key] = struct{}{}
-				references = append(references, Reference{Symbol: symbol, Kind: refQuery.Kind})
+				references = append(references, Reference{
+					Symbol:         symbol,
+					Kind:           refQuery.Kind,
+					Line:           line,
+					Qualifier:      qualifier,
+					ScopeSymbol:    scope.Symbol,
+					ScopeQualified: scope.QualifiedSymbol,
+				})
 			}
 		}
 
@@ -208,7 +260,7 @@ func (p *Parser) ExtractDefinitions(root *sitter.Node, content []byte, langName 
 }
 
 // ExtractDefinitionEntries returns definitions with line numbers and kinds for graph persistence.
-func (p *Parser) ExtractDefinitionEntries(root *sitter.Node, content []byte, langName string) ([]Definition, error) {
+func (p *Parser) ExtractDefinitionEntries(root *sitter.Node, content []byte, langName string, filePath string) ([]Definition, error) {
 	type defQuery struct {
 		Kind  string // "function", "method", "type", "class", "interface"
 		Query string
@@ -258,6 +310,7 @@ func (p *Parser) ExtractDefinitionEntries(root *sitter.Node, content []byte, lan
 
 	var defs []Definition
 	seen := make(map[string]struct{})
+	namespace := p.ExtractNamespace(root, content, langName, filePath)
 
 	for _, dq := range queries {
 		q, err := sitter.NewQuery([]byte(dq.Query), langConfig.Grammar)
@@ -297,12 +350,17 @@ func (p *Parser) ExtractDefinitionEntries(root *sitter.Node, content []byte, lan
 				}
 
 				endLine := int(parent.EndPoint().Row) + 1 // tree-sitter is 0-indexed
+				owner := extractDefinitionOwner(node, content, langName, dq.Kind)
+				qualified := buildQualifiedSymbol(namespace, owner, symbol)
 
 				defs = append(defs, Definition{
-					Symbol:  symbol,
-					Kind:    dq.Kind,
-					Line:    int(node.StartPoint().Row) + 1,
-					EndLine: endLine,
+					Symbol:          symbol,
+					QualifiedSymbol: qualified,
+					Package:         namespace,
+					Owner:           owner,
+					Kind:            dq.Kind,
+					Line:            int(node.StartPoint().Row) + 1,
+					EndLine:         endLine,
 				})
 			}
 		}
@@ -312,6 +370,249 @@ func (p *Parser) ExtractDefinitionEntries(root *sitter.Node, content []byte, lan
 	}
 
 	return defs, nil
+}
+
+// ExtractNamespace returns the package/module namespace for the file.
+func (p *Parser) ExtractNamespace(root *sitter.Node, content []byte, langName, filePath string) string {
+	switch langName {
+	case "go":
+		if pkg := querySingleCapture(root, content, SupportedLanguages["go"].Grammar, `(package_clause (package_identifier) @pkg)`); pkg != "" {
+			return pkg
+		}
+	case "java":
+		if pkg := querySingleCapture(root, content, SupportedLanguages["java"].Grammar, `(package_declaration (scoped_identifier) @pkg)`); pkg != "" {
+			return pkg
+		}
+	}
+	return namespaceFromPath(filePath)
+}
+
+// ExtractImportSpecs returns imports with their local aliases/bindings.
+func (p *Parser) ExtractImportSpecs(content []byte, langName string) []ImportSpec {
+	text := string(content)
+	var specs []ImportSpec
+	seen := make(map[string]struct{})
+	add := func(path, alias string) {
+		path = normalizeImportPath(langName, path)
+		alias = strings.TrimSpace(alias)
+		if path == "" {
+			return
+		}
+		if alias == "" {
+			alias = lastSegment(path)
+		}
+		key := path + "\x00" + alias
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		specs = append(specs, ImportSpec{Path: path, Alias: alias})
+	}
+
+	switch langName {
+	case "go":
+		matches := goImportRe.FindAllStringSubmatch(text, -1)
+		for _, m := range matches {
+			add(m[2], m[1])
+		}
+	case "python":
+		for _, m := range pyImportRe.FindAllStringSubmatch(text, -1) {
+			parts := strings.Split(m[1], ",")
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				chunks := strings.Split(part, " as ")
+				path := strings.TrimSpace(chunks[0])
+				alias := ""
+				if len(chunks) > 1 {
+					alias = strings.TrimSpace(chunks[1])
+				}
+				add(path, alias)
+			}
+		}
+		for _, m := range pyFromImportRe.FindAllStringSubmatch(text, -1) {
+			modulePath := strings.TrimSpace(m[1])
+			// Support multi-line parenthesized imports by cleaning up m[2]
+			importContent := m[2]
+			importContent = strings.ReplaceAll(importContent, "(", "")
+			importContent = strings.ReplaceAll(importContent, ")", "")
+			importContent = strings.ReplaceAll(importContent, "\n", " ")
+
+			parts := strings.Split(importContent, ",")
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if part == "" || part == "*" {
+					continue
+				}
+				chunks := strings.Split(part, " as ")
+				symbol := strings.TrimSpace(chunks[0])
+				alias := symbol
+				if len(chunks) > 1 {
+					alias = strings.TrimSpace(chunks[1])
+				}
+				add(modulePath+"."+symbol, alias)
+			}
+		}
+	case "javascript", "typescript":
+		for _, m := range jsNsImportRe.FindAllStringSubmatch(text, -1) {
+			add(m[2], m[1])
+		}
+		for _, m := range jsDefaultImportRe.FindAllStringSubmatch(text, -1) {
+			add(m[2], m[1])
+		}
+		for _, m := range jsNamedImportRe.FindAllStringSubmatch(text, -1) {
+			for _, part := range strings.Split(m[1], ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				chunks := strings.Split(part, " as ")
+				alias := strings.TrimSpace(chunks[0])
+				if len(chunks) > 1 {
+					alias = strings.TrimSpace(chunks[1])
+				}
+				add(m[2], alias)
+			}
+		}
+	case "java":
+		for _, m := range javaImportRe.FindAllStringSubmatch(text, -1) {
+			add(m[1], lastSegment(m[1]))
+		}
+	}
+
+	sort.Slice(specs, func(i, j int) bool {
+		if specs[i].Alias == specs[j].Alias {
+			return specs[i].Path < specs[j].Path
+		}
+		return specs[i].Alias < specs[j].Alias
+	})
+	return specs
+}
+
+func querySingleCapture(root *sitter.Node, content []byte, grammar *sitter.Language, query string) string {
+	if root == nil || grammar == nil {
+		return ""
+	}
+	q, err := sitter.NewQuery([]byte(query), grammar)
+	if err != nil {
+		return ""
+	}
+	defer q.Close()
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
+	qc.Exec(q, root)
+	if m, ok := qc.NextMatch(); ok {
+		for _, capture := range m.Captures {
+			value := strings.TrimSpace(capture.Node.Content(content))
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func buildQualifiedSymbol(namespace, owner, symbol string) string {
+	base := strings.Trim(strings.Join([]string{namespace, owner}, "."), ".")
+	if base == "" {
+		return symbol
+	}
+	if symbol == "" {
+		return base
+	}
+	return base + "." + symbol
+}
+
+func extractDefinitionOwner(node *sitter.Node, content []byte, langName, kind string) string {
+	if node == nil {
+		return ""
+	}
+
+	switch langName {
+	case "go":
+		if kind == "method" {
+			parent := node.Parent()
+			if parent != nil {
+				methodText := parent.Content(content)
+				if m := goOwnerRe.FindStringSubmatch(methodText); len(m) == 2 {
+					return m[1]
+				}
+			}
+		}
+	case "python", "javascript", "typescript", "java":
+		for current := node.Parent(); current != nil; current = current.Parent() {
+			switch current.Type() {
+			case "class_definition", "class_declaration", "interface_declaration":
+				for i := 0; i < int(current.NamedChildCount()); i++ {
+					child := current.NamedChild(i)
+					switch child.Type() {
+					case "identifier", "type_identifier":
+						return child.Content(content)
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func extractQualifier(node *sitter.Node, content []byte, langName string) string {
+	if node == nil {
+		return ""
+	}
+	parent := node.Parent()
+	if parent == nil {
+		return ""
+	}
+
+	switch langName {
+	case "go":
+		if parent.Type() == "selector_expression" {
+			if operand := parent.ChildByFieldName("operand"); operand != nil {
+				return operand.Content(content)
+			}
+		}
+	case "python":
+		if parent.Type() == "attribute" {
+			if value := parent.ChildByFieldName("object"); value != nil {
+				return value.Content(content)
+			}
+			if value := parent.ChildByFieldName("value"); value != nil {
+				return value.Content(content)
+			}
+		}
+	case "javascript", "typescript":
+		if parent.Type() == "member_expression" {
+			if value := parent.ChildByFieldName("object"); value != nil {
+				return value.Content(content)
+			}
+		}
+	case "java":
+		if parent.Type() == "method_invocation" {
+			if value := parent.ChildByFieldName("object"); value != nil {
+				return value.Content(content)
+			}
+		}
+	}
+	return ""
+}
+
+func findEnclosingDefinition(defs []Definition, line int) Definition {
+	var best Definition
+	bestSpan := 0
+	for _, def := range defs {
+		if line < def.Line || (def.EndLine > 0 && line > def.EndLine) {
+			continue
+		}
+		span := def.EndLine - def.Line
+		if best.QualifiedSymbol == "" || span < bestSpan {
+			best = def
+			bestSpan = span
+		}
+	}
+	return best
 }
 
 // ExtractDefinitionSnippet finds the definition of a specific symbol and returns
@@ -410,55 +711,9 @@ func (p *Parser) ExtractDefinitionSnippet(root *sitter.Node, content []byte, lan
 // ExtractImports extracts import paths from a source file's AST.
 // Returns a list of import path strings (e.g., "fmt", "os/exec", "code-review/backend/internal/llm").
 func (p *Parser) ExtractImports(root *sitter.Node, content []byte, langName string) []string {
-	var queryStr string
-	switch langName {
-	case "go":
-		queryStr = `(import_spec path: (interpreted_string_literal) @import_path)`
-	case "python":
-		queryStr = `(import_from_statement module_name: (dotted_name) @import_path)`
-	case "javascript", "typescript":
-		queryStr = `(import_statement source: (string) @import_path)`
-	case "java":
-		queryStr = `(import_declaration (scoped_identifier) @import_path)`
-	default:
-		return nil
-	}
-
-	langConfig, ok := SupportedLanguages[langName]
-	if !ok {
-		return nil
-	}
-
-	q, err := sitter.NewQuery([]byte(queryStr), langConfig.Grammar)
-	if err != nil {
-		return nil
-	}
-	defer q.Close()
-
-	qc := sitter.NewQueryCursor()
-	defer qc.Close()
-	qc.Exec(q, root)
-
 	var imports []string
-	seen := make(map[string]struct{})
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-		for _, capture := range m.Captures {
-			importPath := capture.Node.Content(content)
-			// Strip quotes from Go/JS/TS imports: "fmt" -> fmt
-			importPath = strings.Trim(importPath, "\"'`")
-			if importPath == "" {
-				continue
-			}
-			if _, exists := seen[importPath]; exists {
-				continue
-			}
-			seen[importPath] = struct{}{}
-			imports = append(imports, importPath)
-		}
+	for _, spec := range p.ExtractImportSpecs(content, langName) {
+		imports = append(imports, spec.Path)
 	}
 	return imports
 }

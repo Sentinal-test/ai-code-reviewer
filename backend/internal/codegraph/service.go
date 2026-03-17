@@ -53,11 +53,22 @@ func (s *Service) SetGraph(g *Graph) {
 // GetContext analyzes changed files and returns compact summaries:
 // - per dependency file behavior summary
 // - a context-graph relationship summary with data flow
-func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string) (map[string]string, error) {
+func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string, diff string) (map[string]string, error) {
 	startTime := time.Now()
 	stats := &BuildStats{Mode: "analysis"}
 
 	fmt.Println("🔍 [CodeGraph] Starting deterministic context analysis...")
+
+	if s.Graph != nil && diff != "" {
+		if runtimeResult := s.getRuntimeSliceContext(ctx, changedFiles, diff); len(runtimeResult) > 0 {
+			stats.TotalFiles = len(changedFiles)
+			stats.Duration = time.Since(startTime)
+			stats.Print()
+			fmt.Printf("✅ [CodeGraph] Runtime slice complete. Produced %d context entries.\n", len(runtimeResult))
+			return runtimeResult, nil
+		}
+		fmt.Println("⚠️ [CodeGraph] Runtime slice unavailable; falling back to scan-based dependency discovery.")
+	}
 
 	referencedSymbols := make(map[string]string) // symbol -> lang
 	refsByChangedFile := make(map[string][]Reference)
@@ -260,6 +271,100 @@ func (s *Service) GetContext(ctx context.Context, changedFiles map[string]string
 		}
 	}
 	return result, nil
+}
+
+func (s *Service) getRuntimeSliceContext(ctx context.Context, changedFiles map[string]string, diff string) map[string]string {
+	_ = ctx
+	if s.Graph == nil {
+		return nil
+	}
+
+	view := s.Graph.BuildRuntimeGraphView(diff, changedFiles, 2)
+	if view == nil || len(view.Symbols) == 0 {
+		return nil
+	}
+
+	result := make(map[string]string)
+	result["_codegraph/runtime_slice"] = FormatRuntimeGraphView(view)
+
+	depsByFile := make(map[string]*dependencyInfo)
+	for _, sym := range view.Symbols {
+		if _, changed := changedFiles[sym.File]; changed {
+			continue
+		}
+
+		dep := depsByFile[sym.File]
+		if dep == nil {
+			dep = &dependencyInfo{
+				Symbols:     make(map[string]struct{}),
+				Definitions: make(map[string]struct{}),
+			}
+			depsByFile[sym.File] = dep
+		}
+		dep.Symbols[sym.Symbol] = struct{}{}
+		dep.Definitions[sym.QualifiedSymbol] = struct{}{}
+
+		snippet := s.symbolSnippet(sym)
+		if snippet != "" && len(dep.Snippets) < MaxSnippetsPerFile && !containsString(dep.Snippets, snippet) {
+			dep.Snippets = append(dep.Snippets, snippet)
+		}
+	}
+
+	for path, dep := range depsByFile {
+		if entry, ok := s.Graph.Files[path]; ok {
+			dep.References = append(dep.References, entry.References...)
+		}
+	}
+
+	definitionIndex := make(map[string]string)
+	for _, sym := range view.Symbols {
+		definitionIndex[sym.Symbol] = sym.File
+		if sym.QualifiedSymbol != "" {
+			definitionIndex[sym.QualifiedSymbol] = sym.File
+		}
+	}
+
+	totalContextSize := len(result["_codegraph/runtime_slice"])
+	for _, path := range sortedDependencyKeys(depsByFile) {
+		summary := buildDependencySummary(path, depsByFile[path], definitionIndex)
+		if summary == "" {
+			continue
+		}
+		if totalContextSize+len(summary) > MaxDepContextChars {
+			break
+		}
+		result[path] = summary
+		totalContextSize += len(summary)
+	}
+
+	return result
+}
+
+func (s *Service) symbolSnippet(sym Symbol) string {
+	if s.RepoPath == "" || sym.File == "" || sym.Line <= 0 {
+		return ""
+	}
+	contentBytes, err := os.ReadFile(filepath.Join(s.RepoPath, sym.File))
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(contentBytes), "\n")
+	start := sym.Line - 1
+	end := sym.EndLine
+	if start < 0 {
+		start = 0
+	}
+	if end <= 0 || end > len(lines) {
+		end = len(lines)
+	}
+	if start >= end || start >= len(lines) {
+		return ""
+	}
+	snippet := strings.Join(lines[start:end], "\n")
+	if len(snippet) > 3000 {
+		snippet = snippet[:3000] + "\n// ... (truncated)"
+	}
+	return snippet
 }
 
 // enrichDependencyMetadata extracts definitions and references from a dependency file.

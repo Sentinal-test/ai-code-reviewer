@@ -221,7 +221,7 @@ func main() {
 		}
 	}
 
-	cgContext, err := cgService.GetContext(context.Background(), changedFiles)
+	cgContext, err := cgService.GetContext(context.Background(), changedFiles, diff)
 	if err != nil {
 		fmt.Printf("⚠️ Code Graph failed: %v\n", err)
 	} else {
@@ -301,6 +301,7 @@ func main() {
 	if baseTempDir != "" && ghClient != nil && cgService.Graph != nil && len(remoteGraphs) > 0 {
 		fmt.Println("   🔄 Analyzing cross-repo dependencies...")
 		localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
+		localSignals.ProjectName = reposelect.ExtractProjectName(wd)
 
 		matches := reposelect.MatchRepos(localSignals, remoteGraphs)
 		if len(matches) > 0 {

@@ -286,7 +286,7 @@ func runEvalCase(truthPath string, truth Truth, providerStr, apiKey, approach st
 	crossRepoRecall := 1.0
 	var remoteGraphs map[string]*codegraph.RemoteRepoGraph
 	var remoteFetch *remotefetch.Fetcher
-	cgContext, contextErr := cgService.GetContext(ctx, changedFiles)
+	cgContext, contextErr := cgService.GetContext(ctx, changedFiles, normalizedDiff)
 	if contextErr != nil {
 		fmt.Printf("   ⚠️  Code Graph context failed: %v\n", contextErr)
 	} else {
@@ -314,7 +314,9 @@ func runEvalCase(truthPath string, truth Truth, providerStr, apiKey, approach st
 	}
 
 	if cgService.Graph != nil && len(remoteGraphs) > 0 {
-		matches := reposelect.MatchRepos(reposelect.ExtractLocalSignals(cgService.Graph, changedFiles), remoteGraphs)
+		localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
+		localSignals.ProjectName = reposelect.ExtractProjectName(repoPath)
+		matches := reposelect.MatchRepos(localSignals, remoteGraphs)
 		matchSummary = reposelect.FormatMatchSummary(matches)
 		crossRepoRecall = crossRepoRecallScore(truth.ExpectedCrossRepo, matches)
 		remoteFetch = remotefetch.NewFetcher(remoteBaseDir, 10, 250, 500000)
