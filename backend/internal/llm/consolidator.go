@@ -35,6 +35,11 @@ func RunConsolidation(
 	fmt.Printf("   📏 [Consolidator] Prompt size: %d chars (~%d tokens)\n",
 		len(prompt), len(prompt)/4)
 
+	// LOG: Complete Raw Input
+	fmt.Printf("\n--- [Consolidator] RAW SYSTEM PROMPT ---\n%s\n", systemPrompt)
+	fmt.Printf("\n--- [Consolidator] RAW USER PROMPT ---\n%s\n", prompt)
+	fmt.Println("--------------------------------------------------------------------------------")
+
 	req := GenerateRequest{
 		SystemPrompt: systemPrompt,
 		Messages: []Message{
@@ -48,17 +53,6 @@ func RunConsolidation(
 		Temperature:  0.0,
 		ResponseJSON: true,
 	}
-
-	// DIRECT VERBOSE LOGGING (Requested by USER)
-	fmt.Println("\n" + strings.Repeat("!", 80))
-	fmt.Println("📢 [LLM DEBUG] CONSOLIDATOR SYSTEM PROMPT")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Println(systemPrompt)
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Println("📢 [LLM DEBUG] CONSOLIDATOR USER PROMPT")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Println(prompt)
-	fmt.Println(strings.Repeat("!", 80) + "\n")
 
 	start := time.Now()
 	resp, err := provider.GenerateContent(ctx, req)
@@ -92,13 +86,6 @@ func RunConsolidation(
 		len(result.Comments), elapsed.Seconds(),
 		resp.InputTokens,
 		resp.OutputTokens)
-
-	// DIRECT VERBOSE LOGGING (Requested by USER)
-	fmt.Println("\n" + strings.Repeat("*", 80))
-	fmt.Println("🤖 [LLM DEBUG] CONSOLIDATOR RAW RESPONSE")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Println(resp.Text)
-	fmt.Println(strings.Repeat("*", 80) + "\n")
 
 	return &result
 }
