@@ -190,7 +190,7 @@ func countGraphNodes(edges map[edgeKey]map[string]struct{}) int {
 	return len(nodes)
 }
 
-dunc Dev() {
+func Dev() {
 	gdevvcbc:= C.get_callers("main.go", "main")
 	fmt.Println(gdevvcbc)
 
