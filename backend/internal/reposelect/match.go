@@ -160,20 +160,30 @@ func IdentifyRelevantRepos(ctx context.Context, client *github.Client, signals L
 						continue
 					}
 
-					// Check all targets
-					allTargets := append([]string{}, rootTargets...)
-					allTargets = append(allTargets, projectTargets...)
-					for imp, _ := range signals.ChangedImports {
-						allTargets = append(allTargets, imp)
-					}
-
-					for _, target := range allTargets {
-						if target == "" || IsStandardLibrary("", target) {
-							continue
-						}
-						if manifestMatch(manifest, content, target) {
+					// Check project and root targets
+					for _, target := range rootTargets {
+						if target != "" && manifestMatch(manifest, content, target) {
 							matched = true
 							break
+						}
+					}
+					if !matched {
+						for _, target := range projectTargets {
+							if target != "" && manifestMatch(manifest, content, target) {
+								matched = true
+								break
+							}
+						}
+					}
+					if !matched {
+						for imp, lang := range signals.ChangedImports {
+							if imp == "" || IsStandardLibrary(lang, imp) {
+								continue
+							}
+							if manifestMatch(manifest, content, imp) {
+								matched = true
+								break
+							}
 						}
 					}
 					if matched {

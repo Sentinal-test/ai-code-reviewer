@@ -138,7 +138,7 @@ func filterReviewableFiles(files map[string]string) map[string]string {
 
 // FIX #1: Improved diff path extraction using regex that handles spaces and quotes
 // This regex captures the two paths in 'diff --git "a/path" "b/path"' or 'diff --git a/path b/path'
-var diffPathRegex = regexp.MustCompile(`^diff --git (.*) (.*)$`)
+var diffPathRegex = regexp.MustCompile(`^diff --git "?a/(.*?)"? "?b/(.*)"?$`)
 
 // extractChangedLinesFromDiff extracts only the changed lines with their context
 // Returns a map of file -> list of changed line sections

@@ -329,7 +329,7 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 		}
 		b.WriteString("\n")
 	}
-	
+
 	// Developer rules - Rules of Engagement
 	if config.DeveloperRules != nil {
 		rulesBlock := rules.FormatForPrompt(config.DeveloperRules)

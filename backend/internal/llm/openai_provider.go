@@ -52,11 +52,11 @@ type openAIChatRequest struct {
 }
 
 type openAIMessage struct {
-	Role         string               `json:"role"`
-	Content      string               `json:"content,omitempty"`
-	ToolCalls    []openAIToolCall     `json:"tool_calls,omitempty"`
-	ToolCallID   string               `json:"tool_call_id,omitempty"`
-	Name         string               `json:"name,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content,omitempty"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	Name       string           `json:"name,omitempty"`
 }
 
 type openAITool struct {
@@ -116,9 +116,9 @@ func (p *OpenAIProvider) buildRequest(req GenerateRequest) (openAIChatRequest, e
 		if role == "model" {
 			role = "assistant"
 		}
-		
+
 		text := collectMessageText(msg.Parts)
-		
+
 		var toolCalls []openAIToolCall
 		isToolResp := false
 		for _, part := range msg.Parts {
@@ -146,7 +146,7 @@ func (p *OpenAIProvider) buildRequest(req GenerateRequest) (openAIChatRequest, e
 				ToolCalls: toolCalls,
 			})
 		}
-		
+
 		// Handle function responses (OpenAI "tool" messages)
 		for _, part := range msg.Parts {
 			if part.FunctionResp != nil {
@@ -181,7 +181,6 @@ func (p *OpenAIProvider) buildRequest(req GenerateRequest) (openAIChatRequest, e
 
 	return apiReq, nil
 }
-
 
 func collectMessageText(parts []Part) string {
 	var chunks []string

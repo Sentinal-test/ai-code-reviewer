@@ -43,6 +43,10 @@ func checkMultiRepoAvailability(ctx context.Context, ghClient *action.GitHubClie
 }
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	// 1. Parse Args & Env
 	apiKeyFlag := flag.String("api-key", "", "API Key (default Gemini, fallback for others)")
 	llmProviderFlag := flag.String("llm-provider", "gemini", "LLM Provider (gemini, openai, claude)")
@@ -104,7 +108,7 @@ func main() {
 
 	if apiKey == "" && os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" {
 		fmt.Println("❌ Error: Valid API key is required. Set GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.")
-		os.Exit(1)
+		return 1
 	}
 
 	// 2. Local Git Operations (Security-First: Code stays here)
@@ -112,18 +116,18 @@ func main() {
 	diff, err := action.GetDiff(*baseRef, *headRef)
 	if err != nil {
 		fmt.Printf("❌ Error getting diff: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	if len(diff) == 0 {
 		fmt.Println("✅ No changes detected.")
-		return
+		return 0
 	}
 
 	changedFilesList, err := action.GetChangedFiles(*baseRef, *headRef)
 	if err != nil {
 		fmt.Printf("❌ Error getting changed files: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Build maps for llm.RunReview
@@ -274,7 +278,7 @@ func main() {
 			baseTempDir, err = os.MkdirTemp("", "ai-reviewer-multirepo-*")
 			if err != nil {
 				fmt.Printf("   ⚠️ Failed to create temp directory: %v\n", err)
-				return
+				return 1
 			}
 			defer os.RemoveAll(baseTempDir)
 
@@ -391,7 +395,7 @@ func main() {
 
 	if initErr != nil || provider == nil {
 		fmt.Printf("❌ Failed to initialize provider %s: %v\n", llmProvider, initErr)
-		os.Exit(1)
+		return 1
 	}
 
 	// Instrument provider to track actual token usage + cost.
@@ -435,19 +439,19 @@ func main() {
 	cacheIDs := make(map[agents.AgentType]string)
 	if len(chunks) > 1 {
 		fmt.Println("📦 [Orchestrator] Building Global Caches for 3 specialist agents...")
-		
+
 		// The orchestrator builds the global background noise (slimDeps and repo tree)
 		slimDeps := codegraph.BuildSlimDependencyIndex(dependencies)
-		
+
 		// We use a dummy config just to build the static context for caching
 		baseConfig := agents.AgentConfig{
-			RepoPath: wd,
-			MatchSummary: matchSummary,
+			RepoPath:       wd,
+			MatchSummary:   matchSummary,
 			DeveloperRules: devRules,
 		}
-		
+
 		tools := llm.AgentToolDeclarations()
-		
+
 		// 1. Correctness
 		cCfg := baseConfig
 		cCfg.Type = agents.AgentCorrectness
@@ -513,7 +517,7 @@ func main() {
 
 	if len(results) == 0 {
 		fmt.Println("❌ All chunks failed")
-		os.Exit(1)
+		return 1
 	}
 
 	// Cross-chunk consolidation (each chunk was already consolidated by orchestrator)
@@ -529,7 +533,7 @@ func main() {
 		// Post to GitHub
 		if repoName == "" || prNumber == "" {
 			fmt.Println("❌ Error: GITHUB_REPOSITORY and PR_NUMBER are required for posting comments.")
-			os.Exit(1)
+			return 1
 		}
 
 		fmt.Printf("🚀 Posting comments to %s PR #%s...\n", repoName, prNumber)
@@ -537,7 +541,7 @@ func main() {
 		parts := strings.Split(repoName, "/")
 		if len(parts) != 2 {
 			fmt.Printf("❌ Invalid repo name format: %s\n", repoName)
-			os.Exit(1)
+			return 1
 		}
 
 		var prNum int
@@ -548,7 +552,7 @@ func main() {
 		}
 		if err := ghClient.PostReview(ctx, prNum, result, commitSHA, diff); err != nil {
 			fmt.Printf("❌ Failed to post review: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		fmt.Println("✅ Review posted successfully!")
 	}
@@ -557,6 +561,7 @@ func main() {
 	if costLedger != nil {
 		costLedger.PrintSummary("💰 [LLM Cost]")
 	}
+	return 0
 }
 
 // scopeDependencies filters the full dependency map to only include entries

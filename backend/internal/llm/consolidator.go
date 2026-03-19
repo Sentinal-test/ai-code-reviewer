@@ -101,7 +101,7 @@ func buildConsolidationPrompt(results []agents.AgentResult, diff string) string 
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 	b.WriteString("TARGET DIFF (Verify Line Numbers against NEW_LIVE_CODE):\n")
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-	
+
 	// Convert raw diff to safe diff to show [NEW_LIVE_CODE] clearly
 	diffMap := extractChangedLinesFromDiff(diff)
 	for path, sections := range diffMap {
