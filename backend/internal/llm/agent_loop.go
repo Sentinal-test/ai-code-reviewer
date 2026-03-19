@@ -379,8 +379,11 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 		}
 		b.WriteString("\n")
 	}
-
-	b.WriteString("Return JSON only.\n")
+	b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
+	b.WriteString("BEGIN ANALYSIS NOW.\n")
+	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+	b.WriteString("REMINDER: Your response MUST be a valid JSON object with \"summary\" and \"comments\" keys.\n")
+	b.WriteString("Do NOT output plain text, code comments, or markdown. Output ONLY JSON.\n")
 
 	return b.String()
 }
