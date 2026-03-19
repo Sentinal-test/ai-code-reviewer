@@ -260,6 +260,7 @@ func main() {
 			fmt.Println("   🔍 [LightweightFilter] identifying relevant repositories via manifest check...")
 			localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
 			localSignals.ProjectName = reposelect.ExtractProjectName(wd)
+			localSignals.ProjectTargets = reposelect.ExtractProjectTargets(wd)
 
 			relevantRepos := reposelect.IdentifyRelevantRepos(context.Background(), ghClient.GetRawClient(), localSignals, filteredRepos)
 			fmt.Printf("   ✅ Found %d repositories likely to be affected\n", len(relevantRepos))
@@ -302,6 +303,7 @@ func main() {
 		fmt.Println("   🔄 Analyzing cross-repo dependencies...")
 		localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
 		localSignals.ProjectName = reposelect.ExtractProjectName(wd)
+		localSignals.ProjectTargets = reposelect.ExtractProjectTargets(wd)
 
 		matches := reposelect.MatchRepos(localSignals, remoteGraphs)
 		if len(matches) > 0 {

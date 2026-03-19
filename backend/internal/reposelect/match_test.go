@@ -1,6 +1,8 @@
 package reposelect
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -173,5 +175,68 @@ func TestManifestMatch(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("manifestMatch(%s, ..., %s) = %v; want %v", tt.manifest, tt.target, got, tt.expected)
 		}
+	}
+}
+
+func TestExtractProjectTargets_IncludesRemoteAliases(t *testing.T) {
+	repoDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module github.com/tegveer-work/test4\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	config := `[remote "origin"]
+	url = git@github.com:Sentinal-test/test4.git
+`
+	if err := os.WriteFile(filepath.Join(repoDir, ".git", "config"), []byte(config), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := ExtractProjectTargets(repoDir)
+
+	if !containsString(targets, "github.com/tegveer-work/test4") {
+		t.Fatalf("expected go module target, got %v", targets)
+	}
+	if !containsString(targets, "github.com/Sentinal-test/test4") {
+		t.Fatalf("expected remote host path target, got %v", targets)
+	}
+	if !containsString(targets, "Sentinal-test/test4") {
+		t.Fatalf("expected owner/repo alias, got %v", targets)
+	}
+	if !containsString(targets, "test4") {
+		t.Fatalf("expected repo basename alias, got %v", targets)
+	}
+}
+
+func TestMatchRepos_UsesProjectAliases(t *testing.T) {
+	signals := LocalSignals{
+		ProjectName:    "github.com/tegveer-work/test4",
+		ProjectTargets: []string{"github.com/tegveer-work/test4", "github.com/Sentinal-test/test4"},
+		ChangedExports: map[string]string{"ValidateToken": "go"},
+		ChangedPackageDirs: map[string]string{
+			"auth": "go",
+		},
+	}
+
+	remoteGraphs := map[string]*codegraph.RemoteRepoGraph{
+		"org/consumer-imports-alias": {
+			RepoFullName: "org/consumer-imports-alias",
+			Files: map[string]codegraph.RemoteFileEntry{
+				"main.go": {
+					Language: "go",
+					Imports:  []string{"github.com/Sentinal-test/test4/auth"},
+				},
+			},
+		},
+	}
+
+	candidates := MatchRepos(signals, remoteGraphs)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	if candidates[0].Reason != "Imports changed project package" {
+		t.Fatalf("expected alias import match, got %+v", candidates[0])
 	}
 }
