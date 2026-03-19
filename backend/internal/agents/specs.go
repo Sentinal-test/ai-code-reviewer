@@ -20,7 +20,10 @@ func BuildSpecialistSystemPrompt(basePrompt, multiRepoBlock string) string {
 }
 
 func BuildConsolidatorSystemPrompt(maxComments int) string {
-	return buildPromptWithSpecs("consolidator", fmt.Sprintf(ConsolidatorSystemPrompt, maxComments), true)
+	// Consolidator has a fixed, high-security prompt defined in prompts.go.
+	// We skip external .md identity files here to prevent cross-contamination
+	// from repo-provided content during the final merge phase.
+	return fmt.Sprintf(ConsolidatorSystemPrompt, maxComments)
 }
 
 func buildPromptWithSpecs(agentDir, basePrompt string, includeSystemSpec bool) string {

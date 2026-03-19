@@ -182,12 +182,19 @@ func BuildIgnoreFilter(rules *models.DeveloperRules) func(string) bool {
 
 	return func(path string) bool {
 		for _, pattern := range rules.Ignore {
+			// Normalize pattern: strip leading / for matching against relative path
+			relPattern := strings.TrimPrefix(pattern, "/")
+
 			// Try matching against the full path
-			if matched, _ := filepath.Match(pattern, path); matched {
+			if matched, _ := filepath.Match(relPattern, path); matched {
 				return true
 			}
-			// Try matching against just the filename (for patterns like "*.pb.go")
-			if matched, _ := filepath.Match(pattern, filepath.Base(path)); matched {
+			// Try matching against just the filename
+			if matched, _ := filepath.Match(relPattern, filepath.Base(path)); matched {
+				return true
+			}
+			// Check if path is within a directory pattern (e.g., "dir/")
+			if strings.HasSuffix(relPattern, "/") && strings.HasPrefix(path, relPattern) {
 				return true
 			}
 			// Handle ** patterns (doublestar) — filepath.Match doesn't support **,

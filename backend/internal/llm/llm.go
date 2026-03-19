@@ -112,7 +112,8 @@ func isDocumentationFile(path string) bool {
 	}
 
 	// Check if any part of the path is an ignored directory
-	pathParts := strings.Split(lowerPath, string(filepath.Separator))
+	// Git always uses forward slashes in diffs and paths
+	pathParts := strings.Split(lowerPath, "/")
 	for _, part := range pathParts {
 		for _, ignored := range ignoredDirs {
 			if part == ignored {
@@ -135,8 +136,9 @@ func filterReviewableFiles(files map[string]string) map[string]string {
 	return filtered
 }
 
-// FIX #1: Improved diff path extraction using regex
-var diffPathRegex = regexp.MustCompile(`^diff --git a/(.*) b/(.*)$`)
+// FIX #1: Improved diff path extraction using regex that handles spaces and quotes
+// This regex captures the two paths in 'diff --git "a/path" "b/path"' or 'diff --git a/path b/path'
+var diffPathRegex = regexp.MustCompile(`^diff --git (.*) (.*)$`)
 
 // extractChangedLinesFromDiff extracts only the changed lines with their context
 // Returns a map of file -> list of changed line sections
@@ -158,14 +160,14 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 			// FIX #1: Use regex to extract filename (handles spaces and quoted paths)
 			matches := diffPathRegex.FindStringSubmatch(line)
 			if len(matches) >= 3 {
-				// Use b/ path (destination), remove quotes if present
-				currentFile = strings.Trim(matches[2], "\"")
+				// Use the second path (b/ path)
+				pathB := strings.Trim(matches[2], "\"")
+				currentFile = strings.TrimPrefix(pathB, "b/")
 			} else {
 				// Fallback: try to extract using the old method for edge cases
 				parts := strings.Fields(line)
 				if len(parts) >= 4 {
-					currentFile = strings.TrimPrefix(parts[3], "b/")
-					currentFile = strings.Trim(currentFile, "\"")
+					currentFile = strings.TrimPrefix(strings.Trim(parts[3], "\""), "b/")
 				}
 			}
 			continue

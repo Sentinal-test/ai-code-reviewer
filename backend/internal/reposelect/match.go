@@ -119,80 +119,89 @@ type CandidateMatch struct {
 // IdentifyRelevantRepos uses the GitHub API to fetch manifests and identify which repos are likely relevant.
 // This allows us to skip cloning 100s of irrelevant repositories.
 func IdentifyRelevantRepos(ctx context.Context, client *github.Client, signals LocalSignals, repos []multirepo.DiscoveredRepo) []multirepo.DiscoveredRepo {
-	var relevant []multirepo.DiscoveredRepo
-
-	// Manifests to check per language
-	manifests := []string{
-		"go.mod",                                         // Go
-		"package.json",                                   // JS/TS
-		"requirements.txt", "pyproject.toml", "setup.py", // Python
-		"pom.xml", "build.gradle", // Java
+	if len(repos) == 0 {
+		return nil
 	}
 
-	fmt.Printf("   🔍 [LightweightFilter] Checking %d repos for dependency match to '%s'...\n", len(repos), signals.ProjectName)
+	manifests := []string{
+		"go.mod", "package.json", "requirements.txt", "pyproject.toml",
+		"setup.py", "pom.xml", "build.gradle",
+	}
+
+	fmt.Printf("   🔍 [LightweightFilter] Checking %d repos concurrently...\n", len(repos))
 	rootTargets := projectRootTargets(signals)
 	projectTargets := projectDependencyTargets(signals)
 
+	type result struct {
+		repo multirepo.DiscoveredRepo
+		rel  bool
+	}
+
+	repoChan := make(chan multirepo.DiscoveredRepo, len(repos))
+	resChan := make(chan result, len(repos))
+
+	// Start workers (max 10 concurrent)
+	numWorkers := 10
+	if len(repos) < numWorkers {
+		numWorkers = len(repos)
+	}
+
+	for w := 0; w < numWorkers; w++ {
+		go func() {
+			for repo := range repoChan {
+				matched := false
+				for _, manifest := range manifests {
+					fileContent, _, _, err := client.Repositories.GetContents(ctx, repo.Owner, repo.Name, manifest, nil)
+					if err != nil || fileContent == nil {
+						continue
+					}
+					content, err := fileContent.GetContent()
+					if err != nil {
+						continue
+					}
+
+					// Check all targets
+					allTargets := append([]string{}, rootTargets...)
+					allTargets = append(allTargets, projectTargets...)
+					for imp, _ := range signals.ChangedImports {
+						allTargets = append(allTargets, imp)
+					}
+
+					for _, target := range allTargets {
+						if target == "" || IsStandardLibrary("", target) {
+							continue
+						}
+						if manifestMatch(manifest, content, target) {
+							matched = true
+							break
+						}
+					}
+					if matched {
+						break
+					}
+				}
+				resChan <- result{repo, matched}
+			}
+		}()
+	}
+
 	for _, repo := range repos {
-		matched := false
-		for _, manifest := range manifests {
-			fileContent, _, _, err := client.Repositories.GetContents(ctx, repo.Owner, repo.Name, manifest, nil)
-			if err != nil || fileContent == nil {
-				continue
-			}
+		repoChan <- repo
+	}
+	close(repoChan)
 
-			content, err := fileContent.GetContent()
-			if err != nil {
-				continue
-			}
-
-			for _, target := range rootTargets {
-				if target == "" {
-					continue
-				}
-				if manifestMatch(manifest, content, target) {
-					fmt.Printf("      ✅ %s matched via %s (depends on project target: %s)\n", repo.FullName, manifest, target)
-					matched = true
-					break
-				}
-			}
-			if matched {
-				break
-			}
-
-			for _, target := range projectTargets {
-				if target == "" || containsString(rootTargets, target) {
-					continue
-				}
-				if manifestMatch(manifest, content, target) {
-					fmt.Printf("      ✅ %s matched via %s (depends on changed package: %s)\n", repo.FullName, manifest, target)
-					matched = true
-					break
-				}
-			}
-			if matched {
-				break
-			}
-
-			for imp, lang := range signals.ChangedImports {
-				if len(imp) < 5 || IsStandardLibrary(lang, imp) {
-					continue
-				}
-				if manifestMatch(manifest, content, imp) {
-					fmt.Printf("      ✅ %s matched via %s (shares import: %s)\n", repo.FullName, manifest, imp)
-					matched = true
-					break
-				}
-			}
-			if matched {
-				break
-			}
-		}
-
-		if matched {
-			relevant = append(relevant, repo)
+	var relevant []multirepo.DiscoveredRepo
+	for i := 0; i < len(repos); i++ {
+		res := <-resChan
+		if res.rel {
+			relevant = append(relevant, res.repo)
 		}
 	}
+
+	// Sort result for determinism
+	sort.Slice(relevant, func(i, j int) bool {
+		return relevant[i].FullName < relevant[j].FullName
+	})
 
 	return relevant
 }
@@ -652,10 +661,13 @@ func extractGitRemoteTargets(repoPath string) (hostPath string, ownerRepo string
 	inOrigin := false
 	for _, raw := range strings.Split(string(data), "\n") {
 		line := strings.TrimSpace(raw)
-		switch {
-		case strings.HasPrefix(line, "[remote "):
-			inOrigin = strings.Contains(line, `"origin"`)
-		case inOrigin && strings.HasPrefix(line, "url"):
+		if strings.HasPrefix(line, "[") {
+			// Reset flag for any new section header
+			inOrigin = strings.HasPrefix(line, `[remote "origin"]`)
+			continue
+		}
+
+		if inOrigin && strings.HasPrefix(line, "url") {
 			// Flexible check for "url = value" or "url=value"
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 && strings.TrimSpace(parts[0]) == "url" {
