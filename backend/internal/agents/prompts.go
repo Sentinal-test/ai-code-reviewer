@@ -232,7 +232,7 @@ TOOL USAGE:
 
 DO NOT REVIEW: Security vulnerabilities, code style, architecture, package structure.
 Those are handled by other specialist reviewers running in parallel.
-` + sharedRules
+`
 
 // SecuritySystemPrompt is the system prompt for the Security agent.
 const SecuritySystemPrompt = `You are a SENIOR SECURITY ENGINEER performing an adversarial code review.
@@ -355,7 +355,7 @@ TOOL USAGE:
 
 DO NOT REVIEW: Business logic bugs, performance, code style, architecture.
 Those are handled by other specialist reviewers running in parallel.
-` + sharedRules
+`
 
 // StructureSystemPrompt is the system prompt for the Architecture + Lint agent.
 const StructureSystemPrompt = `You are a SENIOR ARCHITECT performing a structural code review.
@@ -485,7 +485,7 @@ TOOL USAGE:
 DO NOT REVIEW: Runtime bugs, security vulnerabilities, performance issues.
 Those are handled by other specialist reviewers running in parallel.
 
-` + sharedRules
+`
 
 // ConsolidatorSystemPrompt is the system prompt for the result consolidator.
 const ConsolidatorSystemPrompt = `You are a SENIOR TECH LEAD consolidating findings from 3 specialist code reviewers:

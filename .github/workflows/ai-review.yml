@@ -26,3 +26,10 @@ jobs:
           pr_number: ${{ github.event.pull_request.number }}
           base_ref: ${{ github.event.pull_request.base.sha }}
           head_ref: ${{ github.event.pull_request.head.sha }}
+          review_rules: |
+            instructions:
+              - It is an ai based app review all types of ai vulnerability
+            ignore:
+              - "context.go"
+            focus:
+              - "codegraph"

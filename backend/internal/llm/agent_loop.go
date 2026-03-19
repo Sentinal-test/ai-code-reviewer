@@ -112,23 +112,10 @@ func RunAgentReview(
 	fmt.Printf("  📏 [%s] Prompt size: %d chars (~%d tokens)\n",
 		config.Type, len(dynamicPrompt), len(dynamicPrompt)/4)
 
-	// DIRECT VERBOSE LOGGING (Requested by USER)
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Printf("🧠 [LLM DEBUG - %s] FULL SYSTEM PROMPT\n", config.Type)
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Println(config.SystemPrompt)
-	fmt.Println(strings.Repeat("=", 80))
-
-	fmt.Println("\n" + strings.Repeat("=", 80))
-	fmt.Printf("🧠 [LLM DEBUG - %s] FULL INPUT CONTEXT (Static + Dynamic)\n", config.Type)
-	fmt.Println(strings.Repeat("-", 80))
-	if cacheName != "" {
-		fmt.Println("[CACHED STATIC CONTEXT]")
-		fmt.Println(dynamicPrompt)
-	} else {
-		fmt.Println(dynamicPrompt) // includes staticContext merged above
-	}
-	fmt.Println(strings.Repeat("=", 80) + "\n")
+	// LOG: Complete Raw Input
+	fmt.Printf("\n--- [%s] RAW SYSTEM PROMPT ---\n%s\n", config.Type, config.SystemPrompt)
+	fmt.Printf("\n--- [%s] RAW USER PROMPT (Dynamic + Static) ---\n%s\n", config.Type, dynamicPrompt)
+	fmt.Println("--------------------------------------------------------------------------------")
 
 	// Build the initial request messages
 	messages := []Message{
@@ -159,17 +146,6 @@ func RunAgentReview(
 			result.Error = fmt.Errorf("LLM API error: %w", err)
 			return result
 		}
-
-		// DIRECT VERBOSE LOGGING (Requested by USER)
-		fmt.Println("\n" + strings.Repeat("*", 80))
-		fmt.Printf("🤖 [LLM DEBUG - %s] LLM RESPONSE (Iteration %d)\n", config.Type, iteration+1)
-		fmt.Println(strings.Repeat("-", 80))
-		if resp.Text != "" {
-			fmt.Println(resp.Text)
-		} else if len(resp.FunctionCalls) > 0 {
-			fmt.Printf("[Detected %d Tool Calls]\n", len(resp.FunctionCalls))
-		}
-		fmt.Println(strings.Repeat("*", 80) + "\n")
 
 		result.InputTokens += resp.InputTokens
 		result.OutputTokens += resp.OutputTokens
@@ -235,15 +211,6 @@ func RunAgentReview(
 							Content: res.Content,
 						},
 					}
-
-					// DIRECT VERBOSE LOGGING (Requested by USER)
-					fmt.Printf("     📝 [LLM DEBUG - %s] Tool '%s' Result (%d chars):\n", config.Type, call.Name, len(res.Content))
-					fmt.Println("     " + strings.Repeat("-", 40))
-					contentLines := strings.Split(res.Content, "\n")
-					for _, cl := range contentLines {
-						fmt.Printf("     | %s\n", cl)
-					}
-					fmt.Println("     " + strings.Repeat("-", 40))
 				}(i, fc)
 			}
 			wg.Wait()

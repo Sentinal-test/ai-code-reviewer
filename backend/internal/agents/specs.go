@@ -16,34 +16,36 @@ var (
 )
 
 func BuildSpecialistSystemPrompt(agentDir, basePrompt, multiRepoBlock string) string {
-	return buildPromptWithSpecs(agentDir, basePrompt+fmt.Sprintf(sharedRules, multiRepoBlock))
+	return buildPromptWithSpecs(agentDir, basePrompt+fmt.Sprintf(sharedRules, multiRepoBlock), false)
 }
 
 func BuildConsolidatorSystemPrompt(maxComments int) string {
-	return buildPromptWithSpecs("consolidator", fmt.Sprintf(ConsolidatorSystemPrompt, maxComments))
+	return buildPromptWithSpecs("consolidator", fmt.Sprintf(ConsolidatorSystemPrompt, maxComments), true)
 }
 
-func buildPromptWithSpecs(agentDir, basePrompt string) string {
-	specBlock := loadSpecBlock(agentDir)
+func buildPromptWithSpecs(agentDir, basePrompt string, includeSystemSpec bool) string {
+	specBlock := loadSpecBlock(agentDir, includeSystemSpec)
 	if specBlock == "" {
 		return basePrompt
 	}
 	return specBlock + "\n\n" + basePrompt
 }
 
-func loadSpecBlock(agentDir string) string {
+func loadSpecBlock(agentDir string, includeSystemSpec bool) string {
 	root, err := repoRoot()
 	if err != nil || root == "" {
 		return ""
 	}
 
-	systemSpec := readSpec(filepath.Join(root, "AGENTS.md"))
 	agentSpec := readSpec(filepath.Join(root, "agents", agentDir, "Agent.md"))
 	instructions := readSpec(filepath.Join(root, "agents", agentDir, "INSTRUCTIONS.md"))
 
 	var parts []string
-	if systemSpec != "" {
-		parts = append(parts, "SYSTEM ARCHITECTURE REFERENCE\n"+systemSpec)
+	if includeSystemSpec {
+		systemSpec := readSpec(filepath.Join(root, "AGENTS.md"))
+		if systemSpec != "" {
+			parts = append(parts, "SYSTEM ARCHITECTURE REFERENCE\n"+systemSpec)
+		}
 	}
 	if agentSpec != "" {
 		parts = append(parts, "AGENT IDENTITY REFERENCE\n"+agentSpec)

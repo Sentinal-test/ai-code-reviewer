@@ -22,9 +22,6 @@ func BuildSlimDependencyIndex(fullDeps map[string]string) map[string]string {
 		return nil
 	}
 
-	var b strings.Builder
-	b.WriteString("Available dependencies (use get_symbol_definition tool to inspect):\n")
-
 	paths := make([]string, 0, len(fullDeps))
 	for p := range fullDeps {
 		// Skip internal graph summaries — they're not file-level deps
@@ -35,26 +32,6 @@ func BuildSlimDependencyIndex(fullDeps map[string]string) map[string]string {
 	}
 	sort.Strings(paths)
 
-	if len(paths) == 0 {
-		return nil
-	}
-
-	for _, path := range paths {
-		content := fullDeps[path]
-		symbols := extractSymbolsFromSummary(content)
-		if len(symbols) == 0 {
-			b.WriteString("- ")
-			b.WriteString(path)
-			b.WriteString("\n")
-		} else {
-			b.WriteString("- ")
-			b.WriteString(path)
-			b.WriteString(": ")
-			b.WriteString(strings.Join(symbols, ", "))
-			b.WriteString("\n")
-		}
-	}
-
 	// Preserve context graph summaries as-is (they're already compact)
 	result := make(map[string]string)
 	for p, content := range fullDeps {
@@ -63,8 +40,33 @@ func BuildSlimDependencyIndex(fullDeps map[string]string) map[string]string {
 		}
 	}
 
-	// Add the slim index as a single entry
-	result["_codegraph/dependency_index"] = b.String()
+	// Build the slim file-level index (if any file-level deps exist)
+	if len(paths) > 0 {
+		var b strings.Builder
+		b.WriteString("Available dependencies (use get_symbol_definition tool to inspect):\n")
+
+		for _, path := range paths {
+			content := fullDeps[path]
+			symbols := extractSymbolsFromSummary(content)
+			if len(symbols) == 0 {
+				b.WriteString("- ")
+				b.WriteString(path)
+				b.WriteString("\n")
+			} else {
+				b.WriteString("- ")
+				b.WriteString(path)
+				b.WriteString(": ")
+				b.WriteString(strings.Join(symbols, ", "))
+				b.WriteString("\n")
+			}
+		}
+
+		result["_codegraph/dependency_index"] = b.String()
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
 	return result
 }
 
