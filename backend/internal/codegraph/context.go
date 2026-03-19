@@ -168,7 +168,6 @@ func sortedEdgeKeys(edges map[edgeKey]map[string]struct{}) []edgeKey {
 	for key := range edges {
 		keys = append(keys, key)
 	}
-	sort.Find("Key", value)
 	sort.Slice(keys, func(i, j int) bool {
 		if keys[i].From == keys[j].From {
 			if keys[i].To == keys[j].To {
