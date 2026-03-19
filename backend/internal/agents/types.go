@@ -39,6 +39,9 @@ type AgentConfig struct {
 
 	// Developer rules
 	DeveloperRules *models.DeveloperRules
+
+	// Caching
+	CacheID string
 }
 
 // AgentResult is the output from a single specialist agent.

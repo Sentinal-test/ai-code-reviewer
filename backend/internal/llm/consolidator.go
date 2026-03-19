@@ -19,6 +19,7 @@ func RunConsolidation(
 	ctx context.Context,
 	provider LLMProvider,
 	agentResults []agents.AgentResult,
+	diff string,
 	maxComments int,
 ) *models.ReviewResult {
 
@@ -27,7 +28,7 @@ func RunConsolidation(
 	}
 
 	// Build the consolidation prompt
-	prompt := buildConsolidationPrompt(agentResults)
+	prompt := buildConsolidationPrompt(agentResults, diff)
 	systemPrompt := agents.BuildConsolidatorSystemPrompt(maxComments)
 
 	fmt.Printf("🔄 [Consolidator] Sending %d agent results to LLM for intelligent consolidation\n",
@@ -92,11 +93,25 @@ func RunConsolidation(
 
 // buildConsolidationPrompt formats all agent results into a structured prompt
 // for the consolidator LLM.
-func buildConsolidationPrompt(results []agents.AgentResult) string {
+func buildConsolidationPrompt(results []agents.AgentResult, diff string) string {
 	var b strings.Builder
 
 	b.WriteString("Below are the findings from 3 specialist code review agents.\n")
 	b.WriteString("Consolidate them according to your instructions.\n\n")
+	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+	b.WriteString("TARGET DIFF (Verify Line Numbers against NEW_LIVE_CODE):\n")
+	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+	
+	// Convert raw diff to safe diff to show [NEW_LIVE_CODE] clearly
+	diffMap := extractChangedLinesFromDiff(diff)
+	for path, sections := range diffMap {
+		b.WriteString(fmt.Sprintf("\n--- DIFF FOR: %s ---\n", path))
+		for _, sec := range sections {
+			b.WriteString(formatSafeDiff(sec))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n\n")
 
 	for _, r := range results {
 		if r.Error != nil {

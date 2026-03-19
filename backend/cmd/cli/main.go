@@ -2,6 +2,7 @@ package main
 
 import (
 	"code-review/backend/internal/action"
+	"code-review/backend/internal/agents"
 	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
@@ -430,6 +431,60 @@ func main() {
 		fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
 	}
 
+	// Create Global Caches for multi-chunk optimization
+	cacheIDs := make(map[agents.AgentType]string)
+	if len(chunks) > 1 {
+		fmt.Println("📦 [Orchestrator] Building Global Caches for 3 specialist agents...")
+		
+		// The orchestrator builds the global background noise (slimDeps and repo tree)
+		slimDeps := codegraph.BuildSlimDependencyIndex(dependencies)
+		
+		// We use a dummy config just to build the static context for caching
+		baseConfig := agents.AgentConfig{
+			RepoPath: wd,
+			MatchSummary: matchSummary,
+			DeveloperRules: devRules,
+		}
+		
+		tools := llm.AgentToolDeclarations()
+		
+		// 1. Correctness
+		cCfg := baseConfig
+		cCfg.Type = agents.AgentCorrectness
+		cCfg = agents.CorrectnessAgent(cCfg)
+		cCfg.Dependencies = slimDeps
+		cCtx := llm.BuildGlobalStaticContext(cCfg)
+		if id, _ := provider.CreateCache(ctx, cCfg.SystemPrompt, cCtx, tools); id != "" {
+			cacheIDs[agents.AgentCorrectness] = id
+			defer provider.DeleteCache(context.Background(), id)
+			fmt.Printf("   ✅ Correctness Cache: %s\n", id)
+		}
+
+		// 2. Security
+		sCfg := baseConfig
+		sCfg.Type = agents.AgentSecurity
+		sCfg = agents.SecurityAgent(sCfg)
+		sCfg.Dependencies = slimDeps
+		sCtx := llm.BuildGlobalStaticContext(sCfg)
+		if id, _ := provider.CreateCache(ctx, sCfg.SystemPrompt, sCtx, tools); id != "" {
+			cacheIDs[agents.AgentSecurity] = id
+			defer provider.DeleteCache(context.Background(), id)
+			fmt.Printf("   ✅ Security Cache: %s\n", id)
+		}
+
+		// 3. Structure
+		stCfg := baseConfig
+		stCfg.Type = agents.AgentStructure
+		stCfg = agents.StructureAgent(stCfg)
+		stCfg.RepoStructure = repoStructure
+		stCtx := llm.BuildGlobalStaticContext(stCfg)
+		if id, _ := provider.CreateCache(ctx, stCfg.SystemPrompt, stCtx, tools); id != "" {
+			cacheIDs[agents.AgentStructure] = id
+			defer provider.DeleteCache(context.Background(), id)
+			fmt.Printf("   ✅ Structure Cache: %s\n", id)
+		}
+	}
+
 	var results []*models.ReviewResult
 	for _, chunk := range chunks {
 		// Scope dependencies to this chunk's files
@@ -447,6 +502,7 @@ func main() {
 			remoteGraphs,
 			remoteFetch,
 			devRules,
+			cacheIDs,
 		)
 		if err != nil {
 			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)

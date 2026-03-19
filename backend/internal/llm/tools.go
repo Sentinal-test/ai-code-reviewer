@@ -176,13 +176,17 @@ type ToolExecutor struct {
 	MatchSummary string
 	RemoteGraphs map[string]*codegraph.RemoteRepoGraph
 	RemoteFetch  *remotefetch.Fetcher
+
+	// Tool loop prevention
+	executedCalls map[string]bool
 }
 
 // NewToolExecutor creates a tool executor for the given repo.
 func NewToolExecutor(repoPath string, graph *codegraph.Graph) *ToolExecutor {
 	return &ToolExecutor{
-		RepoPath: repoPath,
-		Graph:    graph,
+		RepoPath:      repoPath,
+		Graph:         graph,
+		executedCalls: make(map[string]bool),
 	}
 }
 
@@ -195,6 +199,16 @@ func (te *ToolExecutor) WithMultiRepo(matchSummary string, remote map[string]*co
 
 // Execute runs a tool call and returns the result.
 func (te *ToolExecutor) Execute(ctx context.Context, call agents.ToolCallRequest) agents.ToolCallResponse {
+	// Prevent infinite loops by detecting exact duplicate tool calls
+	callKey := fmt.Sprintf("%s-%v", call.Name, call.Args)
+	if te.executedCalls[callKey] {
+		return agents.ToolCallResponse{
+			Name:    call.Name,
+			Content: fmt.Sprintf("Error: You already called '%s' with these exact arguments. Please look at your previous context instead of repeating the call.", call.Name),
+		}
+	}
+	te.executedCalls[callKey] = true
+
 	switch call.Name {
 	case "get_symbol_definition":
 		return te.getSymbolDefinition(call.Args)

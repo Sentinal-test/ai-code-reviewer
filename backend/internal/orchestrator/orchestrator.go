@@ -70,6 +70,7 @@ func ReviewChunk(
 	remoteGraphs map[string]*codegraph.RemoteRepoGraph,
 	remoteFetch *remotefetch.Fetcher,
 	devRules *models.DeveloperRules,
+	cacheIDs map[agents.AgentType]string,
 ) (*models.ReviewResult, error) {
 
 	start := time.Now()
@@ -131,14 +132,17 @@ func ReviewChunk(
 	correctnessConfig := shared
 	correctnessConfig.Dependencies = slimDeps
 	correctnessConfig.RepoStructure = "" // Correctness doesn't need repo tree
+	correctnessConfig.CacheID = cacheIDs[agents.AgentCorrectness]
 
 	securityConfig := shared
 	securityConfig.Dependencies = slimDeps
 	securityConfig.RepoStructure = "" // Security doesn't need repo tree
+	securityConfig.CacheID = cacheIDs[agents.AgentSecurity]
 
 	structureConfig := shared
 	structureConfig.Dependencies = nil            // Structure uses tools for code details
 	structureConfig.RepoStructure = repoStructure // Structure needs the repo tree
+	structureConfig.CacheID = cacheIDs[agents.AgentStructure]
 
 	// Create tool executor for agent tool calls
 	toolExecutor := llm.NewToolExecutor(repoPath, graph)
@@ -193,7 +197,7 @@ func ReviewChunk(
 		totalComments, elapsed.Seconds(), totalToolCalls)
 
 	// LLM-based consolidation (falls back to deterministic on failure)
-	consolidated := llm.RunConsolidation(ctx, provider, results, agents.DefaultMaxComments)
+	consolidated := llm.RunConsolidation(ctx, provider, results, chunkDiff, agents.DefaultMaxComments)
 
 	fmt.Printf("✅ [Orchestrator] Final: %d comments after consolidation\n", len(consolidated.Comments))
 

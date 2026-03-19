@@ -446,6 +446,7 @@ func runReviewByApproach(
 				remoteGraphs,
 				remoteFetch,
 				nil, // no developer rules in benchmarks
+				nil, // no cached IDs in benchmarks (simplicity over cost optimization for this test)
 			)
 			if err != nil {
 				fmt.Printf("   ❌ Chunk %d/%d failed: %v\n", chunk.Index, chunk.Total, err)

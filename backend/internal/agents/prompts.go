@@ -481,7 +481,8 @@ CONSOLIDATION RULES:
 3. KEEP BOTH only if two agents flag structurally DIFFERENT issues on the same line.
 4. BE EXTREMELY CONCISE: Keep messages strictly under 3-4 sentences. The total output JSON must not exceed token limits.
 5. REMOVE false positives, vague/speculative comments, or feedback that asks questions instead of providing a fix.
-6. CAP at %d comments total. Prioritize: critical > warning > info. Dropping lower-severity issues is required if you hit the cap.
+6. CRITICAL VALIDATION: Cross-reference every comment with the provided DIFF. Drop any comment where the line number does not exist inside a [NEW_LIVE_CODE] block in the diff.
+7. CAP at %d comments total. Prioritize: critical > warning > info. Dropping lower-severity issues is required if you hit the cap.
 
 Output valid JSON matching this schema exactly:
 {
