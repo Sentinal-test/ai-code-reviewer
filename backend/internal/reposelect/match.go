@@ -211,8 +211,11 @@ func manifestMatch(manifest, content, target string) bool {
 		lines := strings.Split(content, "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "module ") {
-				continue
+			if strings.HasPrefix(line, "module") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 && fields[0] == "module" {
+					continue
+				}
 			}
 			// require github.com/foo/bar v1.2.3
 			if strings.Contains(line, target) {
@@ -306,9 +309,13 @@ func ExtractProjectTargets(repoPath string) []string {
 	if data, err := os.ReadFile(filepath.Join(repoPath, "go.mod")); err == nil {
 		lines := strings.Split(string(data), "\n")
 		for _, line := range lines {
-			if strings.HasPrefix(line, "module ") {
-				add(strings.TrimSpace(strings.TrimPrefix(line, "module ")))
-				break
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "module") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 && fields[0] == "module" {
+					add(fields[1])
+					break
+				}
 			}
 		}
 	}
@@ -648,15 +655,21 @@ func extractGitRemoteTargets(repoPath string) (hostPath string, ownerRepo string
 		switch {
 		case strings.HasPrefix(line, "[remote "):
 			inOrigin = strings.Contains(line, `"origin"`)
-		case inOrigin && strings.HasPrefix(line, "url = "):
-			return normalizeRemoteURL(strings.TrimSpace(strings.TrimPrefix(line, "url = ")))
+		case inOrigin && strings.HasPrefix(line, "url"):
+			// Flexible check for "url = value" or "url=value"
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 && strings.TrimSpace(parts[0]) == "url" {
+				return normalizeRemoteURL(strings.TrimSpace(parts[1]))
+			}
 		}
 	}
 	return "", ""
 }
 
 func normalizeRemoteURL(raw string) (hostPath string, ownerRepo string) {
-	raw = strings.TrimSpace(strings.TrimSuffix(raw, ".git"))
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimRight(raw, "/")
+	raw = strings.TrimSuffix(raw, ".git")
 	if raw == "" {
 		return "", ""
 	}

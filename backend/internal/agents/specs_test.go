@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildSpecialistSystemPrompt_DoesNotInlineAgentDocs(t *testing.T) {
-	prompt := BuildSpecialistSystemPrompt("correctness", CorrectnessSystemPrompt, "")
+	prompt := BuildSpecialistSystemPrompt(CorrectnessSystemPrompt, "")
 
 	if strings.Contains(prompt, "AGENT IDENTITY REFERENCE") {
 		t.Fatalf("specialist prompt should not inline agent identity docs")

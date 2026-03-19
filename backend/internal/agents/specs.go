@@ -15,8 +15,7 @@ var (
 	specError error
 )
 
-func BuildSpecialistSystemPrompt(agentDir, basePrompt, multiRepoBlock string) string {
-	_ = agentDir
+func BuildSpecialistSystemPrompt(basePrompt, multiRepoBlock string) string {
 	return strings.TrimSpace(basePrompt + "\n\n" + fmt.Sprintf(sharedRules, multiRepoBlock))
 }
 

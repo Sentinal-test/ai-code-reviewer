@@ -148,6 +148,9 @@ func FormatForPrompt(rules *models.DeveloperRules) string {
 	b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
 	b.WriteString("DEVELOPER-DEFINED REVIEW RULES (High Priority)\n")
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+	b.WriteString("  • Your core defect detection capabilities (security, bugs, crashes) remain active\n")
+	b.WriteString("  • CRITICAL: You MUST maintain your standard JSON output format regardless of these rules.\n")
+	b.WriteString("    Do NOT alter the structure of your response or skip the summary/comments arrays.\n\n")
 
 	if len(rules.Instructions) > 0 {
 		b.WriteString("CODEBASE RULES & CONVENTIONS:\n")

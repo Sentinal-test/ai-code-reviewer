@@ -153,6 +153,11 @@ func TestManifestMatch(t *testing.T) {
 		{"go.mod", "module test\nrequire github.com/foo/bar v1.0.0", "github.com/foo/bar", true},
 		{"go.mod", "module test\nrequire github.com/foo/bar-service v1.0.0", "github.com/foo/bar", false},
 		{"go.mod", "module test\nrequire (\n\tgithub.com/foo/bar v1.0.0\n)", "github.com/foo/bar", true},
+		// Issue 1: module line should be skipped (not treated as a dependency match)
+		{"go.mod", "module\tgithub.com/foo/tabbed\n", "github.com/foo/tabbed", false},
+		{"go.mod", "module    multiple-spaces", "multiple-spaces", false},
+		// Verification: if it's in a require block, it should still match
+		{"go.mod", "module test\nrequire\tgithub.com/foo/tabbed v1.0", "github.com/foo/tabbed", true},
 
 		// JS/TS
 		{"package.json", `{"dependencies": {"express": "^4.17.1"}}`, "express", true},
@@ -174,6 +179,26 @@ func TestManifestMatch(t *testing.T) {
 		got := manifestMatch(tt.manifest, tt.content, tt.target)
 		if got != tt.expected {
 			t.Errorf("manifestMatch(%s, ..., %s) = %v; want %v", tt.manifest, tt.target, got, tt.expected)
+		}
+	}
+}
+
+func TestNormalizeRemoteURL(t *testing.T) {
+	tests := []struct {
+		raw      string
+		expected string
+	}{
+		{"git@github.com:user/repo.git", "github.com/user/repo"},
+		{"https://github.com/user/repo.git", "github.com/user/repo"},
+		{"https://github.com/user/repo.git/", "github.com/user/repo"}, // Issue 3: Trailing slash
+		{"https://github.com/user/repo/", "github.com/user/repo"},
+		{"github.com/user/repo.git", "github.com/user/repo"},
+	}
+
+	for _, tt := range tests {
+		got, _ := normalizeRemoteURL(tt.raw)
+		if got != tt.expected {
+			t.Errorf("normalizeRemoteURL(%s) = %s; want %s", tt.raw, got, tt.expected)
 		}
 	}
 }
@@ -207,6 +232,27 @@ func TestExtractProjectTargets_IncludesRemoteAliases(t *testing.T) {
 	}
 	if !containsString(targets, "test4") {
 		t.Fatalf("expected repo basename alias, got %v", targets)
+	}
+
+	// Issue 1: go.mod with tabs/multiple spaces
+	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module\tgithub.com/foo/tabbed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	targets = ExtractProjectTargets(repoDir)
+	if !containsString(targets, "github.com/foo/tabbed") {
+		t.Fatalf("expected target from tabbed go.mod, got %v", targets)
+	}
+
+	// Issue 2: Git config with no spaces around '='
+	configNoSpaces := `[remote "origin"]
+url=git@github.com:NoSpace/test-repo.git
+`
+	if err := os.WriteFile(filepath.Join(repoDir, ".git", "config"), []byte(configNoSpaces), 0644); err != nil {
+		t.Fatal(err)
+	}
+	targets = ExtractProjectTargets(repoDir)
+	if !containsString(targets, "github.com/NoSpace/test-repo") {
+		t.Fatalf("expected target from no-space git config, got %v", targets)
 	}
 }
 

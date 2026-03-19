@@ -43,6 +43,6 @@ RULE 0 — MULTI-REPO / MICROSERVICES CONTEXT (Active for this review):
 `, base.MatchSummary)
 	}
 
-	base.SystemPrompt = BuildSpecialistSystemPrompt("correctness", CorrectnessSystemPrompt, multiRepoBlock)
+	base.SystemPrompt = BuildSpecialistSystemPrompt(CorrectnessSystemPrompt, multiRepoBlock)
 	return base
 }
