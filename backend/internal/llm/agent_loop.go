@@ -355,13 +355,13 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 	// PR Context
 	if config.PRContext.Title != "" {
 		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-		b.WriteString("PR CONTEXT (Developer Intent)\n")
+		b.WriteString("PR CONTEXT (Hints)\n")
 		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 		b.WriteString(fmt.Sprintf("Title: %s\n", config.PRContext.Title))
 		if config.PRContext.Body != "" {
 			body := config.PRContext.Body
-			if len(body) > 2000 {
-				body = body[:2000] + "..."
+			if len(body) > 1000 {
+				body = body[:1000] + "..."
 			}
 			b.WriteString(fmt.Sprintf("Description: %s\n", body))
 		}
@@ -380,11 +380,7 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
-	b.WriteString("BEGIN ANALYSIS NOW.\n")
-	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-	b.WriteString("REMINDER: Your response MUST be a valid JSON object with \"summary\" and \"comments\" keys.\n")
-	b.WriteString("Do NOT output plain text, code comments, or markdown. Output ONLY JSON.\n")
+	b.WriteString("Return JSON only.\n")
 
 	return b.String()
 }

@@ -16,7 +16,8 @@ var (
 )
 
 func BuildSpecialistSystemPrompt(agentDir, basePrompt, multiRepoBlock string) string {
-	return buildPromptWithSpecs(agentDir, basePrompt+fmt.Sprintf(sharedRules, multiRepoBlock), false)
+	_ = agentDir
+	return strings.TrimSpace(basePrompt + "\n\n" + fmt.Sprintf(sharedRules, multiRepoBlock))
 }
 
 func BuildConsolidatorSystemPrompt(maxComments int) string {

@@ -4,60 +4,37 @@ package agents
 // It accepts a single Format parameter for injecting the multi-repo context block if present.
 const sharedRules = `
 ═══════════════════════════════════════════════════════════════════════════════
-MANDATORY ANALYSIS RULES
+MANDATORY REVIEW RULES
 ═══════════════════════════════════════════════════════════════════════════════
 %s
-RULE 1 — SCOPE: Review ONLY the diff ('+' lines).
-  ✓ Every comment MUST reference a specific line from the diff ('+' lines).
-  ✓ Use the full file and dependencies for understanding context.
-  ✓ You MAY comment on dependency manifests (go.mod, package.json), infra-as-code (Terraform, K8s), or config files if they introduce vulnerabilities, breaking changes, or version drift.
-  ✗ NEVER comment on unchanged code or boilerplate documentation (LICENSE, generic README).
+1. REVIEW ONLY ADDED LIVE CODE:
+  ✓ Comment only on relevant '+' lines from the diff.
+  ✓ Use surrounding files, dependencies, and repo context only to understand impact.
+  ✗ Do not review unchanged code or generic docs.
 
-RULE 1b — DIFF DIRECTION (CRITICAL — prevents false positives):
-  The diffs you receive have been rewritten to prevent confusion:
-    [OLD_REMOVED_CODE] = OLD code that was REMOVED. It no longer exists in the codebase.
-    [NEW_LIVE_CODE]    = NEW code that was ADDED. This is the current, live code.
-  ✗ NEVER flag a [NEW_LIVE_CODE] line for a problem that only existed in the [OLD_REMOVED_CODE] line.
-  ✗ If an [OLD_REMOVED_CODE] line had a bug and the [NEW_LIVE_CODE] line fixes it, that is a CORRECT FIX — do NOT flag it.
-  ✗ Do NOT suggest changing a [NEW_LIVE_CODE] line to match what the [NEW_LIVE_CODE] line already says.
-  Example of a FALSE POSITIVE you must avoid:
-    Diff:  [OLD_REMOVED_CODE] "role": "user"
-           [NEW_LIVE_CODE]    "role": "function"
-    WRONG: "Change role from user to function" — the fix is ALREADY APPLIED on the live line.
-    CORRECT: Silence. The developer already made the correct change.
+2. DIFF SEMANTICS:
+  [OLD_REMOVED_CODE] = deleted code.
+  [NEW_LIVE_CODE]    = current live code.
+  ✗ Never ask for a fix that already exists in [NEW_LIVE_CODE].
 
-RULE 2 — PRECISION: Zero tolerance for false positives.
-  ✗ No praise. No suggestions without a defect. No style opinions.
-  ✗ No "could be improved" without a concrete problem that causes bugs.
-  ✓ Silence on correct code is the ideal output.
+3. PRECISION:
+  ✗ No praise, style-only notes, speculative concerns, or "could be improved" advice.
+  ✓ Every comment must describe a concrete failure mode and a direct fix.
 
-RULE 3 — FORMAT: Each comment is exactly "<Problem>. <Fix>." (max 2 sentences).
-  ✓ "Unclosed file handle leaks fd on every call. Add defer f.Close() after the nil check."
-  ✓ "Index out of bounds when items is empty. Guard with len(items) > 0 before accessing items[0]."
-  ✗ "Consider using a different approach" — no concrete defect.
-
-RULE 4 — SEVERITY:
+4. SEVERITY:
   critical: Guaranteed crash, data loss, security exploit, complete feature breakage.
   warning:  Likely bug under certain conditions, resource leak, race condition, wrong logic.
   info:     Suboptimal but not broken. Minor inefficiency. Missing edge case logging.
 
-RULE 5 — PR CONTEXT (hint, NOT source of truth):
-  ✓ Read the PR title, body, and commit messages to get a rough sense of the developer's
-    intent and the feature area being touched.
-  ✓ Use this as background context to help you understand the code, but DO NOT trust it
-    completely. Developers often write vague or incomplete commit messages (e.g., "fix auth"
-    when they actually changed 10 things). The CODE is the source of truth, not the message.
-  ✓ Distinguish intentional debug/WIP code from accidental issues.
-  ✓ But STILL flag real security/correctness bugs even in "temporary" code.
+5. PR CONTEXT:
+  ✓ Use PR title/body/commits only as hints.
+  ✗ Do not trust them over the code.
 
-RULE 6 — TOOL USAGE:
-  You have the ability to call tools to inspect the codebase.
-  If you need more context before diagnosing a bug, call a tool to verify your assumptions:
-  - If you find a renamed/modified function → get_callers to check if callers break.
-  - If you see an unfamiliar type or function → get_symbol_definition to understand it.
-  - If you want to validate a pattern → search_codebase to see how it's done elsewhere.
+6. VERIFY WITH TOOLS WHEN NEEDED:
+  ✓ Use tools to confirm callers, definitions, conventions, and impact before flagging.
 
-RULE 7 — OUTPUT must be valid JSON (no markdown, no fences):
+7. OUTPUT:
+  ✓ Return valid JSON only. No markdown, no prose outside the JSON object.
   {
     "summary": "Found 2 critical, 1 warning issue(s)",
     "comments": [
@@ -72,11 +49,9 @@ RULE 7 — OUTPUT must be valid JSON (no markdown, no fences):
   }
   If no issues: {"summary": "No issues found", "comments": []}
 
-RULE 8 — NO DUPLICATE COMMENTS (EXACT MATCH ONLY):
-  If the EXACT SAME defect pattern repeats across multiple lines in the same block, flag it ONCE on the first occurrence.
-  ✓ "Hardcoded fallback credentials on lines 5, 8, 12. Load all from env vars."
-  ✗ Do NOT post the same identical message on each individual line.
-  ! IMPORTANT: Only merge if the issue is EXACTLY the same. If two lines have the same 'type' of bug but different details, keep them separate.
+8. DEDUP:
+  ✓ If the exact same issue repeats in the same block/file, report it once on the first relevant line.
+  ✗ Do not emit duplicate comments for the same underlying defect.
 `
 
 // CorrectnessSystemPrompt is the system prompt for the Bugs + Performance agent.
@@ -162,6 +137,11 @@ fit any area below, STILL FLAG IT.
   Inefficient query patterns (like fetching one record at a time in a loop), missing
   transaction boundaries for multi-step writes, dangerous mutations without proper
   filters, schema/code mismatches, connection management issues.
+
+• MISSING COROLLARIES (OMISSIONS):
+  If the developer added an allocation, did they add the cleanup? 
+  If they added a database column, did they update the struct/model, the insert query, AND the delete query? 
+  Look for what is missing from the PR.
 
 • CACHING & STATE SYNCHRONIZATION (when reviewing caching code):
   Stale data after writes, unbounded growth, key collisions, missing invalidation,

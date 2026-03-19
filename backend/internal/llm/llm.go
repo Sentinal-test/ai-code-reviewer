@@ -177,7 +177,8 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 				result[currentFile] = append(result[currentFile], strings.Join(currentSection, "\n"))
 			}
 			currentSection = []string{line}
-		} else if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
+		} else if len(currentSection) > 0 && (strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-")) &&
+			!strings.HasPrefix(line, "+++ ") && !strings.HasPrefix(line, "--- ") {
 			currentSection = append(currentSection, line)
 		} else if len(currentSection) > 0 && !strings.HasPrefix(line, "\\") {
 			// Context line within a hunk
