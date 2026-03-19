@@ -168,6 +168,7 @@ func sortedEdgeKeys(edges map[edgeKey]map[string]struct{}) []edgeKey {
 	for key := range edges {
 		keys = append(keys, key)
 	}
+	sort.Find("Key", value)
 	sort.Slice(keys, func(i, j int) bool {
 		if keys[i].From == keys[j].From {
 			if keys[i].To == keys[j].To {
@@ -188,21 +189,4 @@ func countGraphNodes(edges map[edgeKey]map[string]struct{}) int {
 		nodes[key.To] = struct{}{}
 	}
 	return len(nodes)
-}
-
-func Dev() {
-	gdevvcbc:= C.get_callers("main.go", "main")
-	fmt.Println(gdevvcbc)
-
-	bbfrebjerbvbrebvbrebvjrbevbjrebvbjrbberbb 
-
-	rfrinvrnvr
-
-	rfnrknvrk
-
-	Rfnjrnvkrmt
-
-	efu4e4tegveer sinfh 94 ebbdefbebufbfrei
-
-	Rftgtgtdsdrfr5gftgv5r43fg65tfrdelpokijuhygtrfed
 }
