@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"regexp"
@@ -53,6 +54,10 @@ func ParseMarker(body, actualFile string, actualLine int, commentID int64) *Prev
 	}
 
 	file := matches[1]
+	if fileBytes, err := base64.RawURLEncoding.DecodeString(file); err == nil && len(fileBytes) > 0 {
+		file = string(fileBytes)
+	}
+
 	lineStr := matches[2]
 	severity := matches[3]
 	layer := matches[4]
@@ -119,6 +124,29 @@ func FetchPreviousFindings(ctx context.Context, client *github.Client, owner, re
 		opts.Page = resp.NextPage
 	}
 
+	// 2. Fetch general PR issue comments (the fallback for when diff lines don't match)
+	issueOpts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	for {
+		comments, resp, err := client.Issues.ListComments(ctx, owner, repo, prNumber, issueOpts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list issue comments: %w", err)
+		}
+
+		for _, c := range comments {
+			if c.Body == nil {
+				continue
+			}
+			if marker := ParseMarker(*c.Body, "", 0, c.GetID()); marker != nil {
+				findings = append(findings, *marker)
+			}
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		issueOpts.Page = resp.NextPage
+	}
+
 	return findings, nil
 }
 
@@ -151,7 +179,7 @@ func Deduplicate(newFindings []models.ReviewComment, previous []PreviousFinding)
 			}
 
 			// Fallback path: same file, VERY close line (±3), same layer.
-			// This catches cases where the LLM slightly reworded the finding.
+			// To avoid dropping distinct bugs on adjacent lines, verify the message shares context.
 			if newFinding.File == prevFinding.File && newFinding.Layer == prevFinding.Layer {
 				lineDiff := newFinding.Line - prevFinding.Line
 				if lineDiff < 0 {
@@ -159,8 +187,19 @@ func Deduplicate(newFindings []models.ReviewComment, previous []PreviousFinding)
 				}
 				
 				if lineDiff <= 3 {
-					isDuplicate = true
-					break
+					// Check message similarity (e.g., sharing a rare word or general substring logic)
+					// Simple heuristic: if the first 20 chars match, or one contains the other.
+					normalizedNew := strings.ToLower(strings.TrimSpace(newFinding.Message))
+					normalizedPrev := strings.ToLower(strings.TrimSpace(prevFinding.Message))
+					if strings.Contains(normalizedNew, normalizedPrev) || strings.Contains(normalizedPrev, normalizedNew) {
+						isDuplicate = true
+						break
+					}
+					// Also check if they share a significant prefix.
+					if len(normalizedNew) > 20 && len(normalizedPrev) > 20 && normalizedNew[:20] == normalizedPrev[:20] {
+						isDuplicate = true
+						break
+					}
 				}
 			}
 		}
@@ -168,6 +207,7 @@ func Deduplicate(newFindings []models.ReviewComment, previous []PreviousFinding)
 		if !isDuplicate {
 			toPost = append(toPost, newFinding)
 		} else {
+			fmt.Printf("  🧠 [Memory] Skipping duplicate finding in %s:L%d (Hash: %s)\n", newFinding.File, newFinding.Line, newHash)
 			skipped++
 		}
 	}

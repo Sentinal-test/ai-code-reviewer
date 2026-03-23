@@ -3,6 +3,7 @@ package action
 import (
 	"code-review/backend/internal/models"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
@@ -273,8 +274,9 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 			}
 		}
 
+		encodedFile := base64.RawURLEncoding.EncodeToString([]byte(c.File))
 		marker := fmt.Sprintf("<!-- ai-reviewer:v1 file=%s line=%d severity=%s layer=%s hash=%s -->",
-			c.File, c.Line, c.Severity, c.Layer, memory.Fingerprint(c.File, c.Layer, c.Message))
+			encodedFile, c.Line, c.Severity, c.Layer, memory.Fingerprint(c.File, c.Layer, c.Message))
 		msg := marker + "\n" + fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
 
 		comment := &github.PullRequestComment{
@@ -354,8 +356,9 @@ func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, resu
 			}
 		}
 
+		encodedFile := base64.RawURLEncoding.EncodeToString([]byte(c.File))
 		marker := fmt.Sprintf("<!-- ai-reviewer:v1 file=%s line=%d severity=%s layer=%s hash=%s -->",
-			c.File, c.Line, c.Severity, c.Layer, memory.Fingerprint(c.File, c.Layer, c.Message))
+			encodedFile, c.Line, c.Severity, c.Layer, memory.Fingerprint(c.File, c.Layer, c.Message))
 		msg := marker + "\n" + fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
 		comments = append(comments, &github.DraftReviewComment{
 			Path: github.String(c.File),

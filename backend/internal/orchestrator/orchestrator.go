@@ -144,11 +144,8 @@ func ReviewChunk(
 	structureConfig.RepoStructure = repoStructure // Structure needs the repo tree
 	structureConfig.CacheID = cacheIDs[agents.AgentStructure]
 
-	// Create tool executor for agent tool calls
-	toolExecutor := llm.NewToolExecutor(repoPath, graph)
-	if matchSummary != "" {
-		toolExecutor.WithMultiRepo(matchSummary, remoteGraphs, remoteFetch)
-	}
+	// Tool executors are created per-agent in the goroutine loop to avoid
+	// concurrent executions blocking each other via the sync.Map cache.
 
 	// Prepare the 3 specialist configs
 	configs := []agents.AgentConfig{
@@ -171,7 +168,14 @@ func ReviewChunk(
 		wg.Add(1)
 		go func(idx int, cfg agents.AgentConfig) {
 			defer wg.Done()
-			results[idx] = llm.RunAgentReview(ctx, provider, cfg, toolExecutor)
+			
+			// Create a fresh tool executor per agent
+			agentTe := llm.NewToolExecutor(repoPath, graph)
+			if matchSummary != "" {
+				agentTe.WithMultiRepo(matchSummary, remoteGraphs, remoteFetch)
+			}
+			
+			results[idx] = llm.RunAgentReview(ctx, provider, cfg, agentTe)
 		}(i, config)
 	}
 

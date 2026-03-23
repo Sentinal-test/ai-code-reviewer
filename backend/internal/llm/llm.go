@@ -160,9 +160,8 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 			// FIX #1: Use regex to extract filename (handles spaces and quoted paths)
 			matches := diffPathRegex.FindStringSubmatch(line)
 			if len(matches) >= 3 {
-				// Use the second path (b/ path)
-				pathB := strings.Trim(matches[2], "\"")
-				currentFile = strings.TrimPrefix(pathB, "b/")
+				// The regex already consumed the 'b/' prefix.
+				currentFile = strings.Trim(matches[2], "\"")
 			} else {
 				// Fallback: try to extract using the old method for edge cases
 				parts := strings.Fields(line)

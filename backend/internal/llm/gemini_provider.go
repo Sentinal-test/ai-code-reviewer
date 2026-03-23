@@ -93,7 +93,12 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 
 	if req.ResponseJSON {
 		config.ResponseMIMEType = "application/json"
-		// We could add ResponseSchema, but our prompt enforces it stringently.
+		if req.ResponseSchema != nil {
+			bytes, _ := json.Marshal(req.ResponseSchema)
+			var schema genai.Schema
+			json.Unmarshal(bytes, &schema)
+			config.ResponseSchema = &schema
+		}
 	}
 
 	if req.CachedContent != "" {
