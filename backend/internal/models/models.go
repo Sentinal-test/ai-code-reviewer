@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // FlexInt64 allows unmarshaling an integer from either a JSON integer or a JSON string.
@@ -14,18 +15,21 @@ func (fi *FlexInt64) UnmarshalJSON(b []byte) error {
 	if len(b) > 0 && b[0] == '"' {
 		var s string
 		if err := json.Unmarshal(b, &s); err != nil {
-			return err
+			*fi = 0
+			return nil
 		}
 		val, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
-			return err
+			*fi = 0
+			return nil
 		}
 		*fi = FlexInt64(val)
 		return nil
 	}
 	var val int64
 	if err := json.Unmarshal(b, &val); err != nil {
-		return err
+		*fi = 0
+		return nil
 	}
 	*fi = FlexInt64(val)
 	return nil
@@ -101,8 +105,10 @@ type PreviousFinding struct {
 func MergeResolutions(all []Resolution) []Resolution {
 	resMap := make(map[FlexInt64]Resolution)
 	for _, res := range all {
+		isResolved := strings.EqualFold(res.Status, "resolved")
 		if existing, exists := resMap[res.CommentID]; exists {
-			if existing.Status != "resolved" && res.Status == "resolved" {
+			existingResolved := strings.EqualFold(existing.Status, "resolved")
+			if !existingResolved && isResolved {
 				resMap[res.CommentID] = res
 			}
 		} else {

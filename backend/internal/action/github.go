@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"html"
 	"net/http"
 	"os"
 	"regexp"
@@ -469,12 +468,12 @@ func buildResolutionsBlock(resolutions []models.Resolution) string {
 	var resBlock strings.Builder
 	resolvedCount := 0
 	for _, res := range resolutions {
-		if res.Status == "resolved" {
+		if strings.EqualFold(res.Status, "resolved") {
 			if resolvedCount == 0 {
 				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
 			}
-			// Sanitize reason to prevent markdown injection
-			safeReason := html.EscapeString(res.Reason)
+			// Replace newlines with spaces to prevent markdown list breakage
+			safeReason := strings.ReplaceAll(res.Reason, "\n", " ")
 			resBlock.WriteString(fmt.Sprintf("- %s\n", safeReason))
 			resolvedCount++
 		}
