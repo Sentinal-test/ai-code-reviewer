@@ -306,7 +306,7 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 			if len(msg) > 200 {
 				msg = msg[:200] + "..."
 			}
-			b.WriteString(fmt.Sprintf("- [%s] %s:%d: %s\n", f.Layer, f.File, f.Line, msg))
+			b.WriteString(fmt.Sprintf("- [ID: %d] [%s] %s:%d: %s\n", f.CommentID, f.Layer, f.File, f.Line, msg))
 		}
 		b.WriteString("\n")
 	}
@@ -410,7 +410,8 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 	b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
 	b.WriteString("BEGIN ANALYSIS NOW.\n")
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-	b.WriteString("REMINDER: Your response MUST be a valid JSON object with \"thinking\", \"summary\", and \"comments\" keys.\n")
+	b.WriteString("REMINDER: Your response MUST be a valid JSON object with \"thinking\", \"summary\", \"comments\", and \"resolutions\" keys.\n")
+	b.WriteString("For \"resolutions\", output an array of objects {\"comment_id\": 123, \"status\": \"resolved\"|\"unresolved\", \"reason\": \"...\"} evaluating if previous findings were fixed based on the new diff.\n")
 	b.WriteString("Do NOT output plain text, code comments, or markdown. Output ONLY JSON.\n")
 
 	return b.String()

@@ -27,9 +27,17 @@ type ReviewComment struct {
 	Message  string `json:"message"`
 }
 
+// Resolution tracks whether a specific previously reported issue was fixed.
+type Resolution struct {
+	CommentID int64  `json:"comment_id"`
+	Status    string `json:"status"` // "resolved" or "unresolved"
+	Reason    string `json:"reason"`
+}
+
 type ReviewResult struct {
-	Summary  string          `json:"summary"`
-	Comments []ReviewComment `json:"comments"`
+	Summary     string          `json:"summary"`
+	Comments    []ReviewComment `json:"comments"`
+	Resolutions []Resolution    `json:"resolutions,omitempty"`
 }
 
 // PRContext holds metadata about a PR for enhanced LLM context

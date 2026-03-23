@@ -126,9 +126,33 @@ func DeterministicConsolidate(results []AgentResult, maxComments int) *models.Re
 		combinedSummary += s + "\n"
 	}
 
+	// Merge Resolutions
+	resMap := make(map[int64]models.Resolution)
+	for _, r := range results {
+		if r.Error != nil {
+			continue
+		}
+		for _, res := range r.Resolutions {
+			// Prioritize "resolved" status
+			if existing, exists := resMap[res.CommentID]; exists {
+				if existing.Status != "resolved" && res.Status == "resolved" {
+					resMap[res.CommentID] = res
+				}
+			} else {
+				resMap[res.CommentID] = res
+			}
+		}
+	}
+
+	var finalResolutions []models.Resolution
+	for _, res := range resMap {
+		finalResolutions = append(finalResolutions, res)
+	}
+
 	return &models.ReviewResult{
-		Summary:  combinedSummary,
-		Comments: final,
+		Summary:     combinedSummary,
+		Comments:    final,
+		Resolutions: finalResolutions,
 	}
 }
 

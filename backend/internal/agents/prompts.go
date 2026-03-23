@@ -482,7 +482,8 @@ CONSOLIDATION RULES:
 4. BE EXTREMELY CONCISE: Keep messages strictly under 3-4 sentences. The total output JSON must not exceed token limits.
 5. REMOVE false positives, vague/speculative comments, or feedback that asks questions instead of providing a fix.
 6. CRITICAL VALIDATION: Cross-reference every comment with the provided DIFF. Drop any comment where the line number does not exist inside a [NEW_LIVE_CODE] block in the diff.
-7. CAP at %d comments total. Prioritize: critical > warning > info. Dropping lower-severity issues is required if you hit the cap.
+7. RESOLUTIONS: The agents may also output 'resolutions' marking whether previous PR comments were fixed. If multiple agents resolve the same 'comment_id', merge them into one. Prioritize 'resolved' over 'unresolved'. If an agent says 'resolved', keep it.
+8. CAP at %d comments total. Prioritize: critical > warning > info. Dropping lower-severity issues is required if you hit the cap. Do not cap resolutions.
 
 Output valid JSON matching this schema exactly:
 {
@@ -494,6 +495,13 @@ Output valid JSON matching this schema exactly:
       "severity": "critical|warning|info",
       "layer": "bug|performance|security|architecture|lint",
       "message": "Concise explanation"
+    }
+  ],
+  "resolutions": [
+    {
+      "comment_id": 12345,
+      "status": "resolved",
+      "reason": "Why it was resolved"
     }
   ]
 }

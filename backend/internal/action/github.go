@@ -324,8 +324,21 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 		time.Sleep(500 * time.Millisecond)
 	}
 
+	// Build resolved issues block
+	var resBlock strings.Builder
+	resolvedCount := 0
+	for _, res := range result.Resolutions {
+		if res.Status == "resolved" {
+			if resolvedCount == 0 {
+				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
+			}
+			resBlock.WriteString(fmt.Sprintf("- %s\n", res.Reason))
+			resolvedCount++
+		}
+	}
+
 	// Post the final summary
-	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s", result.Summary)
+	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s%s", result.Summary, resBlock.String())
 	if failedInline > 0 {
 		summaryMsg += fmt.Sprintf("\n\n---\n*Note: %d comments were posted as general comments because their line numbers could not be resolved in the PR diff.*", failedInline)
 	}
@@ -378,10 +391,23 @@ func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, resu
 		return nil
 	}
 
+	// Build resolved issues block
+	var resBlock strings.Builder
+	resolvedCount := 0
+	for _, res := range result.Resolutions {
+		if res.Status == "resolved" {
+			if resolvedCount == 0 {
+				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
+			}
+			resBlock.WriteString(fmt.Sprintf("- %s\n", res.Reason))
+			resolvedCount++
+		}
+	}
+
 	reviewRequest := &github.PullRequestReviewRequest{
 		CommitID: github.String(commitSHA),
 		Event:    github.String("COMMENT"),
-		Body:     github.String("### AI Code Review Summary\n\n" + result.Summary),
+		Body:     github.String("### AI Code Review Summary\n\n" + result.Summary + resBlock.String()),
 		Comments: comments,
 	}
 
