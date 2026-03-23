@@ -870,7 +870,7 @@ func ConsolidateResults(results []*models.ReviewResult) *models.ReviewResult {
 	seen := make(map[commentKey]bool)
 	var allComments []models.ReviewComment
 	var summaries []string
-	resMap := make(map[int64]models.Resolution)
+	var allResolutions []models.Resolution
 
 	for _, r := range results {
 		if r == nil {
@@ -892,15 +892,7 @@ func ConsolidateResults(results []*models.ReviewResult) *models.ReviewResult {
 			}
 		}
 
-		for _, res := range r.Resolutions {
-			if existing, exists := resMap[res.CommentID]; exists {
-				if existing.Status != "resolved" && res.Status == "resolved" {
-					resMap[res.CommentID] = res
-				}
-			} else {
-				resMap[res.CommentID] = res
-			}
-		}
+		allResolutions = append(allResolutions, r.Resolutions...)
 	}
 
 	// Build consolidated summary
@@ -925,15 +917,10 @@ func ConsolidateResults(results []*models.ReviewResult) *models.ReviewResult {
 	fmt.Printf("\n🔄 [Consolidation] %d chunks → %d unique comments (deduped from %d total)\n",
 		len(results), len(allComments), countTotalComments(results))
 
-	var finalResolutions []models.Resolution
-	for _, res := range resMap {
-		finalResolutions = append(finalResolutions, res)
-	}
-
 	return &models.ReviewResult{
 		Summary:     summary,
 		Comments:    allComments,
-		Resolutions: finalResolutions,
+		Resolutions: models.MergeResolutions(allResolutions),
 	}
 }
 

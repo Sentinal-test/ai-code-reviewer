@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"html"
 	"net/http"
 	"os"
 	"regexp"
@@ -324,21 +325,9 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// Build resolved issues block
-	var resBlock strings.Builder
-	resolvedCount := 0
-	for _, res := range result.Resolutions {
-		if res.Status == "resolved" {
-			if resolvedCount == 0 {
-				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
-			}
-			resBlock.WriteString(fmt.Sprintf("- %s\n", res.Reason))
-			resolvedCount++
-		}
-	}
-
-	// Post the final summary
-	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s%s", result.Summary, resBlock.String())
+	// Build resolved issues block and append to summary
+	resBlock := buildResolutionsBlock(result.Resolutions)
+	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s%s", result.Summary, resBlock)
 	if failedInline > 0 {
 		summaryMsg += fmt.Sprintf("\n\n---\n*Note: %d comments were posted as general comments because their line numbers could not be resolved in the PR diff.*", failedInline)
 	}
@@ -387,27 +376,16 @@ func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, resu
 		g.postGeneralComment(ctx, prNumber, msg)
 	}
 
-	if len(comments) == 0 && result.Summary == "" {
-		return nil
-	}
+	resBlock := buildResolutionsBlock(result.Resolutions)
 
-	// Build resolved issues block
-	var resBlock strings.Builder
-	resolvedCount := 0
-	for _, res := range result.Resolutions {
-		if res.Status == "resolved" {
-			if resolvedCount == 0 {
-				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
-			}
-			resBlock.WriteString(fmt.Sprintf("- %s\n", res.Reason))
-			resolvedCount++
-		}
+	if len(comments) == 0 && result.Summary == "" && resBlock == "" {
+		return nil
 	}
 
 	reviewRequest := &github.PullRequestReviewRequest{
 		CommitID: github.String(commitSHA),
 		Event:    github.String("COMMENT"),
-		Body:     github.String("### AI Code Review Summary\n\n" + result.Summary + resBlock.String()),
+		Body:     github.String("### AI Code Review Summary\n\n" + result.Summary + resBlock),
 		Comments: comments,
 	}
 
@@ -484,4 +462,22 @@ func (g *GitHubClient) ListAccessibleRepos(ctx context.Context) ([]*github.Repos
 	}
 
 	return allRepos, nil
+}
+
+// buildResolutionsBlock formats the merged resolutions, safely escaping the LLM output.
+func buildResolutionsBlock(resolutions []models.Resolution) string {
+	var resBlock strings.Builder
+	resolvedCount := 0
+	for _, res := range resolutions {
+		if res.Status == "resolved" {
+			if resolvedCount == 0 {
+				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
+			}
+			// Sanitize reason to prevent markdown injection
+			safeReason := html.EscapeString(res.Reason)
+			resBlock.WriteString(fmt.Sprintf("- %s\n", safeReason))
+			resolvedCount++
+		}
+	}
+	return resBlock.String()
 }

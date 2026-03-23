@@ -1,5 +1,36 @@
 package models
 
+import (
+	"encoding/json"
+	"sort"
+	"strconv"
+)
+
+// FlexInt64 allows unmarshaling an integer from either a JSON integer or a JSON string.
+// This is critical because LLMs may drift and output stringified integers.
+type FlexInt64 int64
+
+func (fi *FlexInt64) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		val, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return err
+		}
+		*fi = FlexInt64(val)
+		return nil
+	}
+	var val int64
+	if err := json.Unmarshal(b, &val); err != nil {
+		return err
+	}
+	*fi = FlexInt64(val)
+	return nil
+}
+
 type User struct {
 	ID                int
 	GitHubID          string
@@ -29,7 +60,7 @@ type ReviewComment struct {
 
 // Resolution tracks whether a specific previously reported issue was fixed.
 type Resolution struct {
-	CommentID int64  `json:"comment_id"`
+	CommentID FlexInt64 `json:"comment_id"`
 	Status    string `json:"status"` // "resolved" or "unresolved"
 	Reason    string `json:"reason"`
 }
@@ -61,6 +92,32 @@ type PreviousFinding struct {
 	Severity  string `json:"severity"`
 	Layer     string `json:"layer"`
 	Message   string `json:"message"`
-	Hash      string `json:"hash"`       // fingerprint for dedup
-	CommentID int64  `json:"comment_id"` // GitHub comment ID
+	Hash      string    `json:"hash"`       // fingerprint for dedup
+	CommentID FlexInt64 `json:"comment_id"` // GitHub comment ID
+}
+
+// MergeResolutions deduplicates and merges a flat list of resolutions,
+// prioritizing the "resolved" status for duplicate comment IDs.
+func MergeResolutions(all []Resolution) []Resolution {
+	resMap := make(map[FlexInt64]Resolution)
+	for _, res := range all {
+		if existing, exists := resMap[res.CommentID]; exists {
+			if existing.Status != "resolved" && res.Status == "resolved" {
+				resMap[res.CommentID] = res
+			}
+		} else {
+			resMap[res.CommentID] = res
+		}
+	}
+
+	var finalResolutions []Resolution
+	for _, res := range resMap {
+		finalResolutions = append(finalResolutions, res)
+	}
+
+	sort.Slice(finalResolutions, func(i, j int) bool {
+		return finalResolutions[i].CommentID < finalResolutions[j].CommentID
+	})
+
+	return finalResolutions
 }

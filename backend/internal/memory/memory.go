@@ -70,7 +70,7 @@ func ParseMarker(body, actualFile string, actualLine int, commentID int64) *mode
 		Layer:     layer,
 		Message:   body, // We don't need the exact original message for dedup, only the hash
 		Hash:      hash,
-		CommentID: commentID,
+		CommentID: models.FlexInt64(commentID),
 	}
 }
 
