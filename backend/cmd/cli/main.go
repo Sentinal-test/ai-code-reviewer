@@ -6,6 +6,7 @@ import (
 	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
+	"code-review/backend/internal/memory"
 	"code-review/backend/internal/models"
 	"code-review/backend/internal/multirepo"
 	"code-review/backend/internal/orchestrator"
@@ -536,8 +537,6 @@ func run() int {
 			return 1
 		}
 
-		fmt.Printf("🚀 Posting comments to %s PR #%s...\n", repoName, prNumber)
-
 		parts := strings.Split(repoName, "/")
 		if len(parts) != 2 {
 			fmt.Printf("❌ Invalid repo name format: %s\n", repoName)
@@ -550,6 +549,21 @@ func run() int {
 		if ghClient == nil {
 			ghClient = action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
 		}
+
+		// PR Memory: Fetch previous findings and deduplicate
+		previous, err := memory.FetchPreviousFindings(ctx, ghClient.GetRawClient(), parts[0], parts[1], prNum)
+		if err != nil {
+			fmt.Printf("⚠️ [Memory] Failed to fetch previous findings: %v (proceeding without dedup)\n", err)
+		} else if len(previous) > 0 {
+			fmt.Printf("🧠 [Memory] Found %d previous bot comments on this PR\n", len(previous))
+			var skipped int
+			result.Comments, skipped = memory.Deduplicate(result.Comments, previous)
+			fmt.Printf("🧠 [Memory] Deduplication: %d new, %d skipped (already posted)\n",
+				len(result.Comments), skipped)
+		}
+
+		fmt.Printf("🚀 Posting comments to %s PR #%s...\n", repoName, prNumber)
+
 		if err := ghClient.PostReview(ctx, prNum, result, commitSHA, diff); err != nil {
 			fmt.Printf("❌ Failed to post review: %v\n", err)
 			return 1

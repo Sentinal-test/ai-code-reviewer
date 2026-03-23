@@ -1,0 +1,199 @@
+# AI Code Reviewer — Top Improvement Recommendations
+
+> Based on a deep analysis of all core source files, docs, benchmarking infra, and the existing [AGENT_AUDIT.md](file:///Users/tegi/Desktop/code-review/docs/AGENT_AUDIT.md).
+
+---
+
+## Top 7 Recommendations (Ranked by Impact)
+
+### 🥇 1. PR Memory — Stateless Reviews Are Your Biggest Accuracy Killer
+
+**Problem**: Every review run is completely stateless. The system has zero memory of:
+- Its own previous comments on the same PR (across `synchronize` events)
+- Whether the developer already addressed a finding
+- What it reviewed on the last commit push
+
+This means on every new commit push, the agent re-reviews everything, potentially:
+- Posts **duplicate comments** for issues already flagged
+- Misses the opportunity to verify if a previous bug was actually fixed
+- Cannot track regressions (e.g., "I told you about this in commit A, and it's still broken in commit B")
+
+**Concrete Fix**:
+1. Before posting, fetch all existing bot comments on the PR via `ghClient.ListReviewComments()`
+2. Build a `previousFindings` map: `{file:line:message_hash → comment_id}`
+3. Deduplicate new findings against previous: skip if same file + line + similar message
+4. For re-reviews on `synchronize`, pass the previous findings to the consolidator so it can say "previously flagged, still not fixed" vs "new issue"
+5. Store a lightweight PR state file using GitHub PR comment metadata or a hidden review summary comment
+
+**Files to change**:
+- [github.go](file:///Users/tegi/Desktop/code-review/backend/internal/action/github.go) — add `ListReviewComments()`
+- [consolidator.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/consolidator.go) — accept `previousFindings` parameter
+- [main.go](file:///Users/tegi/Desktop/code-review/backend/cmd/cli/main.go) — wire up the memory flow
+
+**Impact**: High accuracy + dramatically better UX (no duplicate noise)
+
+---
+
+### 🥈 2. Review Coverage Manifest — Prove What Was (And Wasn't) Reviewed
+
+**Problem**: There is **no audit trail**. The system cannot answer "which hunks were actually reviewed?" After a review, there's no way to know:
+- Did every changed hunk get assigned to a chunk?
+- Were any files silently dropped by [filterReviewableFiles()](file:///Users/tegi/Desktop/code-review/backend/internal/orchestrator/orchestrator.go#44-54)?  
+- Did the oversized-file fallback cause any content to be missed?
+
+**Concrete Fix**:
+1. Before chunking, enumerate ALL changed files and their hunks into a `CoverageManifest`
+2. Track each file's status: `reviewed`, `filtered_doc_config`, `filtered_dev_rules`, `oversized_partial`, `chunk_error`
+3. After all chunks complete, compute coverage stats: `{total_files, reviewed, skipped, partial}`
+4. Append a coverage summary to the final PR review comment, e.g.:
+
+   ```
+   📊 Coverage: 23/25 files reviewed (2 skipped: README.md, CHANGELOG.md)
+   ```
+
+**Files to change**:
+- New: `backend/internal/orchestrator/coverage.go` — `CoverageManifest` struct and tracking
+- [orchestrator.go](file:///Users/tegi/Desktop/code-review/backend/internal/orchestrator/orchestrator.go) — populate manifest during [filterReviewableFiles()](file:///Users/tegi/Desktop/code-review/backend/internal/orchestrator/orchestrator.go#44-54)
+- [main.go](file:///Users/tegi/Desktop/code-review/backend/cmd/cli/main.go) — aggregate across chunks and include in output
+
+**Impact**: Enables truthful product claims and builds user trust
+
+---
+
+### 🥉 3. Missing `list_files` Tool — Agents Are Partially Blind
+
+**Problem**: The agents have `get_file_content`, `get_symbol_definition`, `get_callers`, and `search_codebase` — but they have **no way to discover what files exist**. If an agent needs to check "is there a test file for this new module?" or "what other files are in this directory?", they're stuck.
+
+The [AGENT_AUDIT.md](file:///Users/tegi/Desktop/code-review/docs/AGENT_AUDIT.md) also flags this at line 354: *"Missing: a file-list tool"*.
+
+**Concrete Fix**:
+Add a `list_directory` tool:
+
+```go
+{
+    Name: "list_directory",
+    Description: "List files and subdirectories in a given path. Use this to discover test files, related modules, or understand project structure in a specific area.",
+    Parameters: { "path": "Relative directory path" },
+}
+```
+
+Implementation: `filepath.WalkDir()` on `te.RepoPath + path`, capped at 100 entries, 2 levels deep.
+
+**Files to change**:
+- [tools.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/tools.go) — add declaration and `listDirectory()` handler
+
+**Impact**: Medium-high — enables the Structure agent to actually verify file organization claims
+
+---
+
+### 4. Search Results Are Too Aggressive with Caps — Missing Broader Impact
+
+**Problem** (from [AGENT_AUDIT.md](file:///Users/tegi/Desktop/code-review/docs/AGENT_AUDIT.md) line 428): `search_codebase` uses `git grep --max-count=5` and then caps output at 30 lines. When a changed symbol is used in 50 places, the agent sees only 5 and concludes "limited usage" — missing widespread breakage.
+
+**Concrete Fix**:
+- Increase `--max-count` to `20` (from 5)
+- Show a count summary even when truncating: `"Found 47 matches (showing first 20)"`
+- Add a `--count-only` mode where the agent can first ask "how many matches?" before fetching details
+
+**Files to change**:
+- [tools.go:410](file:///Users/tegi/Desktop/code-review/backend/internal/llm/tools.go#L410) — increase limit and improve truncation message
+
+**Impact**: Directly improves accuracy for cross-file breakage detection
+
+---
+
+### 5. Shallow PR Context — Only Last 2 Commits
+
+**Problem** (from [AGENT_AUDIT.md](file:///Users/tegi/Desktop/code-review/docs/AGENT_AUDIT.md) line 422): `github.go:411` fetches commit messages but only keeps the last 2 commits. For PRs with 10+ commits telling a story (refactor → fix → test → cleanup), the agent misses the narrative.
+
+Additionally, the PR body is truncated to 1000 chars in [agent_loop.go:314](file:///Users/tegi/Desktop/code-review/backend/internal/llm/agent_loop.go#L314), which drops template content that often contains ticket links and acceptance criteria.
+
+**Concrete Fix**:
+- Increase commit message limit to last 5-7 commits (or all if <10)
+- Increase PR body limit to 3000 chars
+- Parse PR body for structured sections (## What, ## Why, ## Testing) and prioritize those
+
+**Files to change**:
+- [github.go](file:///Users/tegi/Desktop/code-review/backend/internal/action/github.go) — increase commit fetch limit
+- [agent_loop.go:314](file:///Users/tegi/Desktop/code-review/backend/internal/llm/agent_loop.go#L314) — increase body truncation limit
+
+**Impact**: Better intent understanding → fewer false positives
+
+---
+
+### 6. Response Schema Is Declared But Not Enforced
+
+**Problem** (from [AGENT_AUDIT.md](file:///Users/tegi/Desktop/code-review/docs/AGENT_AUDIT.md) line 409): `agent_loop.go:19` declares a detailed `responseSchema` with types, enums, and required fields — but it's **never actually sent to the Gemini API**. The code only sets `ResponseJSON: true` which requests JSON mode, not schema-enforced mode.
+
+This means the model can return malformed JSON, wrong severity values, or missing fields — and the system has to rely on fragile text-based fallback parsing ([agent_loop.go:398-516](file:///Users/tegi/Desktop/code-review/backend/internal/llm/agent_loop.go#L398-L516)).
+
+**Concrete Fix**:
+1. Pass `responseSchema` to the Gemini provider via `GenerateRequest`
+2. In the Gemini API call, set `GenerationConfig.ResponseSchema` and `ResponseMimeType: "application/json"`
+3. This eliminates the need for all the fallback parsing logic and guarantees valid output
+
+**Files to change**:
+- [provider.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/provider.go) — add `ResponseSchema` field to `GenerateRequest`
+- [gemini_provider.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/gemini_provider.go) — wire schema into API call
+- [agent_loop.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/agent_loop.go) — pass schema in request
+
+**Impact**: Eliminates an entire class of parsing failures and improves output reliability
+
+---
+
+### 7. Confidence Scoring — Let The Agent Say "I'm Not Sure"
+
+**Problem**: Every finding is treated with equal confidence. The agent has no way to express "I verified this with 3 tool calls and I'm certain" vs "I'm guessing based on the diff alone." This makes it hard for developers to triage.
+
+**Concrete Fix**:
+1. Add a `confidence` field to the response schema: `"confidence": {"type": "string", "enum": ["verified", "likely", "speculative"]}`
+2. Update prompts to instruct: "Set `verified` if you confirmed with a tool call, `likely` if you traced the logic but didn't verify, `speculative` if based on pattern-matching alone"
+3. In consolidation: auto-drop `speculative` findings if hitting the comment cap
+4. In GitHub comments: prepend a visual indicator: `🔴 Verified` / `🟡 Likely` / `⚪ Speculative`
+
+**Files to change**:
+- [agent_loop.go](file:///Users/tegi/Desktop/code-review/backend/internal/llm/agent_loop.go) — add to schema
+- [prompts.go](file:///Users/tegi/Desktop/code-review/backend/internal/agents/prompts.go) — add confidence instructions
+- [models.go](file:///Users/tegi/Desktop/code-review/backend/internal/models) — add `Confidence` to `ReviewComment`
+- [github.go](file:///Users/tegi/Desktop/code-review/backend/internal/action/github.go) — format with visual indicator
+
+**Impact**: Better developer trust + smarter auto-filtering of noise
+
+---
+
+## Existing Bugs to Fix Now
+
+| # | Bug | File | Fix |
+|---|-----|------|-----|
+| 1 | `responseSchema` declared but never sent to API | [agent_loop.go:19](file:///Users/tegi/Desktop/code-review/backend/internal/llm/agent_loop.go#L19) | Wire into `GenerateRequest` → Gemini `ResponseSchema` |
+| 2 | `allowed_domain` action input is unused | [action.yml:30](file:///Users/tegi/Desktop/code-review/action.yml#L30) | Remove or implement |
+| 3 | Provider validation in action is too loose — checks if *any* key exists, not whether the correct provider's key exists | [action.yml:109](file:///Users/tegi/Desktop/code-review/action.yml#L109) | Validate `selected_provider` matches available key |
+| 4 | Tool call deduplication uses `sync.Map` per-executor but never resets across chunks | [tools.go:183](file:///Users/tegi/Desktop/code-review/backend/internal/llm/tools.go#L183) | Create fresh [ToolExecutor](file:///Users/tegi/Desktop/code-review/backend/internal/llm/tools.go#173-185) per chunk (currently done, but verify) |
+| 5 | `costLedger` is created but never used for analytics reporting | [main.go:402](file:///Users/tegi/Desktop/code-review/backend/cmd/cli/main.go#L402) | Add analytics event emission |
+
+---
+
+## Quick Wins (< 1 day each)
+
+| Change | Impact |
+|--------|--------|
+| Add `list_directory` tool | Unlocks file discovery for agents |
+| Increase `search_codebase` `--max-count` from 5→20 | Fewer missed cross-file impacts |
+| Increase PR body limit from 1000→3000 chars | Better intent context |
+| Increase commit messages from 2→7 | Richer PR narrative |
+| Wire `responseSchema` to Gemini API | Eliminates parsing failures |
+| Remove unused `allowed_domain` input | Cleaner action config |
+
+---
+
+## Future (Phase 5+ from PRODUCTION_PLAN)
+
+These are called out in your existing docs but not yet started:
+
+| Feature | Status | Next Step |
+|---------|--------|-----------|
+| **PR Memory** | Not started | Implement comment dedup (recommendation #1 above) |
+| **Semantic Caching** | Not started | Hash diff+graph to detect "nothing changed" |
+| **CI/Test Result Context** | Not started | Fetch and inject failing test output |
+| **Linked Issue/Ticket Ingestion** | Not started | Parse GitHub issue links from PR body |
+| **Analytics Pipeline** | Partially planned | Wire `costLedger` data to backend API |
