@@ -19,6 +19,7 @@ import (
 // These represent the "surface area" of the PR changes that might affect other repos.
 type LocalSignals struct {
 	ProjectName             string            // e.g., module name from go.mod or name from package.json
+	ProjectTargets          []string          // canonical dependency/import targets and aliases for this project
 	ChangedExports          map[string]string // map[SymbolName]Language
 	ChangedQualifiedExports map[string]string // map[QualifiedSymbol]Language
 	ChangedImports          map[string]string // map[ImportPath]Language
@@ -118,71 +119,99 @@ type CandidateMatch struct {
 // IdentifyRelevantRepos uses the GitHub API to fetch manifests and identify which repos are likely relevant.
 // This allows us to skip cloning 100s of irrelevant repositories.
 func IdentifyRelevantRepos(ctx context.Context, client *github.Client, signals LocalSignals, repos []multirepo.DiscoveredRepo) []multirepo.DiscoveredRepo {
-	var relevant []multirepo.DiscoveredRepo
-
-	// Manifests to check per language
-	manifests := []string{
-		"go.mod",                                         // Go
-		"package.json",                                   // JS/TS
-		"requirements.txt", "pyproject.toml", "setup.py", // Python
-		"pom.xml", "build.gradle", // Java
+	if len(repos) == 0 {
+		return nil
 	}
 
-	fmt.Printf("   🔍 [LightweightFilter] Checking %d repos for dependency match to '%s'...\n", len(repos), signals.ProjectName)
+	manifests := []string{
+		"go.mod", "package.json", "requirements.txt", "pyproject.toml",
+		"setup.py", "pom.xml", "build.gradle",
+	}
+
+	fmt.Printf("   🔍 [LightweightFilter] Checking %d repos concurrently...\n", len(repos))
+	rootTargets := projectRootTargets(signals)
 	projectTargets := projectDependencyTargets(signals)
 
+	type result struct {
+		repo multirepo.DiscoveredRepo
+		rel  bool
+	}
+
+	repoChan := make(chan multirepo.DiscoveredRepo, len(repos))
+	resChan := make(chan result, len(repos))
+
+	// Start workers (max 10 concurrent)
+	numWorkers := 10
+	if len(repos) < numWorkers {
+		numWorkers = len(repos)
+	}
+
+	for w := 0; w < numWorkers; w++ {
+		go func() {
+			for repo := range repoChan {
+				matched := false
+				for _, manifest := range manifests {
+					fileContent, _, _, err := client.Repositories.GetContents(ctx, repo.Owner, repo.Name, manifest, nil)
+					if err != nil || fileContent == nil {
+						continue
+					}
+					content, err := fileContent.GetContent()
+					if err != nil {
+						continue
+					}
+
+					// Check project and root targets
+					for _, target := range rootTargets {
+						if target != "" && manifestMatch(manifest, content, target) {
+							matched = true
+							break
+						}
+					}
+					if !matched {
+						for _, target := range projectTargets {
+							if target != "" && manifestMatch(manifest, content, target) {
+								matched = true
+								break
+							}
+						}
+					}
+					if !matched {
+						for imp, lang := range signals.ChangedImports {
+							if imp == "" || IsStandardLibrary(lang, imp) {
+								continue
+							}
+							if manifestMatch(manifest, content, imp) {
+								matched = true
+								break
+							}
+						}
+					}
+					if matched {
+						break
+					}
+				}
+				resChan <- result{repo, matched}
+			}
+		}()
+	}
+
 	for _, repo := range repos {
-		matched := false
-		for _, manifest := range manifests {
-			fileContent, _, _, err := client.Repositories.GetContents(ctx, repo.Owner, repo.Name, manifest, nil)
-			if err != nil || fileContent == nil {
-				continue
-			}
+		repoChan <- repo
+	}
+	close(repoChan)
 
-			content, err := fileContent.GetContent()
-			if err != nil {
-				continue
-			}
-
-			if signals.ProjectName != "" && manifestMatch(manifest, content, signals.ProjectName) {
-				fmt.Printf("      ✅ %s matched via %s (depends on %s)\n", repo.FullName, manifest, signals.ProjectName)
-				matched = true
-				break
-			}
-
-			for _, target := range projectTargets {
-				if target == "" || target == signals.ProjectName {
-					continue
-				}
-				if manifestMatch(manifest, content, target) {
-					fmt.Printf("      ✅ %s matched via %s (depends on changed package: %s)\n", repo.FullName, manifest, target)
-					matched = true
-					break
-				}
-			}
-			if matched {
-				break
-			}
-
-			for imp, lang := range signals.ChangedImports {
-				if len(imp) < 5 || IsStandardLibrary(lang, imp) {
-					continue
-				}
-				if manifestMatch(manifest, content, imp) {
-					fmt.Printf("      ✅ %s matched via %s (shares import: %s)\n", repo.FullName, manifest, imp)
-					matched = true
-					break
-				}
-			}
-			if matched {
-				break
-			}
-		}
-
-		if matched {
-			relevant = append(relevant, repo)
+	var relevant []multirepo.DiscoveredRepo
+	for i := 0; i < len(repos); i++ {
+		res := <-resChan
+		if res.rel {
+			relevant = append(relevant, res.repo)
 		}
 	}
+
+	// Sort result for determinism
+	sort.Slice(relevant, func(i, j int) bool {
+		return relevant[i].FullName < relevant[j].FullName
+	})
 
 	return relevant
 }
@@ -201,8 +230,11 @@ func manifestMatch(manifest, content, target string) bool {
 		lines := strings.Split(content, "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "module ") {
-				continue
+			if strings.HasPrefix(line, "module") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 && fields[0] == "module" {
+					continue
+				}
 			}
 			// require github.com/foo/bar v1.2.3
 			if strings.Contains(line, target) {
@@ -264,30 +296,73 @@ func manifestMatch(manifest, content, target string) bool {
 	return false
 }
 
-// ExtractProjectName identifies the name/module-id of the current repository.
+// ExtractProjectName identifies the primary name/module-id of the current repository.
 func ExtractProjectName(repoPath string) string {
-	// 1. Go (go.mod)
+	targets := ExtractProjectTargets(repoPath)
+	if len(targets) > 0 {
+		return targets[0]
+	}
+	return filepath.Base(repoPath)
+}
+
+// ExtractProjectTargets identifies canonical dependency/import targets and practical aliases
+// for the current repository. This makes matching resilient when repo names and module paths drift.
+func ExtractProjectTargets(repoPath string) []string {
+	seen := make(map[string]struct{})
+	var targets []string
+
+	add := func(value string) {
+		value = strings.TrimSpace(strings.TrimSuffix(value, ".git"))
+		value = strings.Trim(value, "/")
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		targets = append(targets, value)
+	}
+
+	// 1. Go module path
 	if data, err := os.ReadFile(filepath.Join(repoPath, "go.mod")); err == nil {
 		lines := strings.Split(string(data), "\n")
 		for _, line := range lines {
-			if strings.HasPrefix(line, "module ") {
-				return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "module") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 && fields[0] == "module" {
+					add(fields[1])
+					break
+				}
 			}
 		}
 	}
 
-	// 2. JS/TS (package.json)
+	// 2. JS/TS package name
 	if data, err := os.ReadFile(filepath.Join(repoPath, "package.json")); err == nil {
 		var pkg struct {
 			Name string `json:"name"`
 		}
 		if err := json.Unmarshal(data, &pkg); err == nil && pkg.Name != "" {
-			return pkg.Name
+			add(pkg.Name)
 		}
 	}
 
-	// Fallback to directory name
-	return filepath.Base(repoPath)
+	// 3. Origin remote aliases
+	if hostPath, ownerRepo := extractGitRemoteTargets(repoPath); hostPath != "" || ownerRepo != "" {
+		add(hostPath)
+		add(ownerRepo)
+		if ownerRepo != "" {
+			if parts := strings.Split(ownerRepo, "/"); len(parts) > 0 {
+				add(parts[len(parts)-1])
+			}
+		}
+	}
+
+	// 4. Fallback to the local directory name
+	add(filepath.Base(repoPath))
+	return targets
 }
 
 func MatchRepos(signals LocalSignals, remoteGraphs map[string]*codegraph.RemoteRepoGraph) []CandidateMatch {
@@ -381,20 +456,22 @@ func FormatMatchSummary(candidates []CandidateMatch) string {
 
 func projectDependencyTargets(signals LocalSignals) []string {
 	targets := make(map[string]struct{})
-	if signals.ProjectName != "" {
-		targets[signals.ProjectName] = struct{}{}
+	for _, target := range projectRootTargets(signals) {
+		targets[target] = struct{}{}
 	}
 
 	for dir := range signals.ChangedPackageDirs {
-		if signals.ProjectName == "" {
-			continue
-		}
 		dir = strings.Trim(strings.TrimSpace(dir), "/")
-		if dir == "" {
-			targets[signals.ProjectName] = struct{}{}
-			continue
+		for _, root := range projectRootTargets(signals) {
+			if root == "" {
+				continue
+			}
+			if dir == "" {
+				targets[root] = struct{}{}
+				continue
+			}
+			targets[strings.TrimRight(root, "/")+"/"+dir] = struct{}{}
 		}
-		targets[strings.TrimRight(signals.ProjectName, "/")+"/"+dir] = struct{}{}
 	}
 
 	out := make([]string, 0, len(targets))
@@ -412,7 +489,7 @@ func changedProjectImportTargets(signals LocalSignals) map[string]string {
 			continue
 		}
 		lang := ""
-		if target == signals.ProjectName {
+		if containsString(projectRootTargets(signals), target) {
 			for _, candidate := range signals.ChangedPackageDirs {
 				lang = candidate
 				break
@@ -420,16 +497,28 @@ func changedProjectImportTargets(signals LocalSignals) map[string]string {
 		}
 		for dir, candidate := range signals.ChangedPackageDirs {
 			expected := strings.Trim(strings.TrimSpace(dir), "/")
-			if expected == "" && target == signals.ProjectName {
-				lang = candidate
-			}
-			if expected != "" && target == strings.TrimRight(signals.ProjectName, "/")+"/"+expected {
-				lang = candidate
+			for _, root := range projectRootTargets(signals) {
+				if expected == "" && target == root {
+					lang = candidate
+				}
+				if expected != "" && target == strings.TrimRight(root, "/")+"/"+expected {
+					lang = candidate
+				}
 			}
 		}
 		targets[target] = lang
 	}
 	return targets
+}
+
+func projectRootTargets(signals LocalSignals) []string {
+	if len(signals.ProjectTargets) > 0 {
+		return dedupePreserveOrder(signals.ProjectTargets)
+	}
+	if strings.TrimSpace(signals.ProjectName) == "" {
+		return nil
+	}
+	return []string{signals.ProjectName}
 }
 
 func targetSet(values []string) map[string]string {
@@ -571,4 +660,97 @@ func displayEvidence(values []string, limit int) string {
 		return strings.Join(values, "; ")
 	}
 	return strings.Join(values[:limit], "; ") + fmt.Sprintf(" (+%d more)", len(values)-limit)
+}
+
+func extractGitRemoteTargets(repoPath string) (hostPath string, ownerRepo string) {
+	data, err := os.ReadFile(filepath.Join(repoPath, ".git", "config"))
+	if err != nil {
+		return "", ""
+	}
+
+	inOrigin := false
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "[") {
+			// Reset flag for any new section header
+			inOrigin = strings.HasPrefix(line, `[remote "origin"]`)
+			continue
+		}
+
+		if inOrigin && strings.HasPrefix(line, "url") {
+			// Flexible check for "url = value" or "url=value"
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 && strings.TrimSpace(parts[0]) == "url" {
+				return normalizeRemoteURL(strings.TrimSpace(parts[1]))
+			}
+		}
+	}
+	return "", ""
+}
+
+func normalizeRemoteURL(raw string) (hostPath string, ownerRepo string) {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimRight(raw, "/")
+	raw = strings.TrimSuffix(raw, ".git")
+	if raw == "" {
+		return "", ""
+	}
+
+	if strings.Contains(raw, "://") {
+		parts := strings.SplitN(raw, "://", 2)
+		remainder := parts[1]
+		remainder = strings.TrimPrefix(remainder, "git@")
+		remainder = strings.Trim(remainder, "/")
+		if remainder == "" {
+			return "", ""
+		}
+		return remainder, trimHostPrefix(remainder)
+	}
+
+	if idx := strings.Index(raw, ":"); idx != -1 {
+		host := strings.TrimPrefix(raw[:idx], "git@")
+		path := strings.Trim(raw[idx+1:], "/")
+		if host != "" && path != "" {
+			hostPath = host + "/" + path
+			return hostPath, trimHostPrefix(hostPath)
+		}
+	}
+
+	return raw, trimHostPrefix(raw)
+}
+
+func trimHostPrefix(value string) string {
+	if idx := strings.Index(value, "/"); idx != -1 {
+		rest := value[idx+1:]
+		if strings.Count(rest, "/") >= 1 {
+			return rest
+		}
+	}
+	return value
+}
+
+func dedupePreserveOrder(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

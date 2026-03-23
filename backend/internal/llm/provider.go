@@ -14,9 +14,10 @@ type GenerateRequest struct {
 	SystemPrompt  string
 	Messages      []Message
 	Tools         []ToolDeclaration
-	CachedContent string // Used by Gemini
-	Temperature   float32
-	ResponseJSON  bool // If true, enforce JSON object output
+	CachedContent  string // Used by Gemini
+	Temperature    float32
+	ResponseJSON   bool                   // If true, enforce JSON object output
+	ResponseSchema map[string]interface{} // Enforce exact JSON schema
 }
 
 // Message represents a conversational turn

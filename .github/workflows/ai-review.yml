@@ -30,6 +30,6 @@ jobs:
             instructions:
               - It is an ai based app review all types of ai vulnerability
             ignore:
-              - "context.go"
+              - "agents/specs_test.go"
             focus:
               - "codegraph"

@@ -5,12 +5,14 @@ import (
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/remotefetch"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // AgentToolDeclarations returns the tool declarations for agent tool calls.
@@ -176,6 +178,9 @@ type ToolExecutor struct {
 	MatchSummary string
 	RemoteGraphs map[string]*codegraph.RemoteRepoGraph
 	RemoteFetch  *remotefetch.Fetcher
+
+	// Tool loop prevention
+	executedCalls sync.Map
 }
 
 // NewToolExecutor creates a tool executor for the given repo.
@@ -195,6 +200,18 @@ func (te *ToolExecutor) WithMultiRepo(matchSummary string, remote map[string]*co
 
 // Execute runs a tool call and returns the result.
 func (te *ToolExecutor) Execute(ctx context.Context, call agents.ToolCallRequest) agents.ToolCallResponse {
+	// Prevent infinite loops by detecting exact duplicate tool calls
+	// Use JSON marshal to ensure deterministic string representation of map args
+	argsBytes, _ := json.Marshal(call.Args)
+	callKey := fmt.Sprintf("%s-%s", call.Name, string(argsBytes))
+
+	if _, loaded := te.executedCalls.LoadOrStore(callKey, true); loaded {
+		return agents.ToolCallResponse{
+			Name:    call.Name,
+			Content: fmt.Sprintf("Error: You already called '%s' with these exact arguments. Please look at your previous context instead of repeating the call.", call.Name),
+		}
+	}
+
 	switch call.Name {
 	case "get_symbol_definition":
 		return te.getSymbolDefinition(call.Args)

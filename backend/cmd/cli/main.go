@@ -2,9 +2,11 @@ package main
 
 import (
 	"code-review/backend/internal/action"
+	"code-review/backend/internal/agents"
 	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
+	"code-review/backend/internal/memory"
 	"code-review/backend/internal/models"
 	"code-review/backend/internal/multirepo"
 	"code-review/backend/internal/orchestrator"
@@ -42,6 +44,10 @@ func checkMultiRepoAvailability(ctx context.Context, ghClient *action.GitHubClie
 }
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	// 1. Parse Args & Env
 	apiKeyFlag := flag.String("api-key", "", "API Key (default Gemini, fallback for others)")
 	llmProviderFlag := flag.String("llm-provider", "gemini", "LLM Provider (gemini, openai, claude)")
@@ -103,7 +109,7 @@ func main() {
 
 	if apiKey == "" && os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" {
 		fmt.Println("❌ Error: Valid API key is required. Set GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.")
-		os.Exit(1)
+		return 1
 	}
 
 	// 2. Local Git Operations (Security-First: Code stays here)
@@ -111,18 +117,18 @@ func main() {
 	diff, err := action.GetDiff(*baseRef, *headRef)
 	if err != nil {
 		fmt.Printf("❌ Error getting diff: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	if len(diff) == 0 {
 		fmt.Println("✅ No changes detected.")
-		return
+		return 0
 	}
 
 	changedFilesList, err := action.GetChangedFiles(*baseRef, *headRef)
 	if err != nil {
 		fmt.Printf("❌ Error getting changed files: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Build maps for llm.RunReview
@@ -260,6 +266,7 @@ func main() {
 			fmt.Println("   🔍 [LightweightFilter] identifying relevant repositories via manifest check...")
 			localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
 			localSignals.ProjectName = reposelect.ExtractProjectName(wd)
+			localSignals.ProjectTargets = reposelect.ExtractProjectTargets(wd)
 
 			relevantRepos := reposelect.IdentifyRelevantRepos(context.Background(), ghClient.GetRawClient(), localSignals, filteredRepos)
 			fmt.Printf("   ✅ Found %d repositories likely to be affected\n", len(relevantRepos))
@@ -272,7 +279,7 @@ func main() {
 			baseTempDir, err = os.MkdirTemp("", "ai-reviewer-multirepo-*")
 			if err != nil {
 				fmt.Printf("   ⚠️ Failed to create temp directory: %v\n", err)
-				return
+				return 1
 			}
 			defer os.RemoveAll(baseTempDir)
 
@@ -302,6 +309,7 @@ func main() {
 		fmt.Println("   🔄 Analyzing cross-repo dependencies...")
 		localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
 		localSignals.ProjectName = reposelect.ExtractProjectName(wd)
+		localSignals.ProjectTargets = reposelect.ExtractProjectTargets(wd)
 
 		matches := reposelect.MatchRepos(localSignals, remoteGraphs)
 		if len(matches) > 0 {
@@ -388,7 +396,7 @@ func main() {
 
 	if initErr != nil || provider == nil {
 		fmt.Printf("❌ Failed to initialize provider %s: %v\n", llmProvider, initErr)
-		os.Exit(1)
+		return 1
 	}
 
 	// Instrument provider to track actual token usage + cost.
@@ -402,6 +410,28 @@ func main() {
 
 	chunks := chunker.GroupFiles(changedFiles, diff, graphEdges, chunker.DefaultTokenBudget)
 	fmt.Printf("🚀 Starting Review: %d files → %d chunk(s)\n", len(changedFiles), len(chunks))
+
+	// PR Memory: Fetch previous findings early to provide context to LLM
+	var previousFindings []models.PreviousFinding
+	if repoName != "" && prNumber != "" && githubToken != "" {
+		parts := strings.Split(repoName, "/")
+		if len(parts) == 2 {
+			var prNum int
+			fmt.Sscanf(prNumber, "%d", &prNum)
+			if ghClient == nil {
+				ghClient = action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
+			}
+			pf, err := memory.FetchPreviousFindings(ctx, ghClient.GetRawClient(), parts[0], parts[1], prNum)
+			if err != nil {
+				fmt.Printf("⚠️  [Memory] Failed to fetch previous findings: %v (proceeding without memory context)\n", err)
+			} else {
+				previousFindings = pf
+				if len(previousFindings) > 0 {
+					fmt.Printf("🧠 [Memory] Loaded %d previous findings for LLM context\n", len(previousFindings))
+				}
+			}
+		}
+	}
 
 	// Detailed Chunking Breakdown Logging (enabled if multi-chunk)
 	if len(chunks) > 1 {
@@ -428,6 +458,60 @@ func main() {
 		fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
 	}
 
+	// Create Global Caches for multi-chunk optimization
+	cacheIDs := make(map[agents.AgentType]string)
+	if len(chunks) > 1 {
+		fmt.Println("📦 [Orchestrator] Building Global Caches for 3 specialist agents...")
+
+		// The orchestrator builds the global background noise (slimDeps and repo tree)
+		slimDeps := codegraph.BuildSlimDependencyIndex(dependencies)
+
+		// We use a dummy config just to build the static context for caching
+		baseConfig := agents.AgentConfig{
+			RepoPath:       wd,
+			MatchSummary:   matchSummary,
+			DeveloperRules: devRules,
+		}
+
+		tools := llm.AgentToolDeclarations()
+
+		// 1. Correctness
+		cCfg := baseConfig
+		cCfg.Type = agents.AgentCorrectness
+		cCfg = agents.CorrectnessAgent(cCfg)
+		cCfg.Dependencies = slimDeps
+		cCtx := llm.BuildGlobalStaticContext(cCfg)
+		if id, _ := provider.CreateCache(ctx, cCfg.SystemPrompt, cCtx, tools); id != "" {
+			cacheIDs[agents.AgentCorrectness] = id
+			defer provider.DeleteCache(context.Background(), id)
+			fmt.Printf("   ✅ Correctness Cache: %s\n", id)
+		}
+
+		// 2. Security
+		sCfg := baseConfig
+		sCfg.Type = agents.AgentSecurity
+		sCfg = agents.SecurityAgent(sCfg)
+		sCfg.Dependencies = slimDeps
+		sCtx := llm.BuildGlobalStaticContext(sCfg)
+		if id, _ := provider.CreateCache(ctx, sCfg.SystemPrompt, sCtx, tools); id != "" {
+			cacheIDs[agents.AgentSecurity] = id
+			defer provider.DeleteCache(context.Background(), id)
+			fmt.Printf("   ✅ Security Cache: %s\n", id)
+		}
+
+		// 3. Structure
+		stCfg := baseConfig
+		stCfg.Type = agents.AgentStructure
+		stCfg = agents.StructureAgent(stCfg)
+		stCfg.RepoStructure = repoStructure
+		stCtx := llm.BuildGlobalStaticContext(stCfg)
+		if id, _ := provider.CreateCache(ctx, stCfg.SystemPrompt, stCtx, tools); id != "" {
+			cacheIDs[agents.AgentStructure] = id
+			defer provider.DeleteCache(context.Background(), id)
+			fmt.Printf("   ✅ Structure Cache: %s\n", id)
+		}
+	}
+
 	var results []*models.ReviewResult
 	for _, chunk := range chunks {
 		// Scope dependencies to this chunk's files
@@ -445,6 +529,8 @@ func main() {
 			remoteGraphs,
 			remoteFetch,
 			devRules,
+			cacheIDs,
+			previousFindings,
 		)
 		if err != nil {
 			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)
@@ -455,7 +541,7 @@ func main() {
 
 	if len(results) == 0 {
 		fmt.Println("❌ All chunks failed")
-		os.Exit(1)
+		return 1
 	}
 
 	// Cross-chunk consolidation (each chunk was already consolidated by orchestrator)
@@ -471,15 +557,13 @@ func main() {
 		// Post to GitHub
 		if repoName == "" || prNumber == "" {
 			fmt.Println("❌ Error: GITHUB_REPOSITORY and PR_NUMBER are required for posting comments.")
-			os.Exit(1)
+			return 1
 		}
-
-		fmt.Printf("🚀 Posting comments to %s PR #%s...\n", repoName, prNumber)
 
 		parts := strings.Split(repoName, "/")
 		if len(parts) != 2 {
 			fmt.Printf("❌ Invalid repo name format: %s\n", repoName)
-			os.Exit(1)
+			return 1
 		}
 
 		var prNum int
@@ -488,9 +572,20 @@ func main() {
 		if ghClient == nil {
 			ghClient = action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
 		}
+
+		// PR Memory: Deduplicate results against previous findings
+		if len(previousFindings) > 0 {
+			var skipped int
+			result.Comments, skipped = memory.Deduplicate(result.Comments, previousFindings)
+			fmt.Printf("🧠 [Memory] Deduplication: %d new, %d skipped (already posted)\n",
+				len(result.Comments), skipped)
+		}
+
+		fmt.Printf("🚀 Posting comments to %s PR #%s...\n", repoName, prNumber)
+
 		if err := ghClient.PostReview(ctx, prNum, result, commitSHA, diff); err != nil {
 			fmt.Printf("❌ Failed to post review: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		fmt.Println("✅ Review posted successfully!")
 	}
@@ -499,6 +594,7 @@ func main() {
 	if costLedger != nil {
 		costLedger.PrintSummary("💰 [LLM Cost]")
 	}
+	return 0
 }
 
 // scopeDependencies filters the full dependency map to only include entries

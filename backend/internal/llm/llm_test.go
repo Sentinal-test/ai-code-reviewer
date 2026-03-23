@@ -234,3 +234,24 @@ func TestFormatSafeDiff(t *testing.T) {
 	result := formatSafeDiff(input)
 	assert.Equal(t, expected, result)
 }
+
+func TestExtractChangedLinesFromDiff_SkipsFileHeaders(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/pkg/contracts/provisioning/provisioning.go b/pkg/contracts/provisioning/provisioning.go",
+		"--- a/pkg/contracts/provisioning/provisioning.go",
+		"+++ b/pkg/contracts/provisioning/provisioning.go",
+		"@@ -2,8 +2,7 @@ package provisioning",
+		"-func BuildProvisioningTicket(subscriptionID string) (string, error) {",
+		"+func BuildProvisioningRequest(subscriptionID string) (string, error) {",
+		" if subscriptionID == \"\" {",
+		"  return \"\", errors.New(\"empty subscription id\")",
+		" }",
+	}, "\n")
+
+	sections := extractChangedLinesFromDiff(diff)
+	require.Len(t, sections, 1)
+	require.Contains(t, sections, "pkg/contracts/provisioning/provisioning.go")
+	require.Len(t, sections["pkg/contracts/provisioning/provisioning.go"], 1)
+	assert.NotContains(t, sections["pkg/contracts/provisioning/provisioning.go"][0], "--- a/")
+	assert.NotContains(t, sections["pkg/contracts/provisioning/provisioning.go"][0], "+++ b/")
+}

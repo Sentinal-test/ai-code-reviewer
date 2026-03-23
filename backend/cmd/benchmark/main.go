@@ -316,6 +316,7 @@ func runEvalCase(truthPath string, truth Truth, providerStr, apiKey, approach st
 	if cgService.Graph != nil && len(remoteGraphs) > 0 {
 		localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
 		localSignals.ProjectName = reposelect.ExtractProjectName(repoPath)
+		localSignals.ProjectTargets = reposelect.ExtractProjectTargets(repoPath)
 		matches := reposelect.MatchRepos(localSignals, remoteGraphs)
 		matchSummary = reposelect.FormatMatchSummary(matches)
 		crossRepoRecall = crossRepoRecallScore(truth.ExpectedCrossRepo, matches)
@@ -445,6 +446,8 @@ func runReviewByApproach(
 				remoteGraphs,
 				remoteFetch,
 				nil, // no developer rules in benchmarks
+				nil, // no cached IDs in benchmarks
+				nil, // no previous findings in benchmarks
 			)
 			if err != nil {
 				fmt.Printf("   ❌ Chunk %d/%d failed: %v\n", chunk.Index, chunk.Total, err)

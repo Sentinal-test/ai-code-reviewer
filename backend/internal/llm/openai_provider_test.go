@@ -25,8 +25,8 @@ func TestBuildRequest_MapsRolesAndToolsCorrectly(t *testing.T) {
 				Role: "function",
 				Parts: []Part{{
 					FunctionResp: &FunctionResponse{
-						ID:   "call_123",
-						Name: "search_codebase",
+						ID:      "call_123",
+						Name:    "search_codebase",
 						Content: "match",
 					},
 				}},
@@ -38,7 +38,7 @@ func TestBuildRequest_MapsRolesAndToolsCorrectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
 	}
-	
+
 	// system (1) + user (1) + assistant (1) + tool (1) = 4 messages
 	if len(apiReq.Messages) != 4 {
 		t.Fatalf("expected 4 messages, got %d", len(apiReq.Messages))
@@ -79,7 +79,7 @@ func TestBuildRequest_IncludesToolsInPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
 	}
-	
+
 	if len(apiReq.Tools) != 1 || apiReq.Tools[0].Function.Name != "search_codebase" {
 		t.Fatalf("expected search_codebase tool, got %#v", apiReq.Tools)
 	}

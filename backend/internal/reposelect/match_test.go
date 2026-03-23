@@ -1,6 +1,8 @@
 package reposelect
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -151,6 +153,11 @@ func TestManifestMatch(t *testing.T) {
 		{"go.mod", "module test\nrequire github.com/foo/bar v1.0.0", "github.com/foo/bar", true},
 		{"go.mod", "module test\nrequire github.com/foo/bar-service v1.0.0", "github.com/foo/bar", false},
 		{"go.mod", "module test\nrequire (\n\tgithub.com/foo/bar v1.0.0\n)", "github.com/foo/bar", true},
+		// Issue 1: module line should be skipped (not treated as a dependency match)
+		{"go.mod", "module\tgithub.com/foo/tabbed\n", "github.com/foo/tabbed", false},
+		{"go.mod", "module    multiple-spaces", "multiple-spaces", false},
+		// Verification: if it's in a require block, it should still match
+		{"go.mod", "module test\nrequire\tgithub.com/foo/tabbed v1.0", "github.com/foo/tabbed", true},
 
 		// JS/TS
 		{"package.json", `{"dependencies": {"express": "^4.17.1"}}`, "express", true},
@@ -173,5 +180,109 @@ func TestManifestMatch(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("manifestMatch(%s, ..., %s) = %v; want %v", tt.manifest, tt.target, got, tt.expected)
 		}
+	}
+}
+
+func TestNormalizeRemoteURL(t *testing.T) {
+	tests := []struct {
+		raw      string
+		expected string
+	}{
+		{"git@github.com:user/repo.git", "github.com/user/repo"},
+		{"https://github.com/user/repo.git", "github.com/user/repo"},
+		{"https://github.com/user/repo.git/", "github.com/user/repo"}, // Issue 3: Trailing slash
+		{"https://github.com/user/repo/", "github.com/user/repo"},
+		{"github.com/user/repo.git", "github.com/user/repo"},
+	}
+
+	for _, tt := range tests {
+		got, _ := normalizeRemoteURL(tt.raw)
+		if got != tt.expected {
+			t.Errorf("normalizeRemoteURL(%s) = %s; want %s", tt.raw, got, tt.expected)
+		}
+	}
+}
+
+func TestExtractProjectTargets_IncludesRemoteAliases(t *testing.T) {
+	repoDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module github.com/tegveer-work/test4\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	config := `[remote "origin"]
+	url = git@github.com:Sentinal-test/test4.git
+`
+	if err := os.WriteFile(filepath.Join(repoDir, ".git", "config"), []byte(config), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := ExtractProjectTargets(repoDir)
+
+	if !containsString(targets, "github.com/tegveer-work/test4") {
+		t.Fatalf("expected go module target, got %v", targets)
+	}
+	if !containsString(targets, "github.com/Sentinal-test/test4") {
+		t.Fatalf("expected remote host path target, got %v", targets)
+	}
+	if !containsString(targets, "Sentinal-test/test4") {
+		t.Fatalf("expected owner/repo alias, got %v", targets)
+	}
+	if !containsString(targets, "test4") {
+		t.Fatalf("expected repo basename alias, got %v", targets)
+	}
+
+	// Issue 1: go.mod with tabs/multiple spaces
+	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module\tgithub.com/foo/tabbed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	targets = ExtractProjectTargets(repoDir)
+	if !containsString(targets, "github.com/foo/tabbed") {
+		t.Fatalf("expected target from tabbed go.mod, got %v", targets)
+	}
+
+	// Issue 2: Git config with no spaces around '='
+	configNoSpaces := `[remote "origin"]
+url=git@github.com:NoSpace/test-repo.git
+`
+	if err := os.WriteFile(filepath.Join(repoDir, ".git", "config"), []byte(configNoSpaces), 0644); err != nil {
+		t.Fatal(err)
+	}
+	targets = ExtractProjectTargets(repoDir)
+	if !containsString(targets, "github.com/NoSpace/test-repo") {
+		t.Fatalf("expected target from no-space git config, got %v", targets)
+	}
+}
+
+func TestMatchRepos_UsesProjectAliases(t *testing.T) {
+	signals := LocalSignals{
+		ProjectName:    "github.com/tegveer-work/test4",
+		ProjectTargets: []string{"github.com/tegveer-work/test4", "github.com/Sentinal-test/test4"},
+		ChangedExports: map[string]string{"ValidateToken": "go"},
+		ChangedPackageDirs: map[string]string{
+			"auth": "go",
+		},
+	}
+
+	remoteGraphs := map[string]*codegraph.RemoteRepoGraph{
+		"org/consumer-imports-alias": {
+			RepoFullName: "org/consumer-imports-alias",
+			Files: map[string]codegraph.RemoteFileEntry{
+				"main.go": {
+					Language: "go",
+					Imports:  []string{"github.com/Sentinal-test/test4/auth"},
+				},
+			},
+		},
+	}
+
+	candidates := MatchRepos(signals, remoteGraphs)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	if candidates[0].Reason != "Imports changed project package" {
+		t.Fatalf("expected alias import match, got %+v", candidates[0])
 	}
 }

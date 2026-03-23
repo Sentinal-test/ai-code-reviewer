@@ -2,7 +2,6 @@ package llm
 
 import (
 	"code-review/backend/internal/agents"
-	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/models"
 	"code-review/backend/internal/rules"
 	"context"
@@ -21,6 +20,10 @@ const maxToolIterations = 10
 var responseSchema = map[string]interface{}{
 	"type": "object",
 	"properties": map[string]interface{}{
+		"thinking": map[string]interface{}{
+			"type":        "string",
+			"description": "Trace data flows, evaluate developer intent, and verify tool outputs BEFORE writing comments.",
+		},
 		"summary": map[string]interface{}{
 			"type":        "string",
 			"description": "Brief overview of issues found, or 'No issues found' if clean",
@@ -55,7 +58,7 @@ var responseSchema = map[string]interface{}{
 			},
 		},
 	},
-	"required": []string{"summary", "comments"},
+	"required": []string{"thinking", "summary", "comments"},
 }
 
 // RunAgentReview executes a single specialist agent with the agentic loop.
@@ -76,7 +79,7 @@ func RunAgentReview(
 		config.Type, len(config.ChangedFiles), len(config.Dependencies))
 
 	// Create the cache for this agent's specific context
-	var cacheName string
+	cacheName := config.CacheID
 	var err error
 
 	var tools []ToolDeclaration
@@ -86,7 +89,7 @@ func RunAgentReview(
 
 	// Only bother caching if the context is substantial enough (> 135,000 chars is roughly 33,000 tokens)
 	// Gemini API requires a minimum of 32,768 tokens for Context Caching.
-	if len(staticContext) > 135000 {
+	if cacheName == "" && len(staticContext) > 135000 {
 		fmt.Printf("  📦 [%s] Creating Context Cache (~%d tokens)...\n", config.Type, len(staticContext)/4)
 		cacheStart := time.Now()
 
@@ -252,10 +255,99 @@ func RunAgentReview(
 // 1. Changed files (with diffs)
 // 2. Dependencies
 // 3. Repo structure
+// buildStaticContext constructs the heavy, cacheable portion of the prompt:
+// Global Context: Repo structure and dependencies.
 func buildStaticContext(config agents.AgentConfig) string {
 	var b strings.Builder
 
-	// Developer rules (highest priority — inject first)
+	// Dependencies (from code graph) - Background Noise
+	if len(config.Dependencies) > 0 {
+		depStart := b.Len()
+		b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("GLOBAL CONTEXT: Code Graph Dependencies\n")
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("These files are NOT being reviewed. They provide background context for understanding\n")
+		b.WriteString("the changed code's dependencies, types, and function signatures.\n\n")
+		for _, path := range getFileKeys(config.Dependencies) {
+			b.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", path, config.Dependencies[path]))
+		}
+		depEnd := b.Len()
+		fmt.Printf("   📝 [%s] Code-Graph Context: %d chars (~%d tokens)\n",
+			config.Type, depEnd-depStart, (depEnd-depStart)/4)
+	}
+
+	// Repo structure (mainly for Structure agent) - Background Noise
+	if config.RepoStructure != "" {
+		b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("GLOBAL CONTEXT: Repository Structure\n")
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString(config.RepoStructure)
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// buildDynamicPrompt constructs the dynamic, targeted part of the prompt
+// It includes PR Context, Developer Rules, and the Actionable Target (Changed Files).
+func buildDynamicPrompt(config agents.AgentConfig) string {
+	var b strings.Builder
+
+	// PR History - Historical Context
+	if len(config.PreviousFindings) > 0 {
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("TASK CONTEXT: Previous Review Findings\n")
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("The following issues were already reported in previous commits of this PR.\n")
+		b.WriteString("Reference them to avoid redundant comments and to see if previous bugs were fixed.\n\n")
+		for _, f := range config.PreviousFindings {
+			// Only show first 200 chars of message as it's for context only
+			msg := f.Message
+			if len(msg) > 200 {
+				msg = msg[:200] + "..."
+			}
+			b.WriteString(fmt.Sprintf("- [%s] %s:%d: %s\n", f.Layer, f.File, f.Line, msg))
+		}
+		b.WriteString("\n")
+	}
+
+	// Chunk header
+	if config.ChunkTotal > 1 {
+		b.WriteString(fmt.Sprintf("=== CHUNK %d/%d ===\n", config.ChunkIndex, config.ChunkTotal))
+		if len(config.CrossRefs) > 0 {
+			b.WriteString(fmt.Sprintf("Files in other chunks that relate to this one: %s\n", strings.Join(config.CrossRefs, ", ")))
+		}
+		b.WriteString("\n")
+	}
+
+	// PR Context - Rules of Engagement
+	if config.PRContext.Title != "" {
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("TASK CONTEXT: PR Intent\n")
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString(fmt.Sprintf("Title: %s\n", config.PRContext.Title))
+		if config.PRContext.Body != "" {
+			body := config.PRContext.Body
+			if len(body) > 1000 {
+				body = body[:1000] + "..."
+			}
+			b.WriteString(fmt.Sprintf("Description: %s\n", body))
+		}
+
+		if len(config.PRContext.CommitMessages) > 0 {
+			b.WriteString("\nRecent Commits:\n")
+			for i, msg := range config.PRContext.CommitMessages {
+				cleanMsg := strings.TrimSpace(msg)
+				if len(cleanMsg) > 500 {
+					cleanMsg = cleanMsg[:500] + "..."
+				}
+				b.WriteString(fmt.Sprintf("  %d. %s\n", i+1, cleanMsg))
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	// Developer rules - Rules of Engagement
 	if config.DeveloperRules != nil {
 		rulesBlock := rules.FormatForPrompt(config.DeveloperRules)
 		if rulesBlock != "" {
@@ -264,9 +356,9 @@ func buildStaticContext(config agents.AgentConfig) string {
 		}
 	}
 
-	// Changed files with full content, line numbers, AND inline diff hunks
+	// Actionable Target: Changed files with full content, line numbers, AND inline diff hunks
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-	b.WriteString("PRIMARY ANALYSIS TARGET: Changed Code Files\n")
+	b.WriteString("ACTIONABLE TARGET: Changed Code Files\n")
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
 	b.WriteString("INSTRUCTION: Analyze ONLY the lines marked with '+' in the DIFF HUNKS below.\n")
 	b.WriteString("Use the full file content for context, but flag issues ONLY in changed lines.\n\n")
@@ -275,23 +367,27 @@ func buildStaticContext(config agents.AgentConfig) string {
 
 	for _, path := range getFileKeys(config.ChangedFiles) {
 		content := config.ChangedFiles[path]
-		fileTokens := len(content) / 4
 		b.WriteString(fmt.Sprintf("\n═══ FILE: %s ═══\n", path))
 
-		if fileTokens > chunker.DefaultTokenBudget {
-			// OVERSIZED FILE: Send imports + diff context only
-			fmt.Printf("  ⚠️ [%s] Oversized file detected: %s (%d tokens > %d budget). Using diff-only mode.\n",
-				config.Type, path, fileTokens, chunker.DefaultTokenBudget)
-			b.WriteString(fmt.Sprintf("[OVERSIZED FILE — %d tokens, showing imports + ±50 lines around each change]\n", fileTokens))
+		diffSections := diffMap[path]
+		if len(diffSections) > 0 {
+			// Always use focused context (imports + ±40 lines around diff) to save costs
+			b.WriteString("[Showing imports + ±40 lines around each change]\n")
 			b.WriteString("[Use get_file_content tool to inspect other sections if needed]\n\n")
-			diffSections := diffMap[path]
-			focused := extractDiffWithContext(content, diffSections, 50)
+			focused := extractDiffWithContext(content, diffSections, 40)
 			b.WriteString(focused)
 		} else {
-			// Normal: Full file content with line numbers (for context)
+			// Fallback: If no diff sections matched, show the first 100 lines 
 			lines := strings.Split(content, "\n")
-			for i, line := range lines {
-				b.WriteString(fmt.Sprintf("%d: %s\n", i+1, line))
+			limit := 100
+			if len(lines) < limit {
+				limit = len(lines)
+			}
+			for i := 0; i < limit; i++ {
+				b.WriteString(fmt.Sprintf("%d: %s\n", i+1, lines[i]))
+			}
+			if len(lines) > limit {
+				b.WriteString(fmt.Sprintf("\n... (%d lines total, showing first %d) ...\n", len(lines), limit))
 			}
 		}
 
@@ -311,86 +407,15 @@ func buildStaticContext(config agents.AgentConfig) string {
 		}
 	}
 
-	// Dependencies (from code graph)
-	if len(config.Dependencies) > 0 {
-		depStart := b.Len()
-		b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
-		b.WriteString("SUPPORTING CONTEXT: Code Graph Dependencies\n")
-		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-		b.WriteString("These files are NOT being reviewed. They provide context for understanding\n")
-		b.WriteString("the changed code's dependencies, types, and function signatures.\n\n")
-		for _, path := range getFileKeys(config.Dependencies) {
-			b.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", path, config.Dependencies[path]))
-		}
-		depEnd := b.Len()
-		fmt.Printf("   📝 [%s] Code-Graph Context: %d chars (~%d tokens)\n",
-			config.Type, depEnd-depStart, (depEnd-depStart)/4)
-	}
-
-	// Repo structure (mainly for Structure agent)
-	if config.RepoStructure != "" {
-		b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
-		b.WriteString("SUPPORTING CONTEXT: Repository Structure\n")
-		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-		b.WriteString(config.RepoStructure)
-		b.WriteString("\n")
-	}
-
-	return b.String()
-}
-
-// buildDynamicPrompt constructs the dynamic, conversational part of the prompt
-func buildDynamicPrompt(config agents.AgentConfig) string {
-	var b strings.Builder
-
-	// Chunk header
-	if config.ChunkTotal > 1 {
-		b.WriteString(fmt.Sprintf("=== CHUNK %d/%d ===\n", config.ChunkIndex, config.ChunkTotal))
-		if len(config.CrossRefs) > 0 {
-			b.WriteString(fmt.Sprintf("Files in other chunks that relate to this one: %s\n", strings.Join(config.CrossRefs, ", ")))
-		}
-		b.WriteString("\n")
-	}
-
-	// PR Context
-	if config.PRContext.Title != "" {
-		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-		b.WriteString("PR CONTEXT (Developer Intent)\n")
-		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-		b.WriteString(fmt.Sprintf("Title: %s\n", config.PRContext.Title))
-		if config.PRContext.Body != "" {
-			body := config.PRContext.Body
-			if len(body) > 2000 {
-				body = body[:2000] + "..."
-			}
-			b.WriteString(fmt.Sprintf("Description: %s\n", body))
-		}
-
-		if len(config.PRContext.CommitMessages) > 0 {
-			b.WriteString("\nRecent Commits:\n")
-			for i, msg := range config.PRContext.CommitMessages {
-				// Clean and truncate commit messages just in case they are massive
-				cleanMsg := strings.TrimSpace(msg)
-				if len(cleanMsg) > 500 {
-					cleanMsg = cleanMsg[:500] + "..."
-				}
-				b.WriteString(fmt.Sprintf("  %d. %s\n", i+1, cleanMsg))
-			}
-		}
-		b.WriteString("\n")
-	}
-
 	b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
 	b.WriteString("BEGIN ANALYSIS NOW.\n")
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-	b.WriteString("REMINDER: Your response MUST be a valid JSON object with \"summary\" and \"comments\" keys.\n")
+	b.WriteString("REMINDER: Your response MUST be a valid JSON object with \"thinking\", \"summary\", and \"comments\" keys.\n")
 	b.WriteString("Do NOT output plain text, code comments, or markdown. Output ONLY JSON.\n")
 
 	return b.String()
 }
 
-// parseAgentResponse parses the JSON response from an agent into ReviewResult.
-// Falls back to text extraction if JSON parsing fails.
 func parseAgentResponse(text string) models.ReviewResult {
 	// Clean up the response — strip markdown fences if present
 	cleaned := strings.TrimSpace(text)
@@ -538,4 +563,9 @@ func inferLayer(severity, message string) string {
 	}
 
 	return "bug"
+}
+
+// BuildGlobalStaticContext creates the global context string for caching
+func BuildGlobalStaticContext(config agents.AgentConfig) string {
+	return buildStaticContext(config)
 }

@@ -101,6 +101,7 @@ func TestMultiRepoDatasetFixtures(t *testing.T) {
 
 			localSignals := reposelect.ExtractLocalSignals(graph, changedFiles)
 			localSignals.ProjectName = reposelect.ExtractProjectName(repoPath)
+			localSignals.ProjectTargets = reposelect.ExtractProjectTargets(repoPath)
 			matches := reposelect.MatchRepos(localSignals, remoteGraphs)
 			score := crossRepoRecallScore(truth.ExpectedCrossRepo, matches)
 			if score != 1.0 {

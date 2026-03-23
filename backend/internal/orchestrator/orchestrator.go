@@ -70,6 +70,8 @@ func ReviewChunk(
 	remoteGraphs map[string]*codegraph.RemoteRepoGraph,
 	remoteFetch *remotefetch.Fetcher,
 	devRules *models.DeveloperRules,
+	cacheIDs map[agents.AgentType]string,
+	previousFindings []models.PreviousFinding,
 ) (*models.ReviewResult, error) {
 
 	start := time.Now()
@@ -120,8 +122,9 @@ func ReviewChunk(
 		ChunkIndex:     chunkIndex,
 		ChunkTotal:     chunkTotal,
 		RepoPath:       repoPath,
-		MatchSummary:   matchSummary,
-		DeveloperRules: devRules,
+		MatchSummary:     matchSummary,
+		DeveloperRules:   devRules,
+		PreviousFindings: previousFindings,
 	}
 
 	// Build per-agent configs with DIFFERENTIATED context:
@@ -131,20 +134,20 @@ func ReviewChunk(
 	correctnessConfig := shared
 	correctnessConfig.Dependencies = slimDeps
 	correctnessConfig.RepoStructure = "" // Correctness doesn't need repo tree
+	correctnessConfig.CacheID = cacheIDs[agents.AgentCorrectness]
 
 	securityConfig := shared
 	securityConfig.Dependencies = slimDeps
 	securityConfig.RepoStructure = "" // Security doesn't need repo tree
+	securityConfig.CacheID = cacheIDs[agents.AgentSecurity]
 
 	structureConfig := shared
 	structureConfig.Dependencies = nil            // Structure uses tools for code details
 	structureConfig.RepoStructure = repoStructure // Structure needs the repo tree
+	structureConfig.CacheID = cacheIDs[agents.AgentStructure]
 
-	// Create tool executor for agent tool calls
-	toolExecutor := llm.NewToolExecutor(repoPath, graph)
-	if matchSummary != "" {
-		toolExecutor.WithMultiRepo(matchSummary, remoteGraphs, remoteFetch)
-	}
+	// Tool executors are created per-agent in the goroutine loop to avoid
+	// concurrent executions blocking each other via the sync.Map cache.
 
 	// Prepare the 3 specialist configs
 	configs := []agents.AgentConfig{
@@ -167,7 +170,14 @@ func ReviewChunk(
 		wg.Add(1)
 		go func(idx int, cfg agents.AgentConfig) {
 			defer wg.Done()
-			results[idx] = llm.RunAgentReview(ctx, provider, cfg, toolExecutor)
+			
+			// Create a fresh tool executor per agent
+			agentTe := llm.NewToolExecutor(repoPath, graph)
+			if matchSummary != "" {
+				agentTe.WithMultiRepo(matchSummary, remoteGraphs, remoteFetch)
+			}
+			
+			results[idx] = llm.RunAgentReview(ctx, provider, cfg, agentTe)
 		}(i, config)
 	}
 
@@ -193,7 +203,7 @@ func ReviewChunk(
 		totalComments, elapsed.Seconds(), totalToolCalls)
 
 	// LLM-based consolidation (falls back to deterministic on failure)
-	consolidated := llm.RunConsolidation(ctx, provider, results, agents.DefaultMaxComments)
+	consolidated := llm.RunConsolidation(ctx, provider, results, chunkDiff, agents.DefaultMaxComments)
 
 	fmt.Printf("✅ [Orchestrator] Final: %d comments after consolidation\n", len(consolidated.Comments))
 

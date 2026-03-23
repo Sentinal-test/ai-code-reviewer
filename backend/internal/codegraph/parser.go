@@ -11,14 +11,14 @@ import (
 )
 
 var (
-	goImportRe      = regexp.MustCompile(`(?m)^\s*(?:import\s+)?(?:(\w+)\s+)?"([^"]+)"`)
-	pyImportRe      = regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z0-9_.,\s]+)$`)
-	pyFromImportRe  = regexp.MustCompile(`(?m)^\s*from\s+([A-Za-z0-9_\.]+)\s+import\s+([A-Za-z0-9_,\s\*()]+)`)
-	jsNsImportRe    = regexp.MustCompile(`(?m)^\s*import\s+\*\s+as\s+([A-Za-z0-9_$]+)\s+from\s+['"]([^'"]+)['"]`)
+	goImportRe        = regexp.MustCompile(`(?m)^\s*(?:import\s+)?(?:(\w+)\s+)?"([^"]+)"`)
+	pyImportRe        = regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z0-9_.,\s]+)$`)
+	pyFromImportRe    = regexp.MustCompile(`(?m)^\s*from\s+([A-Za-z0-9_\.]+)\s+import\s+([A-Za-z0-9_,\s\*()]+)`)
+	jsNsImportRe      = regexp.MustCompile(`(?m)^\s*import\s+\*\s+as\s+([A-Za-z0-9_$]+)\s+from\s+['"]([^'"]+)['"]`)
 	jsDefaultImportRe = regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z0-9_$]+)\s*(?:,\s*\{[^}]+\})?\s+from\s+['"]([^'"]+)['"]`)
-	jsNamedImportRe = regexp.MustCompile(`(?m)^\s*import\s+(?:[A-Za-z0-9_$]+\s*,\s*)?\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]`)
-	javaImportRe    = regexp.MustCompile(`(?m)^\s*import\s+(?:static\s+)?([A-Za-z0-9_.]+)\s*;`)
-	goOwnerRe       = regexp.MustCompile(`func\s*\(\s*[^)]*\*?([A-Za-z_][A-Za-z0-9_]*)\s*\)\s+[A-Za-z_][A-Za-z0-9_]*`)
+	jsNamedImportRe   = regexp.MustCompile(`(?m)^\s*import\s+(?:[A-Za-z0-9_$]+\s*,\s*)?\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]`)
+	javaImportRe      = regexp.MustCompile(`(?m)^\s*import\s+(?:static\s+)?([A-Za-z0-9_.]+)\s*;`)
+	goOwnerRe         = regexp.MustCompile(`func\s*\(\s*[^)]*\*?([A-Za-z_][A-Za-z0-9_]*)\s*\)\s+[A-Za-z_][A-Za-z0-9_]*`)
 )
 
 // Parser handles AST parsing and symbol extraction

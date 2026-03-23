@@ -39,6 +39,12 @@ type AgentConfig struct {
 
 	// Developer rules
 	DeveloperRules *models.DeveloperRules
+
+	// Caching
+	CacheID string
+
+	// History (PR Memory)
+	PreviousFindings []models.PreviousFinding
 }
 
 // AgentResult is the output from a single specialist agent.
