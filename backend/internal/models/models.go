@@ -45,3 +45,14 @@ type DeveloperRules struct {
 	Ignore       []string `yaml:"ignore"`
 	Focus        []string `yaml:"focus"`
 }
+
+// PreviousFinding represents a comment the bot previously posted.
+type PreviousFinding struct {
+	File      string `json:"file"`
+	Line      int    `json:"line"`
+	Severity  string `json:"severity"`
+	Layer     string `json:"layer"`
+	Message   string `json:"message"`
+	Hash      string `json:"hash"`       // fingerprint for dedup
+	CommentID int64  `json:"comment_id"` // GitHub comment ID
+}

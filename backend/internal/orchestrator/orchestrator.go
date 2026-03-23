@@ -71,6 +71,7 @@ func ReviewChunk(
 	remoteFetch *remotefetch.Fetcher,
 	devRules *models.DeveloperRules,
 	cacheIDs map[agents.AgentType]string,
+	previousFindings []models.PreviousFinding,
 ) (*models.ReviewResult, error) {
 
 	start := time.Now()
@@ -121,8 +122,9 @@ func ReviewChunk(
 		ChunkIndex:     chunkIndex,
 		ChunkTotal:     chunkTotal,
 		RepoPath:       repoPath,
-		MatchSummary:   matchSummary,
-		DeveloperRules: devRules,
+		MatchSummary:     matchSummary,
+		DeveloperRules:   devRules,
+		PreviousFindings: previousFindings,
 	}
 
 	// Build per-agent configs with DIFFERENTIATED context:

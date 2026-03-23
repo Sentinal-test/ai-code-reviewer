@@ -2,7 +2,6 @@ package llm
 
 import (
 	"code-review/backend/internal/agents"
-	"code-review/backend/internal/chunker"
 	"code-review/backend/internal/models"
 	"code-review/backend/internal/rules"
 	"context"
@@ -294,6 +293,24 @@ func buildStaticContext(config agents.AgentConfig) string {
 func buildDynamicPrompt(config agents.AgentConfig) string {
 	var b strings.Builder
 
+	// PR History - Historical Context
+	if len(config.PreviousFindings) > 0 {
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("TASK CONTEXT: Previous Review Findings\n")
+		b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
+		b.WriteString("The following issues were already reported in previous commits of this PR.\n")
+		b.WriteString("Reference them to avoid redundant comments and to see if previous bugs were fixed.\n\n")
+		for _, f := range config.PreviousFindings {
+			// Only show first 200 chars of message as it's for context only
+			msg := f.Message
+			if len(msg) > 200 {
+				msg = msg[:200] + "..."
+			}
+			b.WriteString(fmt.Sprintf("- [%s] %s:%d: %s\n", f.Layer, f.File, f.Line, msg))
+		}
+		b.WriteString("\n")
+	}
+
 	// Chunk header
 	if config.ChunkTotal > 1 {
 		b.WriteString(fmt.Sprintf("=== CHUNK %d/%d ===\n", config.ChunkIndex, config.ChunkTotal))
@@ -350,23 +367,27 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 
 	for _, path := range getFileKeys(config.ChangedFiles) {
 		content := config.ChangedFiles[path]
-		fileTokens := len(content) / 4
 		b.WriteString(fmt.Sprintf("\n═══ FILE: %s ═══\n", path))
 
-		if fileTokens > chunker.DefaultTokenBudget {
-			// OVERSIZED FILE: Send imports + diff context only
-			fmt.Printf("  ⚠️ [%s] Oversized file detected: %s (%d tokens > %d budget). Using diff-only mode.\n",
-				config.Type, path, fileTokens, chunker.DefaultTokenBudget)
-			b.WriteString(fmt.Sprintf("[OVERSIZED FILE — %d tokens, showing imports + ±50 lines around each change]\n", fileTokens))
+		diffSections := diffMap[path]
+		if len(diffSections) > 0 {
+			// Always use focused context (imports + ±40 lines around diff) to save costs
+			b.WriteString("[Showing imports + ±40 lines around each change]\n")
 			b.WriteString("[Use get_file_content tool to inspect other sections if needed]\n\n")
-			diffSections := diffMap[path]
-			focused := extractDiffWithContext(content, diffSections, 50)
+			focused := extractDiffWithContext(content, diffSections, 40)
 			b.WriteString(focused)
 		} else {
-			// Normal: Full file content with line numbers (for context)
+			// Fallback: If no diff sections matched, show the first 100 lines 
 			lines := strings.Split(content, "\n")
-			for i, line := range lines {
-				b.WriteString(fmt.Sprintf("%d: %s\n", i+1, line))
+			limit := 100
+			if len(lines) < limit {
+				limit = len(lines)
+			}
+			for i := 0; i < limit; i++ {
+				b.WriteString(fmt.Sprintf("%d: %s\n", i+1, lines[i]))
+			}
+			if len(lines) > limit {
+				b.WriteString(fmt.Sprintf("\n... (%d lines total, showing first %d) ...\n", len(lines), limit))
 			}
 		}
 

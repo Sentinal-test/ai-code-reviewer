@@ -411,6 +411,28 @@ func run() int {
 	chunks := chunker.GroupFiles(changedFiles, diff, graphEdges, chunker.DefaultTokenBudget)
 	fmt.Printf("🚀 Starting Review: %d files → %d chunk(s)\n", len(changedFiles), len(chunks))
 
+	// PR Memory: Fetch previous findings early to provide context to LLM
+	var previousFindings []models.PreviousFinding
+	if repoName != "" && prNumber != "" && githubToken != "" {
+		parts := strings.Split(repoName, "/")
+		if len(parts) == 2 {
+			var prNum int
+			fmt.Sscanf(prNumber, "%d", &prNum)
+			if ghClient == nil {
+				ghClient = action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
+			}
+			pf, err := memory.FetchPreviousFindings(ctx, ghClient.GetRawClient(), parts[0], parts[1], prNum)
+			if err != nil {
+				fmt.Printf("⚠️  [Memory] Failed to fetch previous findings: %v (proceeding without memory context)\n", err)
+			} else {
+				previousFindings = pf
+				if len(previousFindings) > 0 {
+					fmt.Printf("🧠 [Memory] Loaded %d previous findings for LLM context\n", len(previousFindings))
+				}
+			}
+		}
+	}
+
 	// Detailed Chunking Breakdown Logging (enabled if multi-chunk)
 	if len(chunks) > 1 {
 		fmt.Println("\n═══════════════════════════════════════════════════════════════════════════════")
@@ -508,6 +530,7 @@ func run() int {
 			remoteFetch,
 			devRules,
 			cacheIDs,
+			previousFindings,
 		)
 		if err != nil {
 			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)
@@ -550,14 +573,10 @@ func run() int {
 			ghClient = action.NewGitHubClient(ctx, githubToken, parts[0], parts[1])
 		}
 
-		// PR Memory: Fetch previous findings and deduplicate
-		previous, err := memory.FetchPreviousFindings(ctx, ghClient.GetRawClient(), parts[0], parts[1], prNum)
-		if err != nil {
-			fmt.Printf("⚠️ [Memory] Failed to fetch previous findings: %v (proceeding without dedup)\n", err)
-		} else if len(previous) > 0 {
-			fmt.Printf("🧠 [Memory] Found %d previous bot comments on this PR\n", len(previous))
+		// PR Memory: Deduplicate results against previous findings
+		if len(previousFindings) > 0 {
 			var skipped int
-			result.Comments, skipped = memory.Deduplicate(result.Comments, previous)
+			result.Comments, skipped = memory.Deduplicate(result.Comments, previousFindings)
 			fmt.Printf("🧠 [Memory] Deduplication: %d new, %d skipped (already posted)\n",
 				len(result.Comments), skipped)
 		}

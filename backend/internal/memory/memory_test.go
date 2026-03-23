@@ -47,7 +47,7 @@ func TestParseMarker_NoMarker(t *testing.T) {
 }
 
 func TestDeduplicate(t *testing.T) {
-	prev := []PreviousFinding{
+	prev := []models.PreviousFinding{
 		{
 			File:     "auth.go",
 			Line:     50,
@@ -124,7 +124,7 @@ func TestDeduplicate(t *testing.T) {
 }
 
 func TestDeduplicate_FallbackMatches(t *testing.T) {
-	prev := []PreviousFinding{
+	prev := []models.PreviousFinding{
 		{
 			File:     "handlers.go",
 			Line:     200,

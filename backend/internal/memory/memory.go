@@ -14,17 +14,6 @@ import (
 	"github.com/google/go-github/v60/github"
 )
 
-// PreviousFinding represents a comment the bot previously posted.
-type PreviousFinding struct {
-	File      string
-	Line      int
-	Severity  string
-	Layer     string
-	Message   string
-	Hash      string // fingerprint for dedup
-	CommentID int64  // GitHub comment ID
-}
-
 // markerRegex extracts fields from the hidden HTML marker.
 // Format: <!-- ai-reviewer:v1 file=path/to/file.go line=42 severity=critical layer=bug hash=abc123 -->
 var markerRegex = regexp.MustCompile(`<!-- ai-reviewer:v1 file=([^ ]+) line=([^ ]+) severity=([^ ]+) layer=([^ ]+) hash=([^ ]+) -->`)
@@ -47,7 +36,7 @@ func Fingerprint(file, layer, message string) string {
 
 // ParseMarker extracts PreviousFinding data from a string containing the marker.
 // Returns nil if no valid marker is found.
-func ParseMarker(body, actualFile string, actualLine int, commentID int64) *PreviousFinding {
+func ParseMarker(body, actualFile string, actualLine int, commentID int64) *models.PreviousFinding {
 	matches := markerRegex.FindStringSubmatch(body)
 	if len(matches) < 6 {
 		return nil // Not our bot's comment or malformed
@@ -74,7 +63,7 @@ func ParseMarker(body, actualFile string, actualLine int, commentID int64) *Prev
 		line = actualLine
 	}
 
-	return &PreviousFinding{
+	return &models.PreviousFinding{
 		File:      file,
 		Line:      line,
 		Severity:  severity,
@@ -87,8 +76,8 @@ func ParseMarker(body, actualFile string, actualLine int, commentID int64) *Prev
 
 // FetchPreviousFindings calls GitHub API to list all review comments on the PR,
 // filters to only our bot's comments, and parses them into a list.
-func FetchPreviousFindings(ctx context.Context, client *github.Client, owner, repo string, prNumber int) ([]PreviousFinding, error) {
-	var findings []PreviousFinding
+func FetchPreviousFindings(ctx context.Context, client *github.Client, owner, repo string, prNumber int) ([]models.PreviousFinding, error) {
+	var findings []models.PreviousFinding
 	opts := &github.PullRequestListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
 
 	for {
@@ -152,7 +141,7 @@ func FetchPreviousFindings(ctx context.Context, client *github.Client, owner, re
 
 // Deduplicate filters new findings against previous ones.
 // Returns only genuinely new findings that should be posted, and the count of skipped ones.
-func Deduplicate(newFindings []models.ReviewComment, previous []PreviousFinding) ([]models.ReviewComment, int) {
+func Deduplicate(newFindings []models.ReviewComment, previous []models.PreviousFinding) ([]models.ReviewComment, int) {
 	var toPost []models.ReviewComment
 	var skipped int
 
