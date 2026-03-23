@@ -105,6 +105,9 @@ type PreviousFinding struct {
 func MergeResolutions(all []Resolution) []Resolution {
 	resMap := make(map[FlexInt64]Resolution)
 	for _, res := range all {
+		if res.CommentID <= 0 {
+			continue // skip invalid or hallucinated comment IDs from LLMs
+		}
 		isResolved := strings.EqualFold(res.Status, "resolved")
 		if existing, exists := resMap[res.CommentID]; exists {
 			existingResolved := strings.EqualFold(existing.Status, "resolved")

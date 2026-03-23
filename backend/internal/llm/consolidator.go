@@ -139,6 +139,14 @@ func buildConsolidationPrompt(results []agents.AgentResult, diff string) string 
 			b.WriteString(fmt.Sprintf("  Layer: %s\n", c.Layer))
 			b.WriteString(fmt.Sprintf("  Message: %s\n", c.Message))
 		}
+
+		if len(r.Resolutions) > 0 {
+			b.WriteString(fmt.Sprintf("\nResolutions (%d):\n", len(r.Resolutions)))
+			for _, res := range r.Resolutions {
+				b.WriteString(fmt.Sprintf("- CommentID: %d | Status: %s | Reason: %s\n", res.CommentID, res.Status, res.Reason))
+			}
+		}
+		
 		b.WriteString("\n")
 	}
 
