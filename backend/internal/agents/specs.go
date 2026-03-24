@@ -93,13 +93,16 @@ func BuildConsolidatorSystemPrompt(maxComments int, matchSummary string) string 
 	if maxComments <= 0 {
 		maxComments = 20 // Safe default
 	}
-	
+
+	// IMPORTANT: Sprintf FIRST to resolve %d, THEN inject multiRepoBlock.
+	// If we inject multiRepoBlock first and it contains % characters,
+	// fmt.Sprintf would misinterpret them as format verbs.
+	prompt := fmt.Sprintf(ConsolidatorSystemPrompt, maxComments)
+
 	multiRepoBlock := BuildConsolidatorMultiRepoBlock(matchSummary)
-	prompt := ConsolidatorSystemPrompt
 	if multiRepoBlock != "" {
-		// Inject it at the top of the rules
 		prompt = strings.Replace(prompt, "CONSOLIDATION RULES:", multiRepoBlock+"\nCONSOLIDATION RULES:", 1)
 	}
 
-	return fmt.Sprintf(prompt, maxComments)
+	return prompt
 }

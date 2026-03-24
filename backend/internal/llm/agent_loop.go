@@ -57,8 +57,29 @@ var responseSchema = map[string]interface{}{
 				"required": []string{"file", "line", "severity", "layer", "message"},
 			},
 		},
+		"resolutions": map[string]interface{}{
+			"type": "array",
+			"items": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"comment_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The ID of the previous PR comment being evaluated",
+					},
+					"status": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"resolved", "unresolved"},
+					},
+					"reason": map[string]interface{}{
+						"type":        "string",
+						"description": "Why the finding was resolved or remains unresolved",
+					},
+				},
+				"required": []string{"comment_id", "status", "reason"},
+			},
+		},
 	},
-	"required": []string{"thinking", "summary", "comments"},
+	"required": []string{"thinking", "summary", "comments", "resolutions"},
 }
 
 // RunAgentReview executes a single specialist agent with the agentic loop.
@@ -228,6 +249,7 @@ func RunAgentReview(
 			parsed := parseAgentResponse(resp.Text)
 			result.Comments = parsed.Comments
 			result.Summary = parsed.Summary
+			result.Resolutions = parsed.Resolutions
 			fmt.Printf("  ✅ [%s] Done: %d comments (%.1fs, %d tool calls)\n",
 				config.Type, len(result.Comments), elapsed.Seconds(), result.ToolCalls)
 			return result

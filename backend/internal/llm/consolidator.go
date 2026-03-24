@@ -11,6 +11,73 @@ import (
 	"time"
 )
 
+// consolidatorResponseSchema enforces structured JSON output with a mandatory
+// "thinking" field for chain-of-thought verification reasoning.
+var consolidatorResponseSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"thinking": map[string]interface{}{
+			"type":        "string",
+			"description": "Trace findings, verify them against the diff, and explain deduplication/dropping decisions before writing the final output.",
+		},
+		"summary": map[string]interface{}{
+			"type":        "string",
+			"description": "1-2 sentence high-level summary of the consolidated review",
+		},
+		"comments": map[string]interface{}{
+			"type": "array",
+			"items": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"file": map[string]interface{}{
+						"type":        "string",
+						"description": "Relative file path from repo root",
+					},
+					"line": map[string]interface{}{
+						"type":        "integer",
+						"description": "Line number from the '+' lines in the diff",
+					},
+					"severity": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"critical", "warning", "info"},
+					},
+					"layer": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"bug", "performance", "security", "architecture", "lint"},
+					},
+					"message": map[string]interface{}{
+						"type":        "string",
+						"description": "Concise explanation. Max 3-4 sentences.",
+					},
+				},
+				"required": []string{"file", "line", "severity", "layer", "message"},
+			},
+		},
+		"resolutions": map[string]interface{}{
+			"type": "array",
+			"items": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"comment_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The ID of the previous PR comment being resolved",
+					},
+					"status": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"resolved", "unresolved"},
+					},
+					"reason": map[string]interface{}{
+						"type":        "string",
+						"description": "Why the finding was resolved or remains unresolved",
+					},
+				},
+				"required": []string{"comment_id", "status", "reason"},
+			},
+		},
+	},
+	"required": []string{"thinking", "summary", "comments", "resolutions"},
+}
+
 // RunConsolidation sends all specialist agent results to the LLM for intelligent
 // consolidation. The LLM can detect semantically similar issues with different
 // wording, assess comment quality, and resolve conflicts between agents.
@@ -65,11 +132,12 @@ func RunConsolidation(
 
 	for iteration := 0; iteration <= maxToolIterations; iteration++ {
 		req := GenerateRequest{
-			SystemPrompt: systemPrompt,
-			Messages:     messages,
-			Tools:        tools,
-			Temperature:  0.0,
-			ResponseJSON: toolExecutor == nil, // enforce JSON if no tools
+			SystemPrompt:   systemPrompt,
+			Messages:       messages,
+			Tools:          tools,
+			Temperature:    0.0,
+			ResponseJSON:   toolExecutor == nil, // enforce JSON if no tools
+			ResponseSchema: consolidatorResponseSchema,
 		}
 
 		resp, err := provider.GenerateContent(ctx, req)
@@ -198,6 +266,15 @@ func buildConsolidationPrompt(results []agents.AgentResult, diff string) string 
 			b.WriteString(fmt.Sprintf("Summary: %s\n", r.Summary))
 		}
 
+		// Resolutions MUST be serialized before the early continue below,
+		// otherwise agents with 0 comments but resolved findings get skipped.
+		if len(r.Resolutions) > 0 {
+			b.WriteString(fmt.Sprintf("\nResolutions (%d):\n", len(r.Resolutions)))
+			for _, res := range r.Resolutions {
+				b.WriteString(fmt.Sprintf("- CommentID: %d | Status: %s | Reason: %s\n", res.CommentID, res.Status, res.Reason))
+			}
+		}
+
 		if len(r.Comments) == 0 {
 			b.WriteString("No issues found.\n\n")
 			continue
@@ -211,13 +288,6 @@ func buildConsolidationPrompt(results []agents.AgentResult, diff string) string 
 			b.WriteString(fmt.Sprintf("  Severity: %s\n", c.Severity))
 			b.WriteString(fmt.Sprintf("  Layer: %s\n", c.Layer))
 			b.WriteString(fmt.Sprintf("  Message: %s\n", c.Message))
-		}
-
-		if len(r.Resolutions) > 0 {
-			b.WriteString(fmt.Sprintf("\nResolutions (%d):\n", len(r.Resolutions)))
-			for _, res := range r.Resolutions {
-				b.WriteString(fmt.Sprintf("- CommentID: %d | Status: %s | Reason: %s\n", res.CommentID, res.Status, res.Reason))
-			}
 		}
 		
 		b.WriteString("\n")
