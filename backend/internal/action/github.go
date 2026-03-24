@@ -477,8 +477,10 @@ func buildResolutionsBlock(resolutions []models.Resolution) string {
 			if resolvedCount == 0 {
 				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
 			}
-			// Replace newlines with spaces to prevent markdown list breakage
-			safeReason := strings.ReplaceAll(res.Reason, "\n", " ")
+			// Replace newlines and carriage returns with spaces to prevent markdown list breakage
+			safeReason := strings.ReplaceAll(res.Reason, "\r\n", " ")
+			safeReason = strings.ReplaceAll(safeReason, "\n", " ")
+			safeReason = strings.ReplaceAll(safeReason, "\r", " ")
 			resBlock.WriteString(fmt.Sprintf("- %s\n", safeReason))
 			resolvedCount++
 		}

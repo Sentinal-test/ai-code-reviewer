@@ -2,11 +2,13 @@ package action
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"code-review/backend/internal/models"
 )
@@ -16,7 +18,19 @@ const githubGraphQLEndpoint = "https://api.github.com/graphql"
 // ResolveThreads resolves GitHub review threads for findings the Consolidator marked as resolved.
 // It uses the GraphQL API because the REST API does not support thread resolution.
 func ResolveThreads(token string, resolutions []models.Resolution, commentNodeMap map[int64]string) {
+	resolvedResolutions := 0
+	for _, res := range resolutions {
+		if strings.EqualFold(res.Status, "resolved") {
+			resolvedResolutions++
+		}
+	}
+	fmt.Printf("  🔍 [Resolve] Starting: %d total resolutions (%d resolved), %d comment NodeIDs available\n",
+		len(resolutions), resolvedResolutions, len(commentNodeMap))
+
 	if len(resolutions) == 0 || len(commentNodeMap) == 0 {
+		if len(resolutions) > 0 && len(commentNodeMap) == 0 {
+			fmt.Println("  ⚠️ [Resolve] Resolutions exist but commentNodeMap is empty — no previous inline comments found")
+		}
 		return
 	}
 
@@ -60,26 +74,6 @@ func ResolveThreads(token string, resolutions []models.Resolution, commentNodeMa
 // that contains the given comment (identified by its GraphQL node ID).
 func findThreadNodeID(token, commentNodeID string) (string, error) {
 	query := `query($id: ID!) {
-		node(id: $id) {
-			... on PullRequestReviewComment {
-				pullRequestReview {
-					pullRequest {
-						reviewThreads(last: 100) {
-							nodes {
-								id
-								comments(first: 1) {
-									nodes { id }
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}`
-
-	// Simpler approach: just get the thread directly from the comment
-	query = `query($id: ID!) {
 		node(id: $id) {
 			... on PullRequestReviewComment {
 				pullRequestReviewThread { id isResolved }
@@ -129,7 +123,7 @@ func resolveThread(token, threadID string) error {
 	return err
 }
 
-// graphqlRequest sends a GraphQL request to the GitHub API.
+// graphqlRequest sends a GraphQL request to the GitHub API with a 30-second timeout.
 func graphqlRequest(token, query string, variables map[string]interface{}) (map[string]interface{}, error) {
 	body := map[string]interface{}{
 		"query":     query,
@@ -140,7 +134,10 @@ func graphqlRequest(token, query string, variables map[string]interface{}) (map[
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", githubGraphQLEndpoint, bytes.NewReader(jsonBody))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", githubGraphQLEndpoint, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}

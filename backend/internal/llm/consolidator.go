@@ -106,11 +106,6 @@ func RunConsolidation(
 	fmt.Printf("   📏 [Consolidator] Prompt size: %d chars (~%d tokens)\n",
 		len(prompt), len(prompt)/4)
 
-	// LOG: Complete Raw Input
-	fmt.Printf("\n--- [Consolidator] RAW SYSTEM PROMPT ---\n%s\n", systemPrompt)
-	fmt.Printf("\n--- [Consolidator] RAW USER PROMPT ---\n%s\n", prompt)
-	fmt.Println("--------------------------------------------------------------------------------")
-
 	var tools []ToolDeclaration
 	if toolExecutor != nil {
 		tools = AgentToolDeclarations()
