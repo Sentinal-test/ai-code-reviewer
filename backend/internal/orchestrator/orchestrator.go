@@ -202,8 +202,14 @@ func ReviewChunk(
 	fmt.Printf("🔄 [Orchestrator] Consolidating %d comments from 3 agents (%.1fs total, %d tool calls)\n",
 		totalComments, elapsed.Seconds(), totalToolCalls)
 
-	// LLM-based consolidation (falls back to deterministic on failure)
-	consolidated := llm.RunConsolidation(ctx, provider, results, chunkDiff, agents.DefaultMaxComments)
+	// Create a ToolExecutor for the consolidator so it can independently verify findings
+	consolidatorTe := llm.NewToolExecutor(repoPath, graph)
+	if matchSummary != "" {
+		consolidatorTe.WithMultiRepo(matchSummary, remoteGraphs, remoteFetch)
+	}
+
+	// LLM-based consolidation with tool access (falls back to deterministic on failure)
+	consolidated := llm.RunConsolidation(ctx, provider, results, chunkDiff, agents.DefaultMaxComments, matchSummary, consolidatorTe)
 
 	fmt.Printf("✅ [Orchestrator] Final: %d comments after consolidation\n", len(consolidated.Comments))
 

@@ -33,3 +33,7 @@ docs/prompts
 .ai-reviewer/
 /output.md
 
+codebase_*
+meta_*
+prompt_antipatterns.md
+
