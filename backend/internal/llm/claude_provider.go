@@ -136,3 +136,7 @@ func (p *ClaudeProvider) GenerateContent(ctx context.Context, req GenerateReques
 
 	return result, nil
 }
+
+func (p *ClaudeProvider) GetName() string {
+	return "Claude (" + p.model + ")"
+}

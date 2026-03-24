@@ -203,7 +203,7 @@ func NewGitHubAppClient(ctx context.Context, appID int64, privateKeyString, owne
 // It tries to group them into a single review if possible, or posts individual comments.
 // PostReview posts the review comments to the PR.
 // It matches the robustness of the SaaS backend by implementing a fallback strategy.
-func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string, diff string) error {
+func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string, diff string, commentNodeMap map[int64]string) error {
 	if result == nil {
 		return nil
 	}
@@ -214,6 +214,8 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 	// 1. Try Batched Review (Best for UI/Noise)
 	err := g.postBatchedReview(ctx, prNumber, result, commitSHA, validLines)
 	if err == nil {
+		// Resolve GitHub review threads for findings the Consolidator marked as resolved
+		ResolveThreads(g.Token, result.Resolutions, commentNodeMap)
 		return nil
 	}
 
@@ -324,12 +326,16 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// Post the final summary
-	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s", result.Summary)
+	// Build resolved issues block and append to summary
+	resBlock := buildResolutionsBlock(result.Resolutions)
+	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s%s", result.Summary, resBlock)
 	if failedInline > 0 {
 		summaryMsg += fmt.Sprintf("\n\n---\n*Note: %d comments were posted as general comments because their line numbers could not be resolved in the PR diff.*", failedInline)
 	}
 	g.postGeneralComment(ctx, prNumber, summaryMsg)
+
+	// Resolve GitHub review threads for findings the Consolidator marked as resolved
+	ResolveThreads(g.Token, result.Resolutions, commentNodeMap)
 
 	fmt.Printf("✅ Fallback Review Complete | Posted %d/%d comments successfully\n", successCount, len(result.Comments))
 	return nil
@@ -374,14 +380,16 @@ func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, resu
 		g.postGeneralComment(ctx, prNumber, msg)
 	}
 
-	if len(comments) == 0 && result.Summary == "" {
+	resBlock := buildResolutionsBlock(result.Resolutions)
+
+	if len(comments) == 0 && result.Summary == "" && resBlock == "" {
 		return nil
 	}
 
 	reviewRequest := &github.PullRequestReviewRequest{
 		CommitID: github.String(commitSHA),
 		Event:    github.String("COMMENT"),
-		Body:     github.String("### AI Code Review Summary\n\n" + result.Summary),
+		Body:     github.String("### AI Code Review Summary\n\n" + result.Summary + resBlock),
 		Comments: comments,
 	}
 
@@ -458,4 +466,22 @@ func (g *GitHubClient) ListAccessibleRepos(ctx context.Context) ([]*github.Repos
 	}
 
 	return allRepos, nil
+}
+
+// buildResolutionsBlock formats the merged resolutions, safely escaping the LLM output.
+func buildResolutionsBlock(resolutions []models.Resolution) string {
+	var resBlock strings.Builder
+	resolvedCount := 0
+	for _, res := range resolutions {
+		if strings.EqualFold(res.Status, "resolved") {
+			if resolvedCount == 0 {
+				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
+			}
+			// Replace newlines with spaces to prevent markdown list breakage
+			safeReason := strings.ReplaceAll(res.Reason, "\n", " ")
+			resBlock.WriteString(fmt.Sprintf("- %s\n", safeReason))
+			resolvedCount++
+		}
+	}
+	return resBlock.String()
 }

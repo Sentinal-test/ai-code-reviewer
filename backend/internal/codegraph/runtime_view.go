@@ -169,13 +169,9 @@ func FormatRuntimeGraphView(view *RuntimeGraphView) string {
 		}
 	}
 
-	callers := sortedRuntimeEdges(view.Callers)
-	if len(callers) > 0 {
-		b.WriteString("CALLERS\n")
-		for _, edge := range callers {
-			b.WriteString(fmt.Sprintf("- %s -> %s via %s\n", edge.From, edge.To, edge.Symbol))
-		}
-	}
+	// NOTE: CALLERS are intentionally omitted from the static context.
+	// Agents can use the 'get_callers' tool on-demand to check callers
+	// for specific symbols, which is more targeted and saves ~4K tokens.
 
 	if len(view.PackageDeps) > 0 {
 		sort.Slice(view.PackageDeps, func(i, j int) bool {

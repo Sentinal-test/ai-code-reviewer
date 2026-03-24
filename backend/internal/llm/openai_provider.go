@@ -262,3 +262,7 @@ func (p *OpenAIProvider) GenerateContent(ctx context.Context, req GenerateReques
 
 	return result, nil
 }
+
+func (p *OpenAIProvider) GetName() string {
+	return "OpenAI (" + p.model + ")"
+}

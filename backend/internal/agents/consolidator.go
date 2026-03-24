@@ -126,9 +126,18 @@ func DeterministicConsolidate(results []AgentResult, maxComments int) *models.Re
 		combinedSummary += s + "\n"
 	}
 
+	// Merge Resolutions
+	var allResolutions []models.Resolution
+	for _, r := range results {
+		if r.Error == nil {
+			allResolutions = append(allResolutions, r.Resolutions...)
+		}
+	}
+
 	return &models.ReviewResult{
-		Summary:  combinedSummary,
-		Comments: final,
+		Summary:     combinedSummary,
+		Comments:    final,
+		Resolutions: models.MergeResolutions(allResolutions),
 	}
 }
 

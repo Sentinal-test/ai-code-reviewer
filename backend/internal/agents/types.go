@@ -51,6 +51,7 @@ type AgentConfig struct {
 type AgentResult struct {
 	Agent        AgentType              `json:"agent"`
 	Comments     []models.ReviewComment `json:"comments"`
+	Resolutions  []models.Resolution    `json:"resolutions"`
 	Summary      string                 `json:"summary"`
 	ToolCalls    int                    `json:"tool_calls"` // how many tool calls were made
 	InputTokens  int                    `json:"input_tokens"`

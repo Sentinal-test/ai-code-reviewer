@@ -57,8 +57,29 @@ var responseSchema = map[string]interface{}{
 				"required": []string{"file", "line", "severity", "layer", "message"},
 			},
 		},
+		"resolutions": map[string]interface{}{
+			"type": "array",
+			"items": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"comment_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The ID of the previous PR comment being evaluated",
+					},
+					"status": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"resolved", "unresolved"},
+					},
+					"reason": map[string]interface{}{
+						"type":        "string",
+						"description": "Why the finding was resolved or remains unresolved",
+					},
+				},
+				"required": []string{"comment_id", "status", "reason"},
+			},
+		},
 	},
-	"required": []string{"thinking", "summary", "comments"},
+	"required": []string{"thinking", "summary", "comments", "resolutions"},
 }
 
 // RunAgentReview executes a single specialist agent with the agentic loop.
@@ -114,11 +135,6 @@ func RunAgentReview(
 
 	fmt.Printf("  📏 [%s] Prompt size: %d chars (~%d tokens)\n",
 		config.Type, len(dynamicPrompt), len(dynamicPrompt)/4)
-
-	// LOG: Complete Raw Input
-	fmt.Printf("\n--- [%s] RAW SYSTEM PROMPT ---\n%s\n", config.Type, config.SystemPrompt)
-	fmt.Printf("\n--- [%s] RAW USER PROMPT (Dynamic + Static) ---\n%s\n", config.Type, dynamicPrompt)
-	fmt.Println("--------------------------------------------------------------------------------")
 
 	// Build the initial request messages
 	messages := []Message{
@@ -228,6 +244,7 @@ func RunAgentReview(
 			parsed := parseAgentResponse(resp.Text)
 			result.Comments = parsed.Comments
 			result.Summary = parsed.Summary
+			result.Resolutions = parsed.Resolutions
 			fmt.Printf("  ✅ [%s] Done: %d comments (%.1fs, %d tool calls)\n",
 				config.Type, len(result.Comments), elapsed.Seconds(), result.ToolCalls)
 			return result
@@ -306,7 +323,7 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 			if len(msg) > 200 {
 				msg = msg[:200] + "..."
 			}
-			b.WriteString(fmt.Sprintf("- [%s] %s:%d: %s\n", f.Layer, f.File, f.Line, msg))
+			b.WriteString(fmt.Sprintf("- [ID: %d] [%s] %s:%d: %s\n", f.CommentID, f.Layer, f.File, f.Line, msg))
 		}
 		b.WriteString("\n")
 	}
@@ -410,7 +427,8 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 	b.WriteString("\n═══════════════════════════════════════════════════════════════════════════════\n")
 	b.WriteString("BEGIN ANALYSIS NOW.\n")
 	b.WriteString("═══════════════════════════════════════════════════════════════════════════════\n")
-	b.WriteString("REMINDER: Your response MUST be a valid JSON object with \"thinking\", \"summary\", and \"comments\" keys.\n")
+	b.WriteString("REMINDER: Your response MUST be a valid JSON object with \"thinking\", \"summary\", \"comments\", and \"resolutions\" keys.\n")
+	b.WriteString("For \"resolutions\", output an array of objects {\"comment_id\": 123, \"status\": \"resolved\"|\"unresolved\", \"reason\": \"...\"} evaluating if previous findings were fixed based on the new diff.\n")
 	b.WriteString("Do NOT output plain text, code comments, or markdown. Output ONLY JSON.\n")
 
 	return b.String()
