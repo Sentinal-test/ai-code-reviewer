@@ -237,3 +237,7 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 
 	return result, nil
 }
+
+func (p *GeminiProvider) GetName() string {
+	return "Gemini (" + p.model + ")"
+}

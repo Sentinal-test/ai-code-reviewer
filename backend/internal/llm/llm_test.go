@@ -29,6 +29,10 @@ func (m *MockLLMProvider) DeleteCache(ctx context.Context, cacheID string) error
 	return nil
 }
 
+func (m *MockLLMProvider) GetName() string {
+	return "Mock"
+}
+
 func TestRunReview_Success(t *testing.T) {
 	changedFiles := map[string]string{
 		"main.go": "package main\nfunc main() {}\n",

@@ -226,6 +226,10 @@ func (p *CostTrackingProvider) DeleteCache(ctx context.Context, cacheID string) 
 	return err
 }
 
+func (p *CostTrackingProvider) GetName() string {
+	return p.inner.GetName()
+}
+
 func inferProviderAndModel(inner LLMProvider) (providerName, model string) {
 	switch v := inner.(type) {
 	case *GeminiProvider:

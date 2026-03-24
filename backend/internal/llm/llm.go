@@ -350,34 +350,29 @@ func RunReview(ctx context.Context, provider LLMProvider, diff string, changedFi
 	// 1. Construct Prompt
 	prompt := buildPrompt(diff, reviewableFiles, reviewableDeps, settings, repoStructure, prContext)
 
-	// LOGGING: Detailed context summary as requested
-	fmt.Println("\n═══════════════════════════════════════════════════════════════════════════════")
-	fmt.Println("🧠 [LLM INPUT] Context Summary & Code Graph Contributions")
-	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
+	// LOGGING: Systematic LLM Call Summary
+	fmt.Println("\n" + strings.Repeat("═", 80))
+	fmt.Printf("🧠 [LLM CALL] %s\n", provider.GetName())
+	fmt.Println(strings.Repeat("═", 80))
 
 	fmt.Printf("📂 Changed Files (%d):\n", len(reviewableFiles))
 	for _, path := range getFileKeys(reviewableFiles) {
 		fmt.Printf("  - %s\n", path)
 	}
 
-	fmt.Printf("\n🔍 Code Graph Summaries (%d):\n", len(reviewableDeps))
-	for _, path := range getFileKeys(reviewableDeps) {
-		content := reviewableDeps[path]
-		fmt.Printf("  + File: %s (%d chars)\n", path, len(content))
-		fmt.Println("    --- START SUMMARY ---")
-		fmt.Println(content)
-		fmt.Println("    --- END SUMMARY ---")
+	if len(reviewableDeps) > 0 {
+		fmt.Printf("\n🔍 Code Graph Context (%d files):\n", len(reviewableDeps))
+		for _, path := range getFileKeys(reviewableDeps) {
+			content := reviewableDeps[path]
+			fmt.Printf("  + %s (%d chars)\n", path, len(content))
+		}
 	}
 
 	fmt.Printf("\n📊 Meta Context:\n")
 	fmt.Printf("  - Repository Structure: %d chars\n", len(repoStructure))
 	fmt.Printf("  - PR Intent Context:   %d chars\n", len(buildPRContextSummary(prContext)))
-	fmt.Printf("  - Total Prompt Size:   %d chars\n", len(prompt))
-	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
-
-	// LOG: Complete Raw Input
-	fmt.Printf("\n--- [RunReview] RAW PROMPT ---\n%s\n", prompt)
-	fmt.Println("--------------------------------------------------------------------------------")
+	fmt.Printf("  - Total Prompt Size:   %d chars (~%d tokens)\n", len(prompt), len(prompt)/4)
+	fmt.Println(strings.Repeat("═", 80))
 	fmt.Println()
 
 	// 2. Prepare Request

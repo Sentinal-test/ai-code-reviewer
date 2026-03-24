@@ -136,11 +136,6 @@ func RunAgentReview(
 	fmt.Printf("  📏 [%s] Prompt size: %d chars (~%d tokens)\n",
 		config.Type, len(dynamicPrompt), len(dynamicPrompt)/4)
 
-	// LOG: Complete Raw Input
-	fmt.Printf("\n--- [%s] RAW SYSTEM PROMPT ---\n%s\n", config.Type, config.SystemPrompt)
-	fmt.Printf("\n--- [%s] RAW USER PROMPT (Dynamic + Static) ---\n%s\n", config.Type, dynamicPrompt)
-	fmt.Println("--------------------------------------------------------------------------------")
-
 	// Build the initial request messages
 	messages := []Message{
 		{

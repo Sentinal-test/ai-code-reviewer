@@ -79,4 +79,7 @@ type LLMProvider interface {
 
 	// DeleteCache cleans up the cache if applicable.
 	DeleteCache(ctx context.Context, cacheID string) error
+
+	// GetName returns the name of the provider/model
+	GetName() string
 }
