@@ -215,7 +215,7 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 	err := g.postBatchedReview(ctx, prNumber, result, commitSHA, validLines)
 	if err == nil {
 		// Resolve GitHub review threads for findings the Consolidator marked as resolved
-		ResolveThreads(g.Token, result.Resolutions, commentNodeMap)
+		ResolveThreads(g.Token, g.owner, g.repo, prNumber, result.Resolutions, commentNodeMap)
 		return nil
 	}
 
@@ -335,7 +335,7 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 	g.postGeneralComment(ctx, prNumber, summaryMsg)
 
 	// Resolve GitHub review threads for findings the Consolidator marked as resolved
-	ResolveThreads(g.Token, result.Resolutions, commentNodeMap)
+	ResolveThreads(g.Token, g.owner, g.repo, prNumber, result.Resolutions, commentNodeMap)
 
 	fmt.Printf("✅ Fallback Review Complete | Posted %d/%d comments successfully\n", successCount, len(result.Comments))
 	return nil
@@ -477,8 +477,10 @@ func buildResolutionsBlock(resolutions []models.Resolution) string {
 			if resolvedCount == 0 {
 				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
 			}
-			// Replace newlines with spaces to prevent markdown list breakage
-			safeReason := strings.ReplaceAll(res.Reason, "\n", " ")
+			// Replace newlines and carriage returns with spaces to prevent markdown list breakage
+			safeReason := strings.ReplaceAll(res.Reason, "\r\n", " ")
+			safeReason = strings.ReplaceAll(safeReason, "\n", " ")
+			safeReason = strings.ReplaceAll(safeReason, "\r", " ")
 			resBlock.WriteString(fmt.Sprintf("- %s\n", safeReason))
 			resolvedCount++
 		}

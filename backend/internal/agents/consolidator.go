@@ -27,7 +27,6 @@ func DeterministicConsolidate(results []AgentResult, maxComments int) *models.Re
 	}
 
 	var all []taggedComment
-	var summaries []string
 
 	for _, r := range results {
 		if r.Error != nil {
@@ -35,9 +34,6 @@ func DeterministicConsolidate(results []AgentResult, maxComments int) *models.Re
 		}
 		for _, c := range r.Comments {
 			all = append(all, taggedComment{Comment: c, Agent: r.Agent})
-		}
-		if r.Summary != "" {
-			summaries = append(summaries, fmt.Sprintf("[%s] %s", r.Agent, r.Summary))
 		}
 	}
 
@@ -120,10 +116,34 @@ func DeterministicConsolidate(results []AgentResult, maxComments int) *models.Re
 		final = final[:maxComments]
 	}
 
-	// Build combined summary
-	combinedSummary := ""
-	for _, s := range summaries {
-		combinedSummary += s + "\n"
+	// Build combined summary from actual final comments
+	criticalCount, warningCount, infoCount := 0, 0, 0
+	for _, c := range final {
+		switch c.Severity {
+		case "critical":
+			criticalCount++
+		case "warning":
+			warningCount++
+		case "info":
+			infoCount++
+		}
+	}
+
+	var combinedSummary string
+	if len(final) == 0 {
+		combinedSummary = "No issues detected"
+	} else {
+		var parts []string
+		if criticalCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d critical", criticalCount))
+		}
+		if warningCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d warning", warningCount))
+		}
+		if infoCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d info", infoCount))
+		}
+		combinedSummary = fmt.Sprintf("Found %s issue(s)", strings.Join(parts, ", "))
 	}
 
 	// Merge Resolutions

@@ -41,11 +41,16 @@ func isDocOrConfigFile(path string) bool {
 	return false
 }
 
-// filterReviewableFiles removes documentation and config files from the map.
-func filterReviewableFiles(files map[string]string) map[string]string {
+// filterReviewableFiles removes documentation and config files from the map,
+// updating the coverage manifest with the reasons.
+func filterReviewableFiles(files map[string]string, manifest *CoverageManifest) map[string]string {
 	filtered := make(map[string]string)
 	for path, content := range files {
-		if !isDocOrConfigFile(path) {
+		if isDocOrConfigFile(path) {
+			if manifest != nil {
+				manifest.AddFile(path, CoverageStatusSkippedDocConf, "Matched doc/config filter")
+			}
+		} else {
 			filtered[path] = content
 		}
 	}
@@ -72,12 +77,20 @@ func ReviewChunk(
 	devRules *models.DeveloperRules,
 	cacheIDs map[agents.AgentType]string,
 	previousFindings []models.PreviousFinding,
+	manifest *CoverageManifest,
 ) (*models.ReviewResult, error) {
 
 	start := time.Now()
 
+	// Initialize manifest with pending status for all files in this chunk
+	if manifest != nil {
+		for path := range chunkFiles {
+			manifest.AddFile(path, CoverageStatusPending, "Analysis in progress")
+		}
+	}
+
 	// Filter out documentation and config files — agents should only review code
-	reviewableFiles := filterReviewableFiles(chunkFiles)
+	reviewableFiles := filterReviewableFiles(chunkFiles, manifest)
 	if len(reviewableFiles) == 0 {
 		return &models.ReviewResult{
 			Summary: "No reviewable code files in this chunk (only documentation/config files)",
@@ -210,6 +223,13 @@ func ReviewChunk(
 
 	// LLM-based consolidation with tool access (falls back to deterministic on failure)
 	consolidated := llm.RunConsolidation(ctx, provider, results, chunkDiff, agents.DefaultMaxComments, matchSummary, consolidatorTe)
+
+	// Mark the remaining files in this chunk as reviewed
+	if manifest != nil {
+		for path := range reviewableFiles {
+			manifest.UpdateStatus(path, CoverageStatusReviewed, "")
+		}
+	}
 
 	fmt.Printf("✅ [Orchestrator] Final: %d comments after consolidation\n", len(consolidated.Comments))
 

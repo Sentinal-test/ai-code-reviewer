@@ -427,6 +427,7 @@ func runReviewByApproach(
 		fmt.Printf("   📦 Chunking: %d files → %d chunk(s)\n", len(changedFiles), len(chunks))
 
 		var results []*models.ReviewResult
+		manifest := orchestrator.NewCoverageManifest()
 		for _, chunk := range chunks {
 			scopedDeps := scopeDependencies(dependencies, chunk)
 			r, err := orchestrator.ReviewChunk(
@@ -448,6 +449,7 @@ func runReviewByApproach(
 				nil, // no developer rules in benchmarks
 				nil, // no cached IDs in benchmarks
 				nil, // no previous findings in benchmarks
+				manifest,
 			)
 			if err != nil {
 				fmt.Printf("   ❌ Chunk %d/%d failed: %v\n", chunk.Index, chunk.Total, err)

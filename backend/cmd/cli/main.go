@@ -513,6 +513,7 @@ func run() int {
 	}
 
 	var results []*models.ReviewResult
+	manifest := orchestrator.NewCoverageManifest()
 	for _, chunk := range chunks {
 		// Scope dependencies to this chunk's files
 		scopedDeps := scopeDependencies(dependencies, chunk, cgService)
@@ -531,6 +532,7 @@ func run() int {
 			devRules,
 			cacheIDs,
 			previousFindings,
+			manifest,
 		)
 		if err != nil {
 			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)
@@ -585,6 +587,9 @@ func run() int {
 
 		// Build commentNodeMap for thread resolution
 		commentNodeMap := action.BuildCommentNodeMap(previousFindings)
+
+		// Append the coverage manifest summary to the backend result's summary message
+		result.Summary = fmt.Sprintf("%s\n\n%s", result.Summary, manifest.GenerateSummary())
 
 		if err := ghClient.PostReview(ctx, prNum, result, commitSHA, diff, commentNodeMap); err != nil {
 			fmt.Printf("❌ Failed to post review: %v\n", err)

@@ -2,25 +2,73 @@ package action
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"code-review/backend/internal/models"
 )
 
 const githubGraphQLEndpoint = "https://api.github.com/graphql"
 
+type reviewThreadLookup struct {
+	ThreadID   string
+	IsResolved bool
+}
+
+type reviewThreadsPage struct {
+	Matches     map[string]reviewThreadLookup
+	HasNextPage bool
+	EndCursor   string
+}
+
 // ResolveThreads resolves GitHub review threads for findings the Consolidator marked as resolved.
 // It uses the GraphQL API because the REST API does not support thread resolution.
-func ResolveThreads(token string, resolutions []models.Resolution, commentNodeMap map[int64]string) {
+func ResolveThreads(token, owner, repo string, prNumber int, resolutions []models.Resolution, commentNodeMap map[int64]string) {
+	resolvedResolutions := 0
+	for _, res := range resolutions {
+		if strings.EqualFold(res.Status, "resolved") {
+			resolvedResolutions++
+		}
+	}
+	fmt.Printf("  🔍 [Resolve] Starting: %d total resolutions (%d resolved), %d comment NodeIDs available\n",
+		len(resolutions), resolvedResolutions, len(commentNodeMap))
+
 	if len(resolutions) == 0 || len(commentNodeMap) == 0 {
+		if len(resolutions) > 0 && len(commentNodeMap) == 0 {
+			fmt.Println("  ⚠️ [Resolve] Resolutions exist but commentNodeMap is empty — no previous inline comments found")
+		}
+		return
+	}
+
+	targetNodeIDs := make(map[string]struct{}, resolvedResolutions)
+	for _, res := range resolutions {
+		if !strings.EqualFold(res.Status, "resolved") {
+			continue
+		}
+		nodeID, ok := commentNodeMap[int64(res.CommentID)]
+		if ok && nodeID != "" {
+			targetNodeIDs[nodeID] = struct{}{}
+		}
+	}
+	if len(targetNodeIDs) == 0 {
+		fmt.Println("  ℹ️ [Resolve] No GraphQL node IDs matched resolved comment IDs — skipping")
+		return
+	}
+
+	threadLookup, err := findThreadNodeIDs(token, owner, repo, prNumber, targetNodeIDs)
+	if err != nil {
+		fmt.Printf("  ⚠️ [Resolve] Failed to load review threads for %s/%s#%d: %v\n", owner, repo, prNumber, err)
 		return
 	}
 
 	resolvedCount := 0
+	blockedByPermissions := false
 	for _, res := range resolutions {
 		if !strings.EqualFold(res.Status, "resolved") {
 			continue
@@ -33,17 +81,23 @@ func ResolveThreads(token string, resolutions []models.Resolution, commentNodeMa
 			continue
 		}
 
-		threadID, err := findThreadNodeID(token, nodeID)
-		if err != nil {
-			fmt.Printf("  ⚠️ [Resolve] Failed to find thread for comment %d: %v\n", commentID, err)
+		match, ok := threadLookup[nodeID]
+		if !ok {
+			fmt.Printf("  ℹ️ [Resolve] Comment %d has no matching review thread in %s/%s#%d — skipping\n", commentID, owner, repo, prNumber)
 			continue
 		}
-		if threadID == "" {
-			fmt.Printf("  ℹ️ [Resolve] Comment %d has no review thread (general comment?) — skipping\n", commentID)
+		if match.IsResolved {
+			fmt.Printf("  ℹ️ [Resolve] Thread for comment %d is already resolved\n", commentID)
 			continue
 		}
+		threadID := match.ThreadID
 
 		if err := resolveThread(token, threadID); err != nil {
+			if isGraphQLForbidden(err) {
+				fmt.Printf("  ⚠️ [Resolve] Token cannot resolve review threads on %s/%s#%d: %v\n", owner, repo, prNumber, err)
+				blockedByPermissions = true
+				break
+			}
 			fmt.Printf("  ⚠️ [Resolve] Failed to resolve thread %s: %v\n", threadID, err)
 		} else {
 			fmt.Printf("  ✅ [Resolve] Resolved thread for comment %d\n", commentID)
@@ -54,66 +108,139 @@ func ResolveThreads(token string, resolutions []models.Resolution, commentNodeMa
 	if resolvedCount > 0 {
 		fmt.Printf("  🎯 [Resolve] Resolved %d review threads\n", resolvedCount)
 	}
+	if blockedByPermissions {
+		fmt.Println("  ℹ️ [Resolve] Skipping remaining thread resolutions because the current token lacks permission to call resolveReviewThread")
+	}
 }
 
-// findThreadNodeID queries the GraphQL API to find the PullRequestReviewThread
-// that contains the given comment (identified by its GraphQL node ID).
-func findThreadNodeID(token, commentNodeID string) (string, error) {
-	query := `query($id: ID!) {
-		node(id: $id) {
-			... on PullRequestReviewComment {
-				pullRequestReview {
-					pullRequest {
-						reviewThreads(last: 100) {
-							nodes {
-								id
-								comments(first: 1) {
-									nodes { id }
-								}
+// findThreadNodeIDs queries the PR review threads and finds the thread for each
+// targeted review comment node ID.
+func findThreadNodeIDs(token, owner, repo string, prNumber int, targetNodeIDs map[string]struct{}) (map[string]reviewThreadLookup, error) {
+	if len(targetNodeIDs) == 0 {
+		return map[string]reviewThreadLookup{}, nil
+	}
+
+	matches := make(map[string]reviewThreadLookup, len(targetNodeIDs))
+	var after string
+
+	for {
+		query := `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+			repository(owner: $owner, name: $repo) {
+				pullRequest(number: $number) {
+					reviewThreads(first: 100, after: $after) {
+						pageInfo { hasNextPage endCursor }
+						nodes {
+							id
+							isResolved
+							comments(first: 100) {
+								nodes { id }
 							}
 						}
 					}
 				}
 			}
-		}
-	}`
+		}`
 
-	// Simpler approach: just get the thread directly from the comment
-	query = `query($id: ID!) {
-		node(id: $id) {
-			... on PullRequestReviewComment {
-				pullRequestReviewThread { id isResolved }
-			}
+		variables := map[string]interface{}{
+			"owner":  owner,
+			"repo":   repo,
+			"number": prNumber,
+			"after":  nil,
 		}
-	}`
+		if after != "" {
+			variables["after"] = after
+		}
 
-	variables := map[string]interface{}{"id": commentNodeID}
-	resp, err := graphqlRequest(token, query, variables)
-	if err != nil {
-		return "", err
+		resp, err := graphqlRequest(token, query, variables)
+		if err != nil {
+			return nil, err
+		}
+
+		page, err := parseReviewThreadsPage(resp, targetNodeIDs)
+		if err != nil {
+			return nil, err
+		}
+		for commentNodeID, match := range page.Matches {
+			matches[commentNodeID] = match
+		}
+		if len(matches) == len(targetNodeIDs) || !page.HasNextPage {
+			return matches, nil
+		}
+		after = page.EndCursor
+	}
+}
+
+func parseReviewThreadsPage(resp map[string]interface{}, targetNodeIDs map[string]struct{}) (reviewThreadsPage, error) {
+	page := reviewThreadsPage{
+		Matches: make(map[string]reviewThreadLookup),
 	}
 
-	// Parse: { "data": { "node": { "pullRequestReviewThread": { "id": "...", "isResolved": false } } } }
 	data, ok := resp["data"].(map[string]interface{})
 	if !ok {
-		return "", fmt.Errorf("unexpected response format")
+		return page, fmt.Errorf("unexpected response format")
 	}
-	node, ok := data["node"].(map[string]interface{})
-	if !ok {
-		return "", nil // Comment not found or not a review comment
+	repository, ok := data["repository"].(map[string]interface{})
+	if !ok || repository == nil {
+		return page, fmt.Errorf("repository not found in response")
 	}
-	thread, ok := node["pullRequestReviewThread"].(map[string]interface{})
-	if !ok {
-		return "", nil // No thread (general comment)
+	pullRequest, ok := repository["pullRequest"].(map[string]interface{})
+	if !ok || pullRequest == nil {
+		return page, fmt.Errorf("pull request not found in response")
+	}
+	reviewThreads, ok := pullRequest["reviewThreads"].(map[string]interface{})
+	if !ok || reviewThreads == nil {
+		return page, fmt.Errorf("reviewThreads not found in response")
 	}
 
-	// Skip if already resolved
-	if isResolved, ok := thread["isResolved"].(bool); ok && isResolved {
-		return "", nil // Already resolved, nothing to do
+	pageInfo, ok := reviewThreads["pageInfo"].(map[string]interface{})
+	if ok && pageInfo != nil {
+		if hasNextPage, ok := pageInfo["hasNextPage"].(bool); ok {
+			page.HasNextPage = hasNextPage
+		}
+		if endCursor, ok := pageInfo["endCursor"].(string); ok {
+			page.EndCursor = endCursor
+		}
 	}
 
-	threadID, _ := thread["id"].(string)
-	return threadID, nil
+	nodes, ok := reviewThreads["nodes"].([]interface{})
+	if !ok {
+		return page, fmt.Errorf("reviewThreads.nodes missing or invalid")
+	}
+
+	for _, rawThread := range nodes {
+		thread, ok := rawThread.(map[string]interface{})
+		if !ok || thread == nil {
+			continue
+		}
+		threadID, _ := thread["id"].(string)
+		isResolved, _ := thread["isResolved"].(bool)
+
+		comments, ok := thread["comments"].(map[string]interface{})
+		if !ok || comments == nil {
+			continue
+		}
+		commentNodes, ok := comments["nodes"].([]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, rawComment := range commentNodes {
+			comment, ok := rawComment.(map[string]interface{})
+			if !ok || comment == nil {
+				continue
+			}
+			commentNodeID, _ := comment["id"].(string)
+			if _, wanted := targetNodeIDs[commentNodeID]; !wanted {
+				continue
+			}
+			page.Matches[commentNodeID] = reviewThreadLookup{
+				ThreadID:   threadID,
+				IsResolved: isResolved,
+			}
+		}
+	}
+
+	return page, nil
 }
 
 // resolveThread calls the resolveReviewThread GraphQL mutation.
@@ -129,7 +256,7 @@ func resolveThread(token, threadID string) error {
 	return err
 }
 
-// graphqlRequest sends a GraphQL request to the GitHub API.
+// graphqlRequest sends a GraphQL request to the GitHub API with a 30-second timeout.
 func graphqlRequest(token, query string, variables map[string]interface{}) (map[string]interface{}, error) {
 	body := map[string]interface{}{
 		"query":     query,
@@ -140,7 +267,10 @@ func graphqlRequest(token, query string, variables map[string]interface{}) (map[
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", githubGraphQLEndpoint, bytes.NewReader(jsonBody))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", githubGraphQLEndpoint, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -148,7 +278,10 @@ func graphqlRequest(token, query string, variables map[string]interface{}) (map[
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)
 	}
@@ -174,6 +307,19 @@ func graphqlRequest(token, query string, variables map[string]interface{}) (map[
 	}
 
 	return result, nil
+}
+
+func isGraphQLForbidden(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "type:FORBIDDEN") ||
+		strings.Contains(msg, "Resource not accessible by integration") ||
+		strings.Contains(msg, "Resource not accessible by personal access token")
 }
 
 // BuildCommentNodeMap creates a lookup map from REST comment ID to GraphQL NodeID.
