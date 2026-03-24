@@ -175,14 +175,20 @@ func RunConsolidation(
 						Args: call.Args,
 					}
 					fmt.Printf("     ├── Call %d: %s(%v)\n", idx+1, call.Name, call.Args)
-					res := toolExecutor.Execute(ctx, req)
-					fmt.Printf("     └── Resp %d: %s (%d chars)\n", idx+1, call.Name, len(res.Content))
+					var content string
+					if toolExecutor != nil {
+						res := toolExecutor.Execute(ctx, req)
+						content = res.Content
+					} else {
+						content = "Error: Tool execution is not available in this context."
+					}
+					fmt.Printf("     └── Resp %d: %s (%d chars)\n", idx+1, call.Name, len(content))
 
 					funcParts[idx] = Part{
 						FunctionResp: &FunctionResponse{
 							ID:      call.ID,
 							Name:    call.Name,
-							Content: res.Content,
+							Content: content,
 						},
 					}
 				}(i, fc)

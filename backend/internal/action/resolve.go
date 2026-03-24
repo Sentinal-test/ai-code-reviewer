@@ -145,7 +145,10 @@ func graphqlRequest(token, query string, variables map[string]interface{}) (map[
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)
 	}

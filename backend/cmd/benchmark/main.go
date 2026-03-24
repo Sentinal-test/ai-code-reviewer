@@ -448,6 +448,7 @@ func runReviewByApproach(
 				nil, // no developer rules in benchmarks
 				nil, // no cached IDs in benchmarks
 				nil, // no previous findings in benchmarks
+				nil, // no manifest in benchmarks
 			)
 			if err != nil {
 				fmt.Printf("   ❌ Chunk %d/%d failed: %v\n", chunk.Index, chunk.Total, err)

@@ -848,6 +848,7 @@ func ConsolidateResults(results []*models.ReviewResult) *models.ReviewResult {
 		}
 	}
 	if len(results) == 1 {
+		results[0].Resolutions = models.MergeResolutions(results[0].Resolutions)
 		return results[0]
 	}
 

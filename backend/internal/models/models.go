@@ -16,12 +16,12 @@ func (fi *FlexInt64) UnmarshalJSON(b []byte) error {
 		var s string
 		if err := json.Unmarshal(b, &s); err != nil {
 			*fi = 0
-			return nil
+			return err
 		}
 		val, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
 			*fi = 0
-			return nil
+			return err
 		}
 		*fi = FlexInt64(val)
 		return nil
@@ -29,7 +29,7 @@ func (fi *FlexInt64) UnmarshalJSON(b []byte) error {
 	var val int64
 	if err := json.Unmarshal(b, &val); err != nil {
 		*fi = 0
-		return nil
+		return err
 	}
 	*fi = FlexInt64(val)
 	return nil
