@@ -583,7 +583,10 @@ func run() int {
 
 		fmt.Printf("🚀 Posting comments to %s PR #%s...\n", repoName, prNumber)
 
-		if err := ghClient.PostReview(ctx, prNum, result, commitSHA, diff); err != nil {
+		// Build commentNodeMap for thread resolution
+		commentNodeMap := action.BuildCommentNodeMap(previousFindings)
+
+		if err := ghClient.PostReview(ctx, prNum, result, commitSHA, diff, commentNodeMap); err != nil {
 			fmt.Printf("❌ Failed to post review: %v\n", err)
 			return 1
 		}

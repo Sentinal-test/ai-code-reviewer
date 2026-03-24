@@ -103,6 +103,7 @@ func FetchPreviousFindings(ctx context.Context, client *github.Client, owner, re
 			}
 
 			if pf := ParseMarker(*c.Body, actualFile, actualLine, c.GetID()); pf != nil {
+				pf.NodeID = c.GetNodeID()
 				findings = append(findings, *pf)
 			}
 		}

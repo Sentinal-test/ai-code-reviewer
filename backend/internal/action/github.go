@@ -203,7 +203,7 @@ func NewGitHubAppClient(ctx context.Context, appID int64, privateKeyString, owne
 // It tries to group them into a single review if possible, or posts individual comments.
 // PostReview posts the review comments to the PR.
 // It matches the robustness of the SaaS backend by implementing a fallback strategy.
-func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string, diff string) error {
+func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string, diff string, commentNodeMap map[int64]string) error {
 	if result == nil {
 		return nil
 	}
@@ -214,6 +214,8 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 	// 1. Try Batched Review (Best for UI/Noise)
 	err := g.postBatchedReview(ctx, prNumber, result, commitSHA, validLines)
 	if err == nil {
+		// Resolve GitHub review threads for findings the Consolidator marked as resolved
+		ResolveThreads(g.Token, result.Resolutions, commentNodeMap)
 		return nil
 	}
 
@@ -331,6 +333,9 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 		summaryMsg += fmt.Sprintf("\n\n---\n*Note: %d comments were posted as general comments because their line numbers could not be resolved in the PR diff.*", failedInline)
 	}
 	g.postGeneralComment(ctx, prNumber, summaryMsg)
+
+	// Resolve GitHub review threads for findings the Consolidator marked as resolved
+	ResolveThreads(g.Token, result.Resolutions, commentNodeMap)
 
 	fmt.Printf("✅ Fallback Review Complete | Posted %d/%d comments successfully\n", successCount, len(result.Comments))
 	return nil
