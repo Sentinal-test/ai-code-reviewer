@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -67,6 +68,7 @@ func ResolveThreads(token, owner, repo string, prNumber int, resolutions []model
 	}
 
 	resolvedCount := 0
+	blockedByPermissions := false
 	for _, res := range resolutions {
 		if !strings.EqualFold(res.Status, "resolved") {
 			continue
@@ -91,6 +93,11 @@ func ResolveThreads(token, owner, repo string, prNumber int, resolutions []model
 		threadID := match.ThreadID
 
 		if err := resolveThread(token, threadID); err != nil {
+			if isGraphQLForbidden(err) {
+				fmt.Printf("  ⚠️ [Resolve] Token cannot resolve review threads on %s/%s#%d: %v\n", owner, repo, prNumber, err)
+				blockedByPermissions = true
+				break
+			}
 			fmt.Printf("  ⚠️ [Resolve] Failed to resolve thread %s: %v\n", threadID, err)
 		} else {
 			fmt.Printf("  ✅ [Resolve] Resolved thread for comment %d\n", commentID)
@@ -100,6 +107,9 @@ func ResolveThreads(token, owner, repo string, prNumber int, resolutions []model
 
 	if resolvedCount > 0 {
 		fmt.Printf("  🎯 [Resolve] Resolved %d review threads\n", resolvedCount)
+	}
+	if blockedByPermissions {
+		fmt.Println("  ℹ️ [Resolve] Skipping remaining thread resolutions because the current token lacks permission to call resolveReviewThread")
 	}
 }
 
@@ -297,6 +307,19 @@ func graphqlRequest(token, query string, variables map[string]interface{}) (map[
 	}
 
 	return result, nil
+}
+
+func isGraphQLForbidden(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "type:FORBIDDEN") ||
+		strings.Contains(msg, "Resource not accessible by integration") ||
+		strings.Contains(msg, "Resource not accessible by personal access token")
 }
 
 // BuildCommentNodeMap creates a lookup map from REST comment ID to GraphQL NodeID.

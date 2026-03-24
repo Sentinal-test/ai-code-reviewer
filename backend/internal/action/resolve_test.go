@@ -1,6 +1,7 @@
 package action
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -66,4 +67,10 @@ func TestParseReviewThreadsPageRejectsMissingRepository(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "repository")
+}
+
+func TestIsGraphQLForbidden(t *testing.T) {
+	assert.True(t, isGraphQLForbidden(fmt.Errorf("GraphQL errors: [map[message:Resource not accessible by integration type:FORBIDDEN]]")))
+	assert.True(t, isGraphQLForbidden(fmt.Errorf("GraphQL errors: [map[message:Resource not accessible by personal access token type:FORBIDDEN]]")))
+	assert.False(t, isGraphQLForbidden(fmt.Errorf("GraphQL errors: [map[message:some other failure type:UNPROCESSABLE]]")))
 }
