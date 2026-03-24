@@ -75,6 +75,7 @@ func ResolveThreads(token string, resolutions []models.Resolution, commentNodeMa
 func findThreadNodeID(token, commentNodeID string) (string, error) {
 	query := `query($id: ID!) {
 		node(id: $id) {
+			__typename
 			... on PullRequestReviewComment {
 				pullRequestReviewThread { id isResolved }
 			}
@@ -96,8 +97,11 @@ func findThreadNodeID(token, commentNodeID string) (string, error) {
 	if !ok {
 		return "", nil // Comment not found or not a review comment
 	}
+
+	typeName, _ := node["__typename"].(string)
 	thread, ok := node["pullRequestReviewThread"].(map[string]interface{})
 	if !ok {
+		fmt.Printf("  ⚠️ [Resolve] Node %s (type %s) has no pullRequestReviewThread\n", commentNodeID, typeName)
 		return "", nil // No thread (general comment)
 	}
 

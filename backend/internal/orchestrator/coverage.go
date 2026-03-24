@@ -75,6 +75,7 @@ func (m *CoverageManifest) GenerateSummary() string {
 	skipped := 0
 	partial := 0
 	errors := 0
+	pending := 0
 	
 	var skippedDetails []string
 
@@ -102,17 +103,28 @@ func (m *CoverageManifest) GenerateSummary() string {
 		case CoverageStatusError:
 			errors++
 			skippedDetails = append(skippedDetails, fmt.Sprintf("`%s` (error)", p))
+		case CoverageStatusPending:
+			pending++
+			skippedDetails = append(skippedDetails, fmt.Sprintf("`%s` (pending/failed)", p))
 		}
 	}
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("📊 **Coverage:** %d/%d files reviewed", reviewed, total))
 
-	if skipped > 0 || errors > 0 {
-		b.WriteString(fmt.Sprintf(" (%d skipped", skipped))
-		if errors > 0 {
-			b.WriteString(fmt.Sprintf(", %d failed", errors))
+	if skipped > 0 || errors > 0 || pending > 0 {
+		b.WriteString(" (")
+		parts := []string{}
+		if skipped > 0 {
+			parts = append(parts, fmt.Sprintf("%d skipped", skipped))
 		}
+		if errors > 0 {
+			parts = append(parts, fmt.Sprintf("%d failed", errors))
+		}
+		if pending > 0 {
+			parts = append(parts, fmt.Sprintf("%d pending/incomplete", pending))
+		}
+		b.WriteString(strings.Join(parts, ", "))
 		b.WriteString(")")
 	}
 
