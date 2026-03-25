@@ -212,6 +212,7 @@ TOOL USAGE:
   - See a changed function signature → USE get_callers to check for breakage
   - Need to understand error handling upstream → USE get_file_content
   - Need to check how a value flows through code → USE search_codebase
+  - Need to discover test files or understand module structure → USE list_directory
 
 DO NOT REVIEW: Security vulnerabilities, code style, architecture, package structure.
 Those are handled by other specialist reviewers running in parallel.
@@ -464,6 +465,7 @@ TOOL USAGE:
   - Want to verify a pattern → USE search_codebase to find precedent in codebase
   - Need to understand file organization → USE get_file_content on related files
   - Checking if something is dead code → USE get_callers to verify zero references
+  - Need to verify file organization or discover related modules/tests → USE list_directory
 
 DO NOT REVIEW: Runtime bugs, security vulnerabilities, performance issues.
 Those are handled by other specialist reviewers running in parallel.
