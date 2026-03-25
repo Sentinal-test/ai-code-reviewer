@@ -70,6 +70,10 @@ func AgentToolDeclarations() []ToolDeclaration {
 						"type":        "string",
 						"description": "The text pattern to search for",
 					},
+					"count_only": map[string]interface{}{
+						"type":        "boolean",
+						"description": "If true, only returns the total count of matches without the lines.",
+					},
 				},
 				"required": []string{"query"},
 			},
@@ -403,11 +407,37 @@ func (te *ToolExecutor) getCallers(args map[string]interface{}) agents.ToolCallR
 
 func (te *ToolExecutor) searchCodebase(ctx context.Context, args map[string]interface{}) agents.ToolCallResponse {
 	query, _ := args["query"].(string)
+	countOnly, _ := args["count_only"].(bool)
 	if query == "" {
 		return agents.ToolCallResponse{Name: "search_codebase", Content: "Error: query parameter is required"}
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "grep", "-n", "-I", "--max-count=5", query)
+	if countOnly {
+		cmd := exec.CommandContext(ctx, "git", "grep", "-c", "-I", query)
+		cmd.Dir = te.RepoPath
+		out, _ := cmd.Output()
+		result := strings.TrimSpace(string(out))
+		if result == "" {
+			return agents.ToolCallResponse{Name: "search_codebase", Content: "0 matches found."}
+		}
+		// git grep -c returns "file:count" per file
+		total := 0
+		for _, line := range strings.Split(result, "\n") {
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				var c int
+				fmt.Sscanf(parts[len(parts)-1], "%d", &c)
+				total += c
+			}
+		}
+		return agents.ToolCallResponse{
+			Name:    "search_codebase",
+			Content: fmt.Sprintf("Found %d matches in the codebase.", total),
+		}
+	}
+
+	// Fetch up to 20 matches
+	cmd := exec.CommandContext(ctx, "git", "grep", "-n", "-I", "--max-count=20", query)
 	cmd.Dir = te.RepoPath
 
 	out, _ := cmd.Output()
@@ -419,16 +449,36 @@ func (te *ToolExecutor) searchCodebase(ctx context.Context, args map[string]inte
 		}
 	}
 
-	// Cap results
 	lines := strings.Split(result, "\n")
-	if len(lines) > 30 {
-		lines = lines[:30]
-		lines = append(lines, fmt.Sprintf("... (+%d more matches)", len(strings.Split(result, "\n"))-30))
+	matchCount := len(lines)
+	displayLines := lines
+	if len(displayLines) > 30 {
+		displayLines = displayLines[:30]
+	}
+
+	// If we hit the max-count limit, get the total count for the summary
+	summary := ""
+	if matchCount >= 20 {
+		countCmd := exec.CommandContext(ctx, "git", "grep", "-c", "-I", query)
+		countCmd.Dir = te.RepoPath
+		countOut, _ := countCmd.Output()
+		total := 0
+		for _, line := range strings.Split(strings.TrimSpace(string(countOut)), "\n") {
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				var c int
+				fmt.Sscanf(parts[len(parts)-1], "%d", &c)
+				total += c
+			}
+		}
+		summary = fmt.Sprintf("Found %d matches (showing first %d):\n", total, matchCount)
+	} else {
+		summary = fmt.Sprintf("Found %d matches:\n", matchCount)
 	}
 
 	return agents.ToolCallResponse{
 		Name:    "search_codebase",
-		Content: strings.Join(lines, "\n"),
+		Content: summary + strings.Join(displayLines, "\n"),
 	}
 }
 
