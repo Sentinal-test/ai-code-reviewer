@@ -70,8 +70,26 @@ func AgentToolDeclarations() []ToolDeclaration {
 						"type":        "string",
 						"description": "The text pattern to search for",
 					},
+					"count_only": map[string]interface{}{
+						"type":        "boolean",
+						"description": "If true, only returns the total count of matches without the lines.",
+					},
 				},
 				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        "list_directory",
+			Description: "List files and subdirectories in a given path. Use this to discover test files, related modules, or understand project structure in a specific area.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]interface{}{
+						"type":        "string",
+						"description": "Relative directory path to list",
+					},
+				},
+				"required": []string{"path"},
 			},
 		},
 		{
@@ -221,6 +239,8 @@ func (te *ToolExecutor) Execute(ctx context.Context, call agents.ToolCallRequest
 		return te.getCallers(call.Args)
 	case "search_codebase":
 		return te.searchCodebase(ctx, call.Args)
+	case "list_directory":
+		return te.listDirectory(call.Args)
 	case "list_cross_repo_matches":
 		return te.listCrossRepoMatches()
 	case "resolve_repo_symbol":
@@ -403,11 +423,37 @@ func (te *ToolExecutor) getCallers(args map[string]interface{}) agents.ToolCallR
 
 func (te *ToolExecutor) searchCodebase(ctx context.Context, args map[string]interface{}) agents.ToolCallResponse {
 	query, _ := args["query"].(string)
+	countOnly, _ := args["count_only"].(bool)
 	if query == "" {
 		return agents.ToolCallResponse{Name: "search_codebase", Content: "Error: query parameter is required"}
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "grep", "-n", "-I", "--max-count=5", query)
+	if countOnly {
+		cmd := exec.CommandContext(ctx, "git", "grep", "-c", "-I", "-e", query)
+		cmd.Dir = te.RepoPath
+		out, _ := cmd.Output()
+		result := strings.TrimSpace(string(out))
+		if result == "" {
+			return agents.ToolCallResponse{Name: "search_codebase", Content: "0 matches found."}
+		}
+		// git grep -c returns "file:count" per file
+		total := 0
+		for _, line := range strings.Split(result, "\n") {
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				var c int
+				fmt.Sscanf(parts[len(parts)-1], "%d", &c)
+				total += c
+			}
+		}
+		return agents.ToolCallResponse{
+			Name:    "search_codebase",
+			Content: fmt.Sprintf("Found %d matches in the codebase.", total),
+		}
+	}
+
+	// Fetch up to 20 matches
+	cmd := exec.CommandContext(ctx, "git", "grep", "-n", "-I", "--max-count=20", "-e", query)
 	cmd.Dir = te.RepoPath
 
 	out, _ := cmd.Output()
@@ -419,16 +465,106 @@ func (te *ToolExecutor) searchCodebase(ctx context.Context, args map[string]inte
 		}
 	}
 
-	// Cap results
 	lines := strings.Split(result, "\n")
-	if len(lines) > 30 {
-		lines = lines[:30]
-		lines = append(lines, fmt.Sprintf("... (+%d more matches)", len(strings.Split(result, "\n"))-30))
+	matchCount := len(lines)
+	displayLines := lines
+	if len(displayLines) > 30 {
+		displayLines = displayLines[:30]
+	}
+
+	// If we hit the max-count limit, get the total count for the summary
+	summary := ""
+	if matchCount >= 20 {
+		countCmd := exec.CommandContext(ctx, "git", "grep", "-c", "-I", "-e", query)
+		countCmd.Dir = te.RepoPath
+		countOut, _ := countCmd.Output()
+		total := 0
+		for _, line := range strings.Split(strings.TrimSpace(string(countOut)), "\n") {
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				var c int
+				fmt.Sscanf(parts[len(parts)-1], "%d", &c)
+				total += c
+			}
+		}
+		summary = fmt.Sprintf("Found %d matches (showing first %d):\n", total, len(displayLines))
+	} else {
+		summary = fmt.Sprintf("Found %d matches:\n", len(displayLines))
 	}
 
 	return agents.ToolCallResponse{
 		Name:    "search_codebase",
-		Content: strings.Join(lines, "\n"),
+		Content: summary + strings.Join(displayLines, "\n"),
+	}
+}
+
+func (te *ToolExecutor) listDirectory(args map[string]interface{}) agents.ToolCallResponse {
+	relPath, _ := args["path"].(string)
+
+	targetPath := filepath.Join(te.RepoPath, relPath)
+	if !strings.HasPrefix(filepath.Clean(targetPath), filepath.Clean(te.RepoPath)) {
+		return agents.ToolCallResponse{Name: "list_directory", Content: "Error: path must be relative to repository root"}
+	}
+
+	var results []string
+	count := 0
+	baseDepth := strings.Count(targetPath, string(os.PathSeparator))
+
+	err := filepath.WalkDir(targetPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if path == targetPath {
+			return nil
+		}
+
+		depth := strings.Count(path, string(os.PathSeparator)) - baseDepth
+		if depth > 2 {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		rel, _ := filepath.Rel(te.RepoPath, path)
+		if strings.HasPrefix(d.Name(), ".") && d.Name() != "." { // skip hidden like .git
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		kind := "FILE"
+		if d.IsDir() {
+			kind = "DIR "
+		}
+		results = append(results, fmt.Sprintf("[%s] %s", kind, rel))
+		count++
+
+		if count >= 100 {
+			results = append(results, "... (truncated to 100 entries)")
+			return fmt.Errorf("limit reached")
+		}
+		return nil
+	})
+
+	if err != nil && err.Error() != "limit reached" {
+		return agents.ToolCallResponse{
+			Name:    "list_directory",
+			Content: fmt.Sprintf("Error reading directory: %v", err),
+		}
+	}
+
+	if len(results) == 0 {
+		return agents.ToolCallResponse{
+			Name:    "list_directory",
+			Content: fmt.Sprintf("Directory '%s' is empty or doesn't exist.", relPath),
+		}
+	}
+
+	return agents.ToolCallResponse{
+		Name:    "list_directory",
+		Content: fmt.Sprintf("Contents of %s (up to 2 levels deep):\n%s", relPath, strings.Join(results, "\n")),
 	}
 }
 

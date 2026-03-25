@@ -351,8 +351,8 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 		b.WriteString(fmt.Sprintf("Title: %s\n", config.PRContext.Title))
 		if config.PRContext.Body != "" {
 			body := config.PRContext.Body
-			if len(body) > 1000 {
-				body = body[:1000] + "..."
+			if len(body) > 3000 {
+				body = body[:3000] + "..."
 			}
 			b.WriteString(fmt.Sprintf("Description: %s\n", body))
 		}

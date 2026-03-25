@@ -424,10 +424,10 @@ func (g *GitHubClient) GetPullRequest(ctx context.Context, prNumber int) (*model
 
 	commits, _, commitErr := g.client.PullRequests.ListCommits(ctx, g.owner, g.repo, prNumber, opts)
 	if commitErr == nil {
-		// Take the last 2 commits (most recent)
+		// Take the last 5 commits (most recent)
 		startIdx := 0
-		if len(commits) > 2 {
-			startIdx = len(commits) - 2
+		if len(commits) > 5 {
+			startIdx = len(commits) - 5
 		}
 
 		for i := startIdx; i < len(commits); i++ {
