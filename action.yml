@@ -40,6 +40,21 @@ inputs:
     description: 'Optional: YAML block with custom review rules (instructions, ignore, focus)'
     required: false
     default: ''
+  org_gemini_api_key:
+    description: 'Optional: Organization-level Gemini API Key (fallback if gemini_api_key is not set)'
+    required: false
+  org_openai_api_key:
+    description: 'Optional: Organization-level OpenAI API Key (fallback if openai_api_key is not set)'
+    required: false
+  org_anthropic_api_key:
+    description: 'Optional: Organization-level Anthropic API Key (fallback if anthropic_api_key is not set)'
+    required: false
+  org_app_id:
+    description: 'Optional: Organization-level GitHub App ID (fallback if app_id is not set)'
+    required: false
+  org_app_private_key:
+    description: 'Optional: Organization-level GitHub App Private Key (fallback if app_private_key is not set)'
+    required: false
 
 runs:
   using: "composite"
@@ -73,11 +88,11 @@ runs:
       env:
         LLM_PROVIDER_INPUT: ${{ inputs.llm_provider }}
         GEMINI_API_KEY_INPUT: ${{ inputs.gemini_api_key }}
-        ORG_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        ORG_GEMINI_API_KEY: ${{ inputs.org_gemini_api_key }}
         OPENAI_API_KEY_INPUT: ${{ inputs.openai_api_key }}
-        ORG_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        ORG_OPENAI_API_KEY: ${{ inputs.org_openai_api_key }}
         ANTHROPIC_API_KEY_INPUT: ${{ inputs.anthropic_api_key }}
-        ORG_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        ORG_ANTHROPIC_API_KEY: ${{ inputs.org_anthropic_api_key }}
         GITHUB_TOKEN_INPUT: ${{ inputs.github_token }}
         PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         BASE_REF_INPUT: ${{ inputs.base_ref }}
@@ -85,9 +100,9 @@ runs:
         APP_ID_INPUT: ${{ inputs.app_id }}
         APP_PRIVATE_KEY_INPUT: ${{ inputs.app_private_key }}
         REVIEW_RULES: ${{ inputs.review_rules }}
-        # Support for Org-level secrets
-        ORG_APP_ID: ${{ secrets.APP_ID }}
-        ORG_APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+        # Org-level secrets passed as inputs from the calling workflow
+        ORG_APP_ID: ${{ inputs.org_app_id }}
+        ORG_APP_PRIVATE_KEY: ${{ inputs.org_app_private_key }}
       run: |
         echo "🔍 Validating inputs..."
         
