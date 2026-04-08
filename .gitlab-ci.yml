@@ -19,18 +19,8 @@ ai_code_review:
     paths:
       - .ai-reviewer/
   before_script:
-    # Fetch target branch for diffing
-    - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth=100 || true
-    # Ensure merge base exists
-    - |
-      if ! git merge-base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" "$CI_COMMIT_SHA" >/dev/null 2>&1; then
-        echo "⚠️ No merge base found. Fetching more history..."
-        git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth=500 || true
-        if ! git merge-base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" "$CI_COMMIT_SHA" >/dev/null 2>&1; then
-          echo "⚠️ Still no merge base. Fetching full history..."
-          git fetch --prune --unshallow || true
-        fi
-      fi
+    # Fetch target branch for diffing (full history required for merge-base)
+    - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" || true
   script:
     - echo "🏗️ Building AI Reviewer from trusted branch..."
     # Build from origin/main to prevent MR branches from executing arbitrary code with CI secrets.
