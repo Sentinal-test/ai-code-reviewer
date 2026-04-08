@@ -8,23 +8,46 @@ import (
 )
 
 // GetDiff returns the git diff between two references.
+// It first tries a three-dot diff (merge-base aware), which is ideal for PRs/MRs.
+// If that fails (e.g. no merge base in CI), it falls back to a two-dot diff.
 func GetDiff(base, head string) (string, error) {
-	// git diff base...head
+	// Try three-dot diff first (merge-base aware, best for PRs/MRs)
 	cmd := exec.Command("git", "diff", fmt.Sprintf("%s...%s", base, head))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git diff failed: %s: %w", string(out), err)
+		outStr := string(out)
+		// Fall back to two-dot diff if no merge base is found
+		if strings.Contains(outStr, "no merge base") {
+			fmt.Println("⚠️  No merge base found, falling back to two-dot diff...")
+			cmd = exec.Command("git", "diff", base, head)
+			out, err = cmd.CombinedOutput()
+			if err != nil {
+				return "", fmt.Errorf("git diff (fallback) failed: %s: %w", string(out), err)
+			}
+			return string(out), nil
+		}
+		return "", fmt.Errorf("git diff failed: %s: %w", outStr, err)
 	}
 	return string(out), nil
 }
 
 // GetChangedFiles returns a list of files that have changed between base and head.
+// Like GetDiff, it falls back to two-dot diff if no merge base is found.
 func GetChangedFiles(base, head string) ([]string, error) {
-	// git diff --name-only base...head
 	cmd := exec.Command("git", "diff", "--name-only", fmt.Sprintf("%s...%s", base, head))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("git diff --name-only failed: %s: %w", string(out), err)
+		outStr := string(out)
+		if strings.Contains(outStr, "no merge base") {
+			fmt.Println("⚠️  No merge base found for --name-only, falling back to two-dot diff...")
+			cmd = exec.Command("git", "diff", "--name-only", base, head)
+			out, err = cmd.CombinedOutput()
+			if err != nil {
+				return nil, fmt.Errorf("git diff --name-only (fallback) failed: %s: %w", string(out), err)
+			}
+		} else {
+			return nil, fmt.Errorf("git diff --name-only failed: %s: %w", outStr, err)
+		}
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
