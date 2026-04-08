@@ -133,8 +133,11 @@ fit any area below, STILL FLAG IT.
 
 • FRONTEND / UI BUGS (when reviewing frontend code):
   Rendering issues, component lifecycle bugs, state management problems, event handling
-  errors, missing accessibility attributes, broken responsive behavior — anything that
-  would cause the UI to malfunction, crash, or behave incorrectly for end users.
+  errors, missing accessibility attributes, broken responsive behavior, incorrect template
+  bindings, form wiring mistakes, null/undefined access in UI rendering, and HTML/CSS
+  changes that break interaction or layout — anything that would cause the UI to
+  malfunction, crash, or behave incorrectly for end users. For template/style diffs,
+  inspect the related component, hook/service, or module file before flagging.
 
 • DATABASE & QUERY BUGS (when reviewing data access code):
   Inefficient query patterns (like fetching one record at a time in a loop), missing
@@ -296,8 +299,10 @@ vulnerability not described below, STILL FLAG IT.
   API consumers, missing tenant/org isolation in multi-tenant systems.
 
 • FRONTEND SECURITY (when reviewing frontend code):
-  XSS vectors through unsafe DOM injection, sensitive data in client-side storage,
-  client-side auth checks without server-side enforcement, exposed secrets in bundles.
+  XSS vectors through unsafe DOM injection, unsafe HTML/URL/style bindings, sensitive
+  data in client-side storage, client-side auth checks without server-side enforcement,
+  and exposed secrets in frontend bundles or environment files. For template/style diffs,
+  verify the related component code before flagging a security issue.
 
 • INFRASTRUCTURE & CONFIG:
   Debug mode in production, insecure cookie flags, default credentials, missing
@@ -410,6 +415,12 @@ in THIS project:
   Files that mix too many unrelated concerns, dead/unreachable code, exports that have
   zero consumers, modules that have grown beyond their original responsibility.
 
+• FRONTEND STRUCTURE (when reviewing frontend code):
+  Inconsistent component/template/style organization, duplicated UI logic that should
+  live in shared components/hooks/services, and changes that drift from the project's
+  existing frontend patterns. For template/style diffs, verify the surrounding component
+  and nearby peers before flagging a structural issue.
+
 • PLUGIN & EXTENSIBILITY ARCHITECTURE (if applicable):
   Hardcoding plugin-specific logic in the core engine instead of using dynamic resolution.
   Passing full application state to plugins instead of passing a scoped, isolated context.
@@ -497,7 +508,6 @@ CONSOLIDATION RULES:
 
 Output valid JSON matching this schema exactly:
 {
-  "thinking": "Trace the findings, verify them using tools, and plan deduplication/dropping before writing comments.",
   "summary": "1-2 sentence high-level summary",
   "comments": [
     {

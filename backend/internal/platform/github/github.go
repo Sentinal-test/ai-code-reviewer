@@ -1,124 +1,21 @@
-package action
+package github
 
 import (
 	"code-review/backend/internal/models"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
-	"regexp"
-	"sort"
-	"strconv"
 	"strings"
+	"time"
 
 	"code-review/backend/internal/memory"
-	"math"
-	"time"
+	"code-review/backend/internal/platform/utils"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v60/github"
 	"golang.org/x/oauth2"
 )
-
-// hunkHeaderRegex matches unified diff hunk headers like @@ -10,5 +12,8 @@
-var hunkHeaderRegex = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
-
-// extractValidDiffLines parses a unified diff and returns a map of
-// file path → sorted slice of valid line numbers on the new-file (RIGHT) side.
-// Only lines that appear as added (+) or context (unchanged) within hunks are valid
-// for GitHub inline comments.
-func extractValidDiffLines(diff string) map[string][]int {
-	result := make(map[string][]int)
-	lines := strings.Split(diff, "\n")
-
-	var currentFile string
-	var lineNum int
-
-	for _, line := range lines {
-		if strings.HasPrefix(line, "diff --git") {
-			// Extract file path from "diff --git a/path b/path"
-			parts := strings.Fields(line)
-			if len(parts) >= 4 {
-				currentFile = strings.TrimPrefix(parts[3], "b/")
-				currentFile = strings.Trim(currentFile, "\"")
-			}
-			continue
-		}
-
-		if strings.HasPrefix(line, "@@") && currentFile != "" {
-			matches := hunkHeaderRegex.FindStringSubmatch(line)
-			if len(matches) >= 2 {
-				lineNum, _ = strconv.Atoi(matches[1])
-			}
-			continue
-		}
-
-		if currentFile == "" || lineNum == 0 {
-			continue
-		}
-
-		if strings.HasPrefix(line, "+") {
-			// Added line — valid for inline comment
-			result[currentFile] = append(result[currentFile], lineNum)
-			lineNum++
-		} else if strings.HasPrefix(line, "-") {
-			// Deleted line — no new-file line number, skip
-			continue
-		} else if strings.HasPrefix(line, "\\") {
-			// "No newline at end of file" — skip
-			continue
-		} else if strings.HasPrefix(line, "diff ") || strings.HasPrefix(line, "index ") ||
-			strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
-			// Diff metadata — skip
-			continue
-		} else {
-			// Context (unchanged) line — valid for inline comment
-			result[currentFile] = append(result[currentFile], lineNum)
-			lineNum++
-		}
-	}
-
-	// Sort each file's lines for binary search
-	for f := range result {
-		sort.Ints(result[f])
-	}
-	return result
-}
-
-// snapToValidLine finds the nearest valid diff line for a given line number.
-// Returns 0 if no valid lines exist for the file.
-func snapToValidLine(line int, validLines []int) int {
-	if len(validLines) == 0 {
-		return 0
-	}
-
-	// Check if exact match exists
-	idx := sort.SearchInts(validLines, line)
-	if idx < len(validLines) && validLines[idx] == line {
-		return line
-	}
-
-	// Find nearest
-	best := validLines[0]
-	bestDist := int(math.Abs(float64(line - best)))
-
-	if idx < len(validLines) {
-		d := int(math.Abs(float64(line - validLines[idx])))
-		if d < bestDist {
-			best = validLines[idx]
-			bestDist = d
-		}
-	}
-	if idx > 0 {
-		d := int(math.Abs(float64(line - validLines[idx-1])))
-		if d < bestDist {
-			best = validLines[idx-1]
-		}
-	}
-
-	return best
-}
 
 type GitHubClient struct {
 	client *github.Client
@@ -143,6 +40,14 @@ func NewGitHubClient(ctx context.Context, token, owner, repo string) *GitHubClie
 
 func (g *GitHubClient) GetRawClient() *github.Client {
 	return g.client
+}
+
+func (g *GitHubClient) Provider() string {
+	return "github"
+}
+
+func (g *GitHubClient) FetchPreviousFindings(ctx context.Context, id int) ([]models.PreviousFinding, error) {
+	return memory.FetchPreviousFindings(ctx, g.client, g.owner, g.repo, id)
 }
 
 // NewGitHubAppClient initializes a GitHub client using an App Installation Token.
@@ -199,17 +104,17 @@ func NewGitHubAppClient(ctx context.Context, appID int64, privateKeyString, owne
 	}, nil
 }
 
-// PostReviewComment posts the review comments to the PR.
-// It tries to group them into a single review if possible, or posts individual comments.
 // PostReview posts the review comments to the PR.
 // It matches the robustness of the SaaS backend by implementing a fallback strategy.
-func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string, diff string, commentNodeMap map[int64]string) error {
+func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *models.ReviewResult, commitSHA string, diff string, previous []models.PreviousFinding) error {
 	if result == nil {
 		return nil
 	}
 
+	commentNodeMap := BuildCommentNodeMap(previous)
+
 	// Pre-compute valid diff lines for line snapping
-	validLines := extractValidDiffLines(diff)
+	validLines := utils.ExtractValidDiffLines(diff)
 
 	// 1. Try Batched Review (Best for UI/Noise)
 	err := g.postBatchedReview(ctx, prNumber, result, commitSHA, validLines)
@@ -222,12 +127,9 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 	// 2. Identify 422 Errors (Invalid Lines)
 	// If the error is not 422, it might be a connectivity issue, but we can still try the fallback loop
 	// just in case it helps (e.g. partial success).
-	// The specific error from GitHub for invalid lines usually contains "422" or "Validation Failed".
 	isValidationErr := strings.Contains(err.Error(), "422") || strings.Contains(err.Error(), "Validation Failed")
 
 	if !isValidationErr {
-		// If it's a critical API error (auth, rate limit), failing hard might be better,
-		// but let's log and try fallback as a best-effort recovery.
 		fmt.Printf("⚠️ Batched review failed with non-validation error: %v. Attempting fallback...\n", err)
 	} else {
 		fmt.Printf("⚠️ Batched review failed with validation error (likely invalid lines): %v. Switching to robust individual posting.\n", err)
@@ -249,7 +151,7 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 		// Skip comments with invalid line numbers — post as general comment instead
 		if c.Line <= 0 {
 			fmt.Printf("  ⚠️ Skipping inline comment on %s:L%d (invalid line) — posting as general comment\n", c.File, c.Line)
-			fallbackMsg := fmt.Sprintf("⚠️ **Review comment for %s** (could not resolve line number)\n\n**[%s]** %s\n\n%s", c.File, strings.ToUpper(c.Severity), c.Layer, c.Message)
+			fallbackMsg := fmt.Sprintf("⚠️ **Review comment for %s** (could not resolve line number)\n\n%s", c.File, memory.BuildMarkerCommentBody(c))
 			genErr := g.postGeneralComment(ctx, prNumber, fallbackMsg)
 			if genErr == nil {
 				successCount++
@@ -260,11 +162,11 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 		// Snap line number to nearest valid diff line
 		snappedLine := c.Line
 		if fileLines, ok := validLines[c.File]; ok {
-			snappedLine = snapToValidLine(c.Line, fileLines)
+			snappedLine = utils.SnapToValidLine(c.Line, fileLines)
 			if snappedLine == 0 {
 				fmt.Printf("  ⚠️ No valid diff lines for %s — posting as general comment\n", c.File)
-				fallbackMsg := fmt.Sprintf("⚠️ **Review comment for %s:L%d** (line not in diff)\n\n**[%s]** %s\n\n%s",
-					c.File, c.Line, strings.ToUpper(c.Severity), c.Layer, c.Message)
+				fallbackMsg := fmt.Sprintf("⚠️ **Review comment for %s:L%d** (line not in diff)\n\n%s",
+					c.File, c.Line, memory.BuildMarkerCommentBody(c))
 				genErr := g.postGeneralComment(ctx, prNumber, fallbackMsg)
 				if genErr == nil {
 					successCount++
@@ -276,10 +178,7 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 			}
 		}
 
-		encodedFile := base64.RawURLEncoding.EncodeToString([]byte(c.File))
-		marker := fmt.Sprintf("<!-- ai-reviewer:v1 file=%s line=%d severity=%s layer=%s hash=%s -->",
-			encodedFile, c.Line, c.Severity, c.Layer, memory.Fingerprint(c.File, c.Layer, c.Message))
-		msg := marker + "\n" + fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
+		msg := memory.BuildMarkerCommentBody(c)
 
 		comment := &github.PullRequestComment{
 			Body:     github.String(msg),
@@ -294,7 +193,6 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 			// Check if we hit a rate limit
 			if strings.Contains(err.Error(), "403") && (strings.Contains(err.Error(), "secondary rate limit") || strings.Contains(err.Error(), "temporarily blocked")) {
 				fmt.Printf("🛑 Hit GitHub Secondary Rate Limit. Aborting individual posts and dumping remaining as one summary.\n")
-				// Post remaining comments as a single bulk comment to avoid further rate limit issues
 				var remaining strings.Builder
 				remaining.WriteString("### Remaining Review Comments (Delayed due to Rate Limits)\n\n")
 				for j := i; j < len(result.Comments); j++ {
@@ -322,12 +220,11 @@ func (g *GitHubClient) PostReview(ctx context.Context, prNumber int, result *mod
 			successCount++
 		}
 
-		// Small delay to be polite to the API
 		time.Sleep(500 * time.Millisecond)
 	}
 
 	// Build resolved issues block and append to summary
-	resBlock := buildResolutionsBlock(result.Resolutions)
+	resBlock := memory.BuildResolutionsBlock(result.Resolutions)
 	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s%s", result.Summary, resBlock)
 	if failedInline > 0 {
 		summaryMsg += fmt.Sprintf("\n\n---\n*Note: %d comments were posted as general comments because their line numbers could not be resolved in the PR diff.*", failedInline)
@@ -354,7 +251,7 @@ func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, resu
 		// Validate and snap line to nearest valid diff line
 		snappedLine := c.Line
 		if fileLines, ok := validLines[c.File]; ok {
-			snappedLine = snapToValidLine(c.Line, fileLines)
+			snappedLine = utils.SnapToValidLine(c.Line, fileLines)
 			if snappedLine == 0 {
 				// No valid diff lines for this file — post as general
 				generalComments = append(generalComments, c)
@@ -362,10 +259,7 @@ func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, resu
 			}
 		}
 
-		encodedFile := base64.RawURLEncoding.EncodeToString([]byte(c.File))
-		marker := fmt.Sprintf("<!-- ai-reviewer:v1 file=%s line=%d severity=%s layer=%s hash=%s -->",
-			encodedFile, c.Line, c.Severity, c.Layer, memory.Fingerprint(c.File, c.Layer, c.Message))
-		msg := marker + "\n" + fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
+		msg := memory.BuildMarkerCommentBody(c)
 		comments = append(comments, &github.DraftReviewComment{
 			Path: github.String(c.File),
 			Line: github.Int(snappedLine),
@@ -375,12 +269,12 @@ func (g *GitHubClient) postBatchedReview(ctx context.Context, prNumber int, resu
 
 	// Post L0 comments as general comments
 	for _, c := range generalComments {
-		msg := fmt.Sprintf("⚠️ **Review comment for %s** (could not resolve line number)\n\n**[%s]** %s\n\n%s",
-			c.File, strings.ToUpper(c.Severity), c.Layer, c.Message)
+		msg := fmt.Sprintf("⚠️ **Review comment for %s** (could not resolve line number)\n\n%s",
+			c.File, memory.BuildMarkerCommentBody(c))
 		g.postGeneralComment(ctx, prNumber, msg)
 	}
 
-	resBlock := buildResolutionsBlock(result.Resolutions)
+	resBlock := memory.BuildResolutionsBlock(result.Resolutions)
 
 	if len(comments) == 0 && result.Summary == "" && resBlock == "" {
 		return nil
@@ -466,24 +360,4 @@ func (g *GitHubClient) ListAccessibleRepos(ctx context.Context) ([]*github.Repos
 	}
 
 	return allRepos, nil
-}
-
-// buildResolutionsBlock formats the merged resolutions, safely escaping the LLM output.
-func buildResolutionsBlock(resolutions []models.Resolution) string {
-	var resBlock strings.Builder
-	resolvedCount := 0
-	for _, res := range resolutions {
-		if strings.EqualFold(res.Status, "resolved") {
-			if resolvedCount == 0 {
-				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
-			}
-			// Replace newlines and carriage returns with spaces to prevent markdown list breakage
-			safeReason := strings.ReplaceAll(res.Reason, "\r\n", " ")
-			safeReason = strings.ReplaceAll(safeReason, "\n", " ")
-			safeReason = strings.ReplaceAll(safeReason, "\r", " ")
-			resBlock.WriteString(fmt.Sprintf("- %s\n", safeReason))
-			resolvedCount++
-		}
-	}
-	return resBlock.String()
 }

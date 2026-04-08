@@ -16,10 +16,6 @@ import (
 var consolidatorResponseSchema = map[string]interface{}{
 	"type": "object",
 	"properties": map[string]interface{}{
-		"thinking": map[string]interface{}{
-			"type":        "string",
-			"description": "Trace findings, verify them against the diff, and explain deduplication/dropping decisions before writing the final output.",
-		},
 		"summary": map[string]interface{}{
 			"type":        "string",
 			"description": "1-2 sentence high-level summary of the consolidated review",
@@ -75,7 +71,7 @@ var consolidatorResponseSchema = map[string]interface{}{
 			},
 		},
 	},
-	"required": []string{"thinking", "summary", "comments", "resolutions"},
+	"required": []string{"summary", "comments", "resolutions"},
 }
 
 // RunConsolidation sends all specialist agent results to the LLM for intelligent

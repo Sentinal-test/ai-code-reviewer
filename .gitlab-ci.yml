@@ -1,0 +1,53 @@
+# AI Code Reviewer — GitLab CI Pipeline
+# Runs automatically on every Merge Request
+
+stages:
+  - review
+
+variables:
+  GIT_DEPTH: "0"   # Full clone for accurate diffs
+
+ai_code_review:
+  stage: review
+  image: golang:1.24
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  variables:
+    LLM_PROVIDER: "gemini"
+  cache:
+    key: "ai-reviewer-${CI_PROJECT_ID}"
+    paths:
+      - .ai-reviewer/
+  before_script:
+    # Fetch target branch for diffing
+    - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth=100 || true
+    # Ensure merge base exists
+    - |
+      if ! git merge-base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" "$CI_COMMIT_SHA" >/dev/null 2>&1; then
+        echo "⚠️ No merge base found. Fetching more history..."
+        git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth=500 || true
+        if ! git merge-base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" "$CI_COMMIT_SHA" >/dev/null 2>&1; then
+          echo "⚠️ Still no merge base. Fetching full history..."
+          git fetch --prune --unshallow || true
+        fi
+      fi
+  script:
+    - echo "🏗️ Building AI Reviewer from trusted branch..."
+    # Build from origin/main to prevent MR branches from executing arbitrary code with CI secrets.
+    - git fetch origin main --depth=1
+    - git checkout origin/main -- backend/
+    - cd backend
+    - go build -o ../ai-reviewer cmd/cli/main.go
+    - cd "$CI_PROJECT_DIR"
+    - echo "🚀 Running AI Reviewer on MR !${CI_MERGE_REQUEST_IID}..."
+    - ./ai-reviewer
+        --scm-provider gitlab
+        --token "$GITLAB_BOT_TOKEN"
+        --api-url "$CI_API_V4_URL"
+        --project-id "$CI_PROJECT_ID"
+        --repo "$CI_PROJECT_PATH"
+        --change-request "$CI_MERGE_REQUEST_IID"
+        --sha "$CI_COMMIT_SHA"
+        --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        --head "$CI_COMMIT_SHA"
+        --llm-provider "$LLM_PROVIDER"

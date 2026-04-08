@@ -110,15 +110,14 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 				Parts: []*genai.Part{{Text: req.SystemPrompt}},
 			}
 		}
+	}
 
-		if len(req.Tools) > 0 {
-			config.Tools = []*genai.Tool{{FunctionDeclarations: p.toGenaiFunctionDeclarations(req.Tools)}}
-			// genai.ToolConfig requires setting mode
-			config.ToolConfig = &genai.ToolConfig{
-				FunctionCallingConfig: &genai.FunctionCallingConfig{
-					Mode: "AUTO",
-				},
-			}
+	if len(req.Tools) > 0 {
+		config.Tools = []*genai.Tool{{FunctionDeclarations: p.toGenaiFunctionDeclarations(req.Tools)}}
+		config.ToolConfig = &genai.ToolConfig{
+			FunctionCallingConfig: &genai.FunctionCallingConfig{
+				Mode: "AUTO",
+			},
 		}
 	}
 

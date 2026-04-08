@@ -13,17 +13,13 @@ import (
 	"time"
 )
 
-const maxToolIterations = 10
+const maxToolIterations = 5
 
 // responseSchema is the JSON schema enforced on Gemini's output.
 // Using responseMimeType + responseSchema guarantees valid JSON.
 var responseSchema = map[string]interface{}{
 	"type": "object",
 	"properties": map[string]interface{}{
-		"thinking": map[string]interface{}{
-			"type":        "string",
-			"description": "Trace data flows, evaluate developer intent, and verify tool outputs BEFORE writing comments.",
-		},
 		"summary": map[string]interface{}{
 			"type":        "string",
 			"description": "Brief overview of issues found, or 'No issues found' if clean",
@@ -79,7 +75,7 @@ var responseSchema = map[string]interface{}{
 			},
 		},
 	},
-	"required": []string{"thinking", "summary", "comments", "resolutions"},
+	"required": []string{"summary", "comments", "resolutions"},
 }
 
 // RunAgentReview executes a single specialist agent with the agentic loop.

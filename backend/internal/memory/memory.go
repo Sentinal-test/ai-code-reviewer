@@ -204,3 +204,39 @@ func Deduplicate(newFindings []models.ReviewComment, previous []models.PreviousF
 
 	return toPost, skipped
 }
+
+// sanitizeHTMLCommentField removes --> sequences that would prematurely close an HTML comment.
+func sanitizeHTMLCommentField(s string) string {
+	return strings.ReplaceAll(s, "-->", "--&gt;")
+}
+
+// BuildMarkerCommentBody formats the review comment body with a hidden deduplication marker.
+func BuildMarkerCommentBody(c models.ReviewComment) string {
+	encodedFile := base64.RawURLEncoding.EncodeToString([]byte(c.File))
+	marker := fmt.Sprintf("<!-- ai-reviewer:v1 file=%s line=%d severity=%s layer=%s hash=%s -->",
+		encodedFile, c.Line,
+		sanitizeHTMLCommentField(c.Severity),
+		sanitizeHTMLCommentField(c.Layer),
+		Fingerprint(c.File, c.Layer, c.Message))
+	return marker + "\n" + fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
+}
+
+// BuildResolutionsBlock formats the merged resolutions, safely escaping the LLM output.
+func BuildResolutionsBlock(resolutions []models.Resolution) string {
+	var resBlock strings.Builder
+	resolvedCount := 0
+	for _, res := range resolutions {
+		if strings.EqualFold(res.Status, "resolved") {
+			if resolvedCount == 0 {
+				resBlock.WriteString("\n\n### ✅ Resolved Issues\n")
+			}
+			// Replace newlines and carriage returns with spaces to prevent markdown list breakage
+			safeReason := strings.ReplaceAll(res.Reason, "\r\n", " ")
+			safeReason = strings.ReplaceAll(safeReason, "\n", " ")
+			safeReason = strings.ReplaceAll(safeReason, "\r", " ")
+			resBlock.WriteString(fmt.Sprintf("- %s\n", safeReason))
+			resolvedCount++
+		}
+	}
+	return resBlock.String()
+}

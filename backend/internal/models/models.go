@@ -99,6 +99,7 @@ type PreviousFinding struct {
 	Hash      string    `json:"hash"`       // fingerprint for dedup
 	CommentID FlexInt64 `json:"comment_id"` // GitHub comment ID (REST)
 	NodeID    string    `json:"node_id"`    // GitHub GraphQL node ID (for thread resolution)
+	ThreadID  string    `json:"thread_id"`  // Generic thread/discussion ID for provider-specific resolution
 }
 
 // MergeResolutions deduplicates and merges a flat list of resolutions,
