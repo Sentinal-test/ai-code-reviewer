@@ -58,11 +58,6 @@ type gitLabDiscussion struct {
 	Resolved       bool                   `json:"resolved"`
 }
 
-type gitLabMRNote struct {
-	ID   int64  `json:"id"`
-	Body string `json:"body"`
-}
-
 type gitLabMRVersion struct {
 	ID             int64  `json:"id"`
 	HeadCommitSHA  string `json:"head_commit_sha"`
@@ -114,11 +109,11 @@ func (g *GitLabClient) GetPullRequest(ctx context.Context, mrIID int) (*models.P
 
 	var messages []string
 	if len(commits) > 0 {
-		start := 0
-		if len(commits) > 5 {
-			start = len(commits) - 5
+		end := len(commits)
+		if end > 5 {
+			end = 5
 		}
-		for _, commit := range commits[start:] {
+		for _, commit := range commits[:end] {
 			msg := strings.TrimSpace(commit.Message)
 			if msg == "" {
 				msg = strings.TrimSpace(commit.Title)
@@ -184,17 +179,6 @@ func (g *GitLabClient) FetchPreviousFindings(ctx context.Context, mrIID int) ([]
 		}
 	}
 
-	notes, err := fetchPaginated[gitLabMRNote](ctx, g, fmt.Sprintf("/projects/%s/merge_requests/%d/notes", project, mrIID))
-	if err != nil {
-		return nil, fmt.Errorf("listing gitlab notes: %w", err)
-	}
-	
-	for _, note := range notes {
-		if pf := memory.ParseMarker(note.Body, "", 0, note.ID); pf != nil {
-			findings = append(findings, *pf)
-		}
-	}
-
 	sortFindingsForStability(findings)
 	return findings, nil
 }
@@ -215,8 +199,16 @@ func (g *GitLabClient) PostReview(ctx context.Context, mrIID int, result *models
 		fmt.Printf("⚠️ Failed to load latest GitLab MR version for !%d: %v. Inline comments will fall back to general notes.\n", mrIID, versionErr)
 	}
 
+	// Post summary first so it appears at the top of the GitLab MR timeline.
+	// GitLab displays general notes chronologically, so posting before inline
+	// comments ensures the summary is always the first visible item.
+	resBlock := memory.BuildResolutionsBlock(result.Resolutions)
+	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s%s", result.Summary, resBlock)
+	if err := g.postGeneralNote(ctx, mrIID, summaryMsg); err != nil {
+		return fmt.Errorf("posting gitlab summary note: %w", err)
+	}
+
 	successCount := 0
-	failedInline := 0
 	for i, c := range result.Comments {
 		// Rate-limit protection: brief pause between posts, longer pause every 5 comments
 		if i > 0 {
@@ -253,7 +245,6 @@ func (g *GitLabClient) PostReview(ctx context.Context, mrIID int, result *models
 				continue
 			} else {
 				fmt.Printf("  ⚠️ Failed to post GitLab inline discussion on %s:L%d: %v\n", c.File, snappedLine, err)
-				failedInline++
 			}
 		}
 
@@ -261,15 +252,6 @@ func (g *GitLabClient) PostReview(ctx context.Context, mrIID int, result *models
 		if err := g.postGeneralNote(ctx, mrIID, fallbackMsg); err == nil {
 			successCount++
 		}
-	}
-
-	resBlock := memory.BuildResolutionsBlock(result.Resolutions)
-	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s%s", result.Summary, resBlock)
-	if failedInline > 0 {
-		summaryMsg += fmt.Sprintf("\n\n---\n*Note: %d comments were posted as general notes because their line numbers could not be resolved in the merge request diff.*", failedInline)
-	}
-	if err := g.postGeneralNote(ctx, mrIID, summaryMsg); err != nil {
-		return fmt.Errorf("posting gitlab summary note: %w", err)
 	}
 
 	g.ResolveDiscussions(ctx, mrIID, result.Resolutions, previous)
@@ -357,8 +339,9 @@ func (g *GitLabClient) setDiscussionResolved(ctx context.Context, mrIID int, dis
 }
 
 func (g *GitLabClient) doPaginated(ctx context.Context, path string, consume func([]byte) error) error {
+	const maxPages = 100
 	page := 1
-	for {
+	for page <= maxPages {
 		query := url.Values{}
 		query.Set("per_page", "100")
 		query.Set("page", strconv.Itoa(page))
@@ -378,6 +361,7 @@ func (g *GitLabClient) doPaginated(ctx context.Context, path string, consume fun
 			return nil
 		}
 	}
+	return nil
 }
 
 func (g *GitLabClient) doJSON(ctx context.Context, method, path string, form url.Values, query url.Values, dest interface{}) error {
@@ -417,7 +401,8 @@ func (g *GitLabClient) doRaw(ctx context.Context, method, path string, form url.
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	const maxResponseBytes = 32 * 1024 * 1024 // 32 MB
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return nil, resp.Header, err
 	}

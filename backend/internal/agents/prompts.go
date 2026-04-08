@@ -508,7 +508,6 @@ CONSOLIDATION RULES:
 
 Output valid JSON matching this schema exactly:
 {
-  "thinking": "Trace the findings, verify them using tools, and plan deduplication/dropping before writing comments.",
   "summary": "1-2 sentence high-level summary",
   "comments": [
     {

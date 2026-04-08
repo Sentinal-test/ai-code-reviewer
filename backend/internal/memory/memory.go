@@ -205,11 +205,19 @@ func Deduplicate(newFindings []models.ReviewComment, previous []models.PreviousF
 	return toPost, skipped
 }
 
+// sanitizeHTMLCommentField removes --> sequences that would prematurely close an HTML comment.
+func sanitizeHTMLCommentField(s string) string {
+	return strings.ReplaceAll(s, "-->", "--&gt;")
+}
+
 // BuildMarkerCommentBody formats the review comment body with a hidden deduplication marker.
 func BuildMarkerCommentBody(c models.ReviewComment) string {
 	encodedFile := base64.RawURLEncoding.EncodeToString([]byte(c.File))
 	marker := fmt.Sprintf("<!-- ai-reviewer:v1 file=%s line=%d severity=%s layer=%s hash=%s -->",
-		encodedFile, c.Line, c.Severity, c.Layer, Fingerprint(c.File, c.Layer, c.Message))
+		encodedFile, c.Line,
+		sanitizeHTMLCommentField(c.Severity),
+		sanitizeHTMLCommentField(c.Layer),
+		Fingerprint(c.File, c.Layer, c.Message))
 	return marker + "\n" + fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
 }
 

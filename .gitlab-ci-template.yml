@@ -46,7 +46,10 @@ ai_code_review:
         fi
       fi
   script:
-    - echo "🏗️ Building AI Reviewer..."
+    - echo "🏗️ Building AI Reviewer from trusted branch..."
+    # Build from origin/main to prevent MR branches from executing arbitrary code with CI secrets.
+    - git fetch origin main --depth=1
+    - git checkout origin/main -- backend/
     - cd backend
     - go build -o ../ai-reviewer cmd/cli/main.go
     - cd "$CI_PROJECT_DIR"
