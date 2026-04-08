@@ -1,7 +1,7 @@
 package main
 
 import (
-	"code-review/backend/internal/action"
+	"code-review/backend/internal/platform/github"
 	"context"
 	"os"
 	"testing"
@@ -9,13 +9,13 @@ import (
 
 func TestGitHubClientInitialization(t *testing.T) {
 	// 1. Create token-based client
-	tokenClient := action.NewGitHubClient(context.Background(), "fake-token", "owner", "repo")
+	tokenClient := github.NewGitHubClient(context.Background(), "fake-token", "owner", "repo")
 	if tokenClient == nil {
 		t.Fatalf("Expected token client to be created")
 	}
 
 	// 2. Validate App-based client with missing / bad string
-	_, err := action.NewGitHubAppClient(context.Background(), 12345, "invalid-key-string", "owner", "repo")
+	_, err := github.NewGitHubAppClient(context.Background(), 12345, "invalid-key-string", "owner", "repo")
 	if err == nil {
 		t.Fatalf("Expected error for invalid private key format")
 	}

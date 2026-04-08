@@ -7,6 +7,9 @@ import (
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/memory"
+	"code-review/backend/internal/platform"
+	"code-review/backend/internal/platform/github"
+	"code-review/backend/internal/platform/gitlab"
 	"code-review/backend/internal/models"
 	"code-review/backend/internal/multirepo"
 	"code-review/backend/internal/orchestrator"
@@ -25,8 +28,9 @@ import (
 )
 
 // checkMultiRepoAvailability returns true if the current token has access to more than 1 repository.
-func checkMultiRepoAvailability(ctx context.Context, ghClient *action.GitHubClient) bool {
-	if ghClient == nil {
+func checkMultiRepoAvailability(ctx context.Context, rp platform.ReviewPlatform) bool {
+	ghClient, ok := rp.(*github.GitHubClient)
+	if !ok || ghClient == nil {
 		fmt.Println("ℹ️ Multi-repo context skipped: no GitHub client available.")
 		return false
 	}
@@ -144,8 +148,7 @@ func run() int {
 		Body:  fmt.Sprintf("Running via %s CI CLI", providerDisplayName(scmProvider)),
 	}
 
-	var ghClient *action.GitHubClient
-	var glClient *action.GitLabClient
+	var reviewPlatform platform.ReviewPlatform
 	if scmProvider == "github" && repoName != "" {
 		parts := strings.Split(repoName, "/")
 		if len(parts) == 2 {
@@ -153,48 +156,33 @@ func run() int {
 				fmt.Println("🔑 Using GitHub App credentials...")
 				appIDInt, err := strconv.ParseInt(appID, 10, 64)
 				if err == nil {
-					ghClient, err = action.NewGitHubAppClient(context.Background(), appIDInt, appPrivateKey, parts[0], parts[1])
+					reviewPlatform, err = github.NewGitHubAppClient(context.Background(), appIDInt, appPrivateKey, parts[0], parts[1])
 					if err != nil {
 						fmt.Printf("⚠️ Failed to initialize App client: %v. Falling back to Token.\n", err)
-						ghClient = action.NewGitHubClient(context.Background(), token, parts[0], parts[1])
+						reviewPlatform = github.NewGitHubClient(context.Background(), token, parts[0], parts[1])
 					}
 				} else {
 					fmt.Printf("⚠️ Invalid App ID: %v. Falling back to Token.\n", err)
-					ghClient = action.NewGitHubClient(context.Background(), token, parts[0], parts[1])
+					reviewPlatform = github.NewGitHubClient(context.Background(), token, parts[0], parts[1])
 				}
 			} else if token != "" {
-				ghClient = action.NewGitHubClient(context.Background(), token, parts[0], parts[1])
+				reviewPlatform = github.NewGitHubClient(context.Background(), token, parts[0], parts[1])
 			}
 		}
 	} else if scmProvider == "gitlab" && token != "" && (projectID != "" || repoName != "") {
-		glClient = action.NewGitLabClient(token, apiURL, projectID, repoName)
+		reviewPlatform = gitlab.NewGitLabClient(token, apiURL, projectID, repoName)
 	}
 
 	// Fetch real PR metadata if tokens are available
-	if changeRequest != "" {
+	if changeRequest != "" && reviewPlatform != nil {
 		var reqNum int
 		fmt.Sscanf(changeRequest, "%d", &reqNum)
-		switch scmProvider {
-		case "github":
-			if ghClient != nil {
-				realPR, err := ghClient.GetPullRequest(context.Background(), reqNum)
-				if err != nil {
-					fmt.Printf("⚠️ Failed to fetch PR metadata: %v. Using defaults.\n", err)
-				} else {
-					prContext = *realPR
-					fmt.Printf("✅ Fetched PR Context: %s\n", prContext.Title)
-				}
-			}
-		case "gitlab":
-			if glClient != nil {
-				realMR, err := glClient.GetMergeRequest(context.Background(), reqNum)
-				if err != nil {
-					fmt.Printf("⚠️ Failed to fetch MR metadata: %v. Using defaults.\n", err)
-				} else {
-					prContext = *realMR
-					fmt.Printf("✅ Fetched MR Context: %s\n", prContext.Title)
-				}
-			}
+		realPR, err := reviewPlatform.GetPullRequest(context.Background(), reqNum)
+		if err != nil {
+			fmt.Printf("⚠️ Failed to fetch metadata: %v. Using defaults.\n", err)
+		} else {
+			prContext = *realPR
+			fmt.Printf("✅ Fetched Context: %s\n", prContext.Title)
 		}
 	}
 
@@ -261,12 +249,13 @@ func run() int {
 
 	multiRepoStartTime := time.Now()
 	var baseTempDir string
-	if scmProvider == "github" && checkMultiRepoAvailability(context.Background(), ghClient) {
+	ghPlatform, isGitHub := reviewPlatform.(*github.GitHubClient)
+	if scmProvider == "github" && isGitHub && checkMultiRepoAvailability(context.Background(), reviewPlatform) {
 		fmt.Println("🌐 [MultiRepo] Multi-repo review capability detected.")
 
 		// 1. Discover accessible repositories
 		fmt.Println("   🔍 Discovering accessible repositories...")
-		repos, err := ghClient.ListAccessibleRepos(context.Background())
+		repos, err := ghPlatform.ListAccessibleRepos(context.Background())
 		if err != nil {
 			fmt.Printf("   ⚠️  Failed to discover repos: %v (falling back to single-repo)\n", err)
 		} else {
@@ -279,7 +268,7 @@ func run() int {
 			localSignals.ProjectName = reposelect.ExtractProjectName(wd)
 			localSignals.ProjectTargets = reposelect.ExtractProjectTargets(wd)
 
-			relevantRepos := reposelect.IdentifyRelevantRepos(context.Background(), ghClient.GetRawClient(), localSignals, filteredRepos)
+			relevantRepos := reposelect.IdentifyRelevantRepos(context.Background(), ghPlatform.GetRawClient(), localSignals, filteredRepos)
 			fmt.Printf("   ✅ Found %d repositories likely to be affected\n", len(relevantRepos))
 
 			// 3. Checkout & Graph Build
@@ -294,7 +283,7 @@ func run() int {
 			}
 			defer os.RemoveAll(baseTempDir)
 
-			checkoutPaths, err := workerPool.ProcessRepos(context.Background(), relevantRepos, ghClient.Token, baseTempDir)
+			checkoutPaths, err := workerPool.ProcessRepos(context.Background(), relevantRepos, ghPlatform.Token, baseTempDir)
 			if err != nil {
 				fmt.Printf("   ⚠️ Failed to process repos: %v\n", err)
 			}
@@ -316,7 +305,7 @@ func run() int {
 	}
 
 	// Multi-Repo Matching Execution (Phase 2 & 3 combined)
-	if baseTempDir != "" && ghClient != nil && cgService.Graph != nil && len(remoteGraphs) > 0 {
+	if baseTempDir != "" && isGitHub && cgService.Graph != nil && len(remoteGraphs) > 0 {
 		fmt.Println("   🔄 Analyzing cross-repo dependencies...")
 		localSignals := reposelect.ExtractLocalSignals(cgService.Graph, changedFiles)
 		localSignals.ProjectName = reposelect.ExtractProjectName(wd)
@@ -424,33 +413,14 @@ func run() int {
 
 	// PR Memory: Fetch previous findings early to provide context to LLM
 	var previousFindings []models.PreviousFinding
-	if changeRequest != "" && token != "" && (repoName != "" || (scmProvider == "gitlab" && projectID != "")) {
+	if changeRequest != "" && token != "" && reviewPlatform != nil {
 		var reqNum int
 		fmt.Sscanf(changeRequest, "%d", &reqNum)
-		switch scmProvider {
-		case "github":
-			parts := strings.Split(repoName, "/")
-			if len(parts) == 2 {
-				if ghClient == nil {
-					ghClient = action.NewGitHubClient(ctx, token, parts[0], parts[1])
-				}
-				pf, err := memory.FetchPreviousFindings(ctx, ghClient.GetRawClient(), parts[0], parts[1], reqNum)
-				if err != nil {
-					fmt.Printf("⚠️  [Memory] Failed to fetch previous findings: %v (proceeding without memory context)\n", err)
-				} else {
-					previousFindings = pf
-				}
-			}
-		case "gitlab":
-			if glClient == nil {
-				glClient = action.NewGitLabClient(token, apiURL, projectID, repoName)
-			}
-			pf, err := glClient.FetchPreviousFindings(ctx, reqNum)
-			if err != nil {
-				fmt.Printf("⚠️  [Memory] Failed to fetch previous findings: %v (proceeding without memory context)\n", err)
-			} else {
-				previousFindings = pf
-			}
+		pf, err := reviewPlatform.FetchPreviousFindings(ctx, reqNum)
+		if err != nil {
+			fmt.Printf("⚠️  [Memory] Failed to fetch previous findings: %v (proceeding without memory context)\n", err)
+		} else {
+			previousFindings = pf
 		}
 		if len(previousFindings) > 0 {
 			fmt.Printf("🧠 [Memory] Loaded %d previous findings for LLM context\n", len(previousFindings))
@@ -598,33 +568,13 @@ func run() int {
 		}
 
 		result.Summary = fmt.Sprintf("%s\n\n%s", result.Summary, manifest.GenerateSummary())
-		switch scmProvider {
-		case "github":
-			parts := strings.Split(repoName, "/")
-			if len(parts) != 2 {
-				fmt.Printf("❌ Invalid repo name format: %s\n", repoName)
-				return 1
-			}
-			if ghClient == nil {
-				ghClient = action.NewGitHubClient(ctx, token, parts[0], parts[1])
-			}
-			fmt.Printf("🚀 Posting comments to %s PR #%s...\n", repoName, changeRequest)
-			commentNodeMap := action.BuildCommentNodeMap(previousFindings)
-			if err := ghClient.PostReview(ctx, reqNum, result, commitSHA, diff, commentNodeMap); err != nil {
-				fmt.Printf("❌ Failed to post review: %v\n", err)
-				return 1
-			}
-		case "gitlab":
-			if glClient == nil {
-				glClient = action.NewGitLabClient(token, apiURL, projectID, repoName)
-			}
-			fmt.Printf("🚀 Posting comments to %s MR !%s...\n", repoName, changeRequest)
-			if err := glClient.PostReview(ctx, reqNum, result, commitSHA, diff, previousFindings); err != nil {
-				fmt.Printf("❌ Failed to post review: %v\n", err)
-				return 1
-			}
-		default:
-			fmt.Printf("❌ Unsupported SCM provider: %s\n", scmProvider)
+		if reviewPlatform == nil {
+			fmt.Println("❌ Error: No valid SCM client configured for posting review.")
+			return 1
+		}
+		fmt.Printf("🚀 Posting comments to %s PR/MR #%s...\n", repoName, changeRequest)
+		if err := reviewPlatform.PostReview(ctx, reqNum, result, commitSHA, diff, previousFindings); err != nil {
+			fmt.Printf("❌ Failed to post review: %v\n", err)
 			return 1
 		}
 		fmt.Println("✅ Review posted successfully!")

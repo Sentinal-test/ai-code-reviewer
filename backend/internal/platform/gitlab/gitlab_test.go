@@ -1,4 +1,4 @@
-package action
+package gitlab
 
 import (
 	"bytes"
@@ -119,7 +119,7 @@ func TestGitLabClientGetMergeRequest(t *testing.T) {
 		}
 	})}
 
-	prCtx, err := client.GetMergeRequest(context.Background(), 5)
+	prCtx, err := client.GetPullRequest(context.Background(), 5)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Fix auth flow", prCtx.Title)

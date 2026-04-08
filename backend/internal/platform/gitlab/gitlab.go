@@ -1,11 +1,8 @@
-package action
+package gitlab
 
 import (
 	"bytes"
-	"code-review/backend/internal/memory"
-	"code-review/backend/internal/models"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +12,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"code-review/backend/internal/memory"
+	"code-review/backend/internal/models"
+	"code-review/backend/internal/platform/utils"
 )
 
 type GitLabClient struct {
@@ -43,18 +44,18 @@ type gitLabPosition struct {
 }
 
 type gitLabDiscussionNote struct {
-	ID         int64             `json:"id"`
-	Body       string            `json:"body"`
-	Resolvable bool              `json:"resolvable"`
-	Resolved   bool              `json:"resolved"`
-	Position   *gitLabPosition   `json:"position"`
+	ID         int64           `json:"id"`
+	Body       string          `json:"body"`
+	Resolvable bool            `json:"resolvable"`
+	Resolved   bool            `json:"resolved"`
+	Position   *gitLabPosition `json:"position"`
 }
 
 type gitLabDiscussion struct {
-	ID             string               `json:"id"`
-	IndividualNote bool                 `json:"individual_note"`
+	ID             string                 `json:"id"`
+	IndividualNote bool                   `json:"individual_note"`
 	Notes          []gitLabDiscussionNote `json:"notes"`
-	Resolved       bool                 `json:"resolved"`
+	Resolved       bool                   `json:"resolved"`
 }
 
 type gitLabMRNote struct {
@@ -63,9 +64,9 @@ type gitLabMRNote struct {
 }
 
 type gitLabMRVersion struct {
-	ID            int64  `json:"id"`
-	HeadCommitSHA string `json:"head_commit_sha"`
-	BaseCommitSHA string `json:"base_commit_sha"`
+	ID             int64  `json:"id"`
+	HeadCommitSHA  string `json:"head_commit_sha"`
+	BaseCommitSHA  string `json:"base_commit_sha"`
 	StartCommitSHA string `json:"start_commit_sha"`
 }
 
@@ -75,12 +76,16 @@ func NewGitLabClient(token, baseURL, projectID, repoPath string) *GitLabClient {
 		baseURL = "https://gitlab.com/api/v4"
 	}
 	return &GitLabClient{
-		client: &http.Client{Timeout: 30 * time.Second},
-		baseURL: baseURL,
-		token: token,
+		client:    &http.Client{Timeout: 30 * time.Second},
+		baseURL:   baseURL,
+		token:     token,
 		projectID: projectID,
-		repoPath: repoPath,
+		repoPath:  repoPath,
 	}
+}
+
+func (g *GitLabClient) Provider() string {
+	return "gitlab"
 }
 
 func (g *GitLabClient) projectRef() string {
@@ -91,7 +96,7 @@ func (g *GitLabClient) projectRef() string {
 	return url.PathEscape(ref)
 }
 
-func (g *GitLabClient) GetMergeRequest(ctx context.Context, mrIID int) (*models.PRContext, error) {
+func (g *GitLabClient) GetPullRequest(ctx context.Context, mrIID int) (*models.PRContext, error) {
 	project := g.projectRef()
 	if project == "" {
 		return nil, fmt.Errorf("gitlab project id/path is required")
@@ -131,6 +136,19 @@ func (g *GitLabClient) GetMergeRequest(ctx context.Context, mrIID int) (*models.
 	}, nil
 }
 
+func fetchPaginated[T any](ctx context.Context, g *GitLabClient, path string) ([]T, error) {
+	var all []T
+	err := g.doPaginated(ctx, path, func(resp []byte) error {
+		var page []T
+		if err := json.Unmarshal(resp, &page); err != nil {
+			return err
+		}
+		all = append(all, page...)
+		return nil
+	})
+	return all, err
+}
+
 func (g *GitLabClient) FetchPreviousFindings(ctx context.Context, mrIID int) ([]models.PreviousFinding, error) {
 	project := g.projectRef()
 	if project == "" {
@@ -139,10 +157,11 @@ func (g *GitLabClient) FetchPreviousFindings(ctx context.Context, mrIID int) ([]
 
 	var findings []models.PreviousFinding
 
-	var discussions []gitLabDiscussion
-	if err := g.doPaginatedJSON(ctx, fmt.Sprintf("/projects/%s/merge_requests/%d/discussions", project, mrIID), &discussions); err != nil {
+	discussions, err := fetchPaginated[gitLabDiscussion](ctx, g, fmt.Sprintf("/projects/%s/merge_requests/%d/discussions", project, mrIID))
+	if err != nil {
 		return nil, fmt.Errorf("listing gitlab discussions: %w", err)
 	}
+
 	for _, discussion := range discussions {
 		for _, note := range discussion.Notes {
 			file := ""
@@ -165,10 +184,11 @@ func (g *GitLabClient) FetchPreviousFindings(ctx context.Context, mrIID int) ([]
 		}
 	}
 
-	var notes []gitLabMRNote
-	if err := g.doPaginatedJSON(ctx, fmt.Sprintf("/projects/%s/merge_requests/%d/notes", project, mrIID), &notes); err != nil {
+	notes, err := fetchPaginated[gitLabMRNote](ctx, g, fmt.Sprintf("/projects/%s/merge_requests/%d/notes", project, mrIID))
+	if err != nil {
 		return nil, fmt.Errorf("listing gitlab notes: %w", err)
 	}
+	
 	for _, note := range notes {
 		if pf := memory.ParseMarker(note.Body, "", 0, note.ID); pf != nil {
 			findings = append(findings, *pf)
@@ -189,7 +209,7 @@ func (g *GitLabClient) PostReview(ctx context.Context, mrIID int, result *models
 		return fmt.Errorf("gitlab project id/path is required")
 	}
 
-	validLines := extractValidDiffLines(diff)
+	validLines := utils.ExtractValidDiffLines(diff)
 	version, versionErr := g.getLatestMRVersion(ctx, mrIID)
 	if versionErr != nil {
 		fmt.Printf("⚠️ Failed to load latest GitLab MR version for !%d: %v. Inline comments will fall back to general notes.\n", mrIID, versionErr)
@@ -206,7 +226,7 @@ func (g *GitLabClient) PostReview(ctx context.Context, mrIID int, result *models
 			}
 		}
 
-		body := buildMarkerCommentBody(c)
+		body := memory.BuildMarkerCommentBody(c)
 		if c.Line <= 0 {
 			fallbackMsg := fmt.Sprintf("⚠️ **Review comment for %s** (could not resolve line number)\n\n%s", c.File, body)
 			if err := g.postGeneralNote(ctx, mrIID, fallbackMsg); err == nil {
@@ -217,7 +237,7 @@ func (g *GitLabClient) PostReview(ctx context.Context, mrIID int, result *models
 
 		snappedLine := c.Line
 		if fileLines, ok := validLines[c.File]; ok {
-			snappedLine = snapToValidLine(c.Line, fileLines)
+			snappedLine = utils.SnapToValidLine(c.Line, fileLines)
 			if snappedLine == 0 {
 				fallbackMsg := fmt.Sprintf("⚠️ **Review comment for %s:L%d** (line not in diff)\n\n%s", c.File, c.Line, body)
 				if err := g.postGeneralNote(ctx, mrIID, fallbackMsg); err == nil {
@@ -243,7 +263,7 @@ func (g *GitLabClient) PostReview(ctx context.Context, mrIID int, result *models
 		}
 	}
 
-	resBlock := buildResolutionsBlock(result.Resolutions)
+	resBlock := memory.BuildResolutionsBlock(result.Resolutions)
 	summaryMsg := fmt.Sprintf("### AI Code Review Summary\n\n%s%s", result.Summary, resBlock)
 	if failedInline > 0 {
 		summaryMsg += fmt.Sprintf("\n\n---\n*Note: %d comments were posted as general notes because their line numbers could not be resolved in the merge request diff.*", failedInline)
@@ -334,48 +354,6 @@ func (g *GitLabClient) setDiscussionResolved(ctx context.Context, mrIID int, dis
 	form := url.Values{}
 	form.Set("resolved", strconv.FormatBool(resolved))
 	return g.doJSON(ctx, http.MethodPut, fmt.Sprintf("/projects/%s/merge_requests/%d/discussions/%s", g.projectRef(), mrIID, url.PathEscape(discussionID)), form, nil, nil)
-}
-
-func buildMarkerCommentBody(c models.ReviewComment) string {
-	encodedFile := base64.RawURLEncoding.EncodeToString([]byte(c.File))
-	marker := fmt.Sprintf("<!-- ai-reviewer:v1 file=%s line=%d severity=%s layer=%s hash=%s -->",
-		encodedFile, c.Line, c.Severity, c.Layer, memory.Fingerprint(c.File, c.Layer, c.Message))
-	return marker + "\n" + fmt.Sprintf("**[%s]** %s\n\n%s", strings.ToUpper(c.Severity), c.Layer, c.Message)
-}
-
-func (g *GitLabClient) doPaginatedJSON(ctx context.Context, path string, dest interface{}) error {
-	switch out := dest.(type) {
-	case *[]gitLabDiscussion:
-		var all []gitLabDiscussion
-		if err := g.doPaginated(ctx, path, func(resp []byte) error {
-			var page []gitLabDiscussion
-			if err := json.Unmarshal(resp, &page); err != nil {
-				return err
-			}
-			all = append(all, page...)
-			return nil
-		}); err != nil {
-			return err
-		}
-		*out = all
-		return nil
-	case *[]gitLabMRNote:
-		var all []gitLabMRNote
-		if err := g.doPaginated(ctx, path, func(resp []byte) error {
-			var page []gitLabMRNote
-			if err := json.Unmarshal(resp, &page); err != nil {
-				return err
-			}
-			all = append(all, page...)
-			return nil
-		}); err != nil {
-			return err
-		}
-		*out = all
-		return nil
-	default:
-		return fmt.Errorf("unsupported paginated destination type %T", dest)
-	}
 }
 
 func (g *GitLabClient) doPaginated(ctx context.Context, path string, consume func([]byte) error) error {
