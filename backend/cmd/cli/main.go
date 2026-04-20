@@ -7,12 +7,12 @@ import (
 	"code-review/backend/internal/codegraph"
 	"code-review/backend/internal/llm"
 	"code-review/backend/internal/memory"
-	"code-review/backend/internal/platform"
-	"code-review/backend/internal/platform/github"
-	"code-review/backend/internal/platform/gitlab"
 	"code-review/backend/internal/models"
 	"code-review/backend/internal/multirepo"
 	"code-review/backend/internal/orchestrator"
+	"code-review/backend/internal/platform"
+	"code-review/backend/internal/platform/github"
+	"code-review/backend/internal/platform/gitlab"
 	"code-review/backend/internal/remotefetch"
 	"code-review/backend/internal/reposelect"
 	"code-review/backend/internal/rules"
@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -87,10 +88,30 @@ func run() int {
 	}
 
 	scmProvider := detectSCMProvider(*scmProviderFlag)
-	token := firstNonEmpty(*tokenFlag, *githubTokenFlag, os.Getenv("GITHUB_TOKEN"), os.Getenv("GITLAB_TOKEN"))
-	changeRequest := firstNonEmpty(*changeRequestFlag, *prNumberFlag, os.Getenv("PR_NUMBER"), os.Getenv("CI_MERGE_REQUEST_IID"))
-	repoName := firstNonEmpty(*repoNameFlag, os.Getenv("GITHUB_REPOSITORY"), os.Getenv("CI_PROJECT_PATH"))
-	commitSHA := firstNonEmpty(*commitShaFlag, os.Getenv("GITHUB_SHA"), os.Getenv("CI_COMMIT_SHA"))
+	token := resolveSCMValue(
+		scmProvider,
+		firstNonEmpty(*tokenFlag, *githubTokenFlag),
+		os.Getenv("GITHUB_TOKEN"),
+		os.Getenv("GITLAB_TOKEN"),
+	)
+	changeRequest := resolveSCMValue(
+		scmProvider,
+		firstNonEmpty(*changeRequestFlag, *prNumberFlag),
+		os.Getenv("PR_NUMBER"),
+		os.Getenv("CI_MERGE_REQUEST_IID"),
+	)
+	repoName := resolveSCMValue(
+		scmProvider,
+		*repoNameFlag,
+		os.Getenv("GITHUB_REPOSITORY"),
+		os.Getenv("CI_PROJECT_PATH"),
+	)
+	commitSHA := resolveSCMValue(
+		scmProvider,
+		*commitShaFlag,
+		os.Getenv("GITHUB_SHA"),
+		os.Getenv("CI_COMMIT_SHA"),
+	)
 	apiURL := firstNonEmpty(*apiURLFlag, os.Getenv("CI_API_V4_URL"))
 	projectID := firstNonEmpty(*projectIDFlag, os.Getenv("CI_PROJECT_ID"))
 
@@ -374,8 +395,10 @@ func run() int {
 	ctx := context.Background()
 
 	var provider llm.LLMProvider
+	var flashProvider llm.LLMProvider // faster model used only for consolidation
 	var initErr error
 	var costLedger *llm.UsageLedger
+	var flashCostLedger *llm.UsageLedger
 
 	switch llmProvider {
 	case "openai":
@@ -392,6 +415,10 @@ func run() int {
 		provider = llm.NewClaudeProvider(key, "")
 	default:
 		provider, initErr = llm.NewGeminiProvider(apiKey, "")
+		if initErr == nil {
+			// Use gemini-2.5-flash for consolidation — same API key, faster + cheaper
+			flashProvider, _ = llm.NewGeminiProvider(apiKey, llm.GeminiFlashModel)
+		}
 	}
 
 	if initErr != nil || provider == nil {
@@ -401,6 +428,9 @@ func run() int {
 
 	// Instrument provider to track actual token usage + cost.
 	provider, costLedger = llm.WrapWithCostTracking(provider)
+	if flashProvider != nil {
+		flashProvider, flashCostLedger = llm.WrapWithCostTracking(flashProvider)
+	}
 
 	// Get graph edges for smart chunk grouping
 	var graphEdges []codegraph.Edge
@@ -506,33 +536,51 @@ func run() int {
 		}
 	}
 
-	var results []*models.ReviewResult
+	// Run chunks in parallel — bounded to 3 concurrent to respect provider rate limits.
+	const maxParallelChunks = 3
+	rawResults := make([]*models.ReviewResult, len(chunks))
 	manifest := orchestrator.NewCoverageManifest()
-	for _, chunk := range chunks {
-		// Scope dependencies to this chunk's files
-		scopedDeps := scopeDependencies(dependencies, chunk, cgService)
+	sem := make(chan struct{}, maxParallelChunks)
+	var wg sync.WaitGroup
 
-		// Multi-agent review: 3 specialist agents in parallel per chunk
-		r, err := orchestrator.ReviewChunk(ctx, provider,
-			chunk.Files, chunk.Diff,
-			chunk.Index, chunk.Total,
-			chunk.CrossRefs,
-			scopedDeps, repoStructure,
-			prContext,
-			cgService.Graph, wd,
-			matchSummary,
-			remoteGraphs,
-			remoteFetch,
-			devRules,
-			cacheIDs,
-			previousFindings,
-			manifest,
-		)
-		if err != nil {
-			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)
-			continue // Don't abort — review remaining chunks
+	for i, chunk := range chunks {
+		wg.Add(1)
+		sem <- struct{}{} // acquire slot
+		go func(idx int, ch chunker.Chunk) {
+			defer wg.Done()
+			defer func() { <-sem }() // release slot
+
+			scopedDeps := scopeDependencies(dependencies, ch, cgService)
+			r, err := orchestrator.ReviewChunk(ctx, provider, flashProvider,
+				ch.Files, ch.Diff,
+				ch.Index, ch.Total,
+				ch.CrossRefs,
+				scopedDeps, repoStructure,
+				prContext,
+				cgService.Graph, wd,
+				matchSummary,
+				remoteGraphs,
+				remoteFetch,
+				devRules,
+				cacheIDs,
+				previousFindings,
+				manifest,
+			)
+			if err != nil {
+				fmt.Printf("❌ Chunk %d/%d review failed: %v\n", ch.Index, ch.Total, err)
+				return
+			}
+			rawResults[idx] = r
+		}(i, chunk)
+	}
+	wg.Wait()
+
+	// Collect non-nil results (preserving chunk order)
+	var results []*models.ReviewResult
+	for _, r := range rawResults {
+		if r != nil {
+			results = append(results, r)
 		}
-		results = append(results, r)
 	}
 
 	if len(results) == 0 {
@@ -582,6 +630,7 @@ func run() int {
 
 	// End-of-run cost log (includes all LLM calls + Gemini cache pricing).
 	if costLedger != nil {
+		costLedger.Merge(flashCostLedger)
 		costLedger.PrintSummary("💰 [LLM Cost]")
 	}
 	return 0
@@ -607,6 +656,19 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func resolveSCMValue(provider, explicit, githubValue, gitlabValue string) string {
+	if strings.TrimSpace(explicit) != "" {
+		return explicit
+	}
+
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "gitlab":
+		return firstNonEmpty(gitlabValue, githubValue)
+	default:
+		return firstNonEmpty(githubValue, gitlabValue)
+	}
 }
 
 func providerDisplayName(provider string) string {

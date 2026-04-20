@@ -6,6 +6,7 @@ import (
 	"code-review/backend/internal/rules"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -13,7 +14,12 @@ import (
 	"time"
 )
 
-const maxToolIterations = 5
+const maxToolIterations = 3
+const minCacheableContextChars = 135000
+
+// maxIterationTimeout is the per-LLM-call deadline. Gemini can stall for 400s+
+// on large contexts — this caps the worst case per iteration.
+const maxIterationTimeout = 120 * time.Second
 
 // responseSchema is the JSON schema enforced on Gemini's output.
 // Using responseMimeType + responseSchema guarantees valid JSON.
@@ -89,14 +95,20 @@ func RunAgentReview(
 
 	result := agents.AgentResult{Agent: config.Type}
 
-	// 1. Build the heavy, static context (to be cached)
+	// 1. Build the review context.
 	staticContext := buildStaticContext(config)
+	dynamicPrompt := buildDynamicPrompt(config)
+	fullPrompt := dynamicPrompt
+	if staticContext != "" {
+		fullPrompt = staticContext + "\n\n" + dynamicPrompt
+	}
 
 	fmt.Printf("🤖 [%s] Starting review (%d files, %d deps)\n",
 		config.Type, len(config.ChangedFiles), len(config.Dependencies))
 
 	// Create the cache for this agent's specific context
 	cacheName := config.CacheID
+	cacheContainsFullPrompt := false
 	var err error
 
 	var tools []ToolDeclaration
@@ -104,9 +116,26 @@ func RunAgentReview(
 		tools = AgentToolDeclarations()
 	}
 
-	// Only bother caching if the context is substantial enough (> 135,000 chars is roughly 33,000 tokens)
-	// Gemini API requires a minimum of 32,768 tokens for Context Caching.
-	if cacheName == "" && len(staticContext) > 135000 {
+	// Prefer caching the FULL immutable review context so repeated tool turns do not
+	// resend the giant changed-file prompt every time. This is the dominant runtime
+	// cost on large single-chunk Gemini reviews.
+	if cacheName == "" && len(fullPrompt) > minCacheableContextChars {
+		fmt.Printf("  📦 [%s] Creating Full Review Cache (~%d tokens)...\n", config.Type, len(fullPrompt)/4)
+		cacheStart := time.Now()
+
+		cacheName, err = provider.CreateCache(ctx, config.SystemPrompt, fullPrompt, tools)
+		if err != nil {
+			fmt.Printf("  ⚠️ [%s] Failed to create full review cache, falling back: %v\n", config.Type, err)
+		} else if cacheName != "" {
+			cacheContainsFullPrompt = true
+			fmt.Printf("  ✅ [%s] Cache created in %.1fs: %s\n", config.Type, time.Since(cacheStart).Seconds(), cacheName)
+			defer provider.DeleteCache(context.Background(), cacheName)
+		}
+	}
+
+	// Fallback: cache only the background context if no full cache was created and the
+	// static section alone is large enough to benefit.
+	if cacheName == "" && len(staticContext) > minCacheableContextChars {
 		fmt.Printf("  📦 [%s] Creating Context Cache (~%d tokens)...\n", config.Type, len(staticContext)/4)
 		cacheStart := time.Now()
 
@@ -121,29 +150,29 @@ func RunAgentReview(
 		}
 	}
 
-	// 2. Build the lightweight, dynamic prompt
-	dynamicPrompt := buildDynamicPrompt(config)
-
-	// If caching failed or skipped, we must inline the static context into the dynamic prompt
-	if cacheName == "" {
-		dynamicPrompt = staticContext + "\n\n" + dynamicPrompt
+	initialPrompt := dynamicPrompt
+	switch {
+	case cacheContainsFullPrompt:
+		initialPrompt = buildCachedReviewInstruction()
+	case cacheName == "":
+		initialPrompt = fullPrompt
 	}
 
 	fmt.Printf("  📏 [%s] Prompt size: %d chars (~%d tokens)\n",
-		config.Type, len(dynamicPrompt), len(dynamicPrompt)/4)
+		config.Type, len(initialPrompt), len(initialPrompt)/4)
 
 	// Build the initial request messages
 	messages := []Message{
 		{
 			Role: "user",
 			Parts: []Part{
-				{Text: dynamicPrompt},
+				{Text: initialPrompt},
 			},
 		},
 	}
 
 	// Agentic loop: send → maybe tool call → send result → repeat
-	for iteration := 0; iteration <= maxToolIterations; iteration++ {
+	for iteration := 0; iteration < maxToolIterations+1; iteration++ {
 		req := GenerateRequest{
 			SystemPrompt:  config.SystemPrompt,
 			Messages:      messages,
@@ -154,10 +183,20 @@ func RunAgentReview(
 		}
 
 		start := time.Now()
-		resp, err := provider.GenerateContent(ctx, req)
+		iterCtx, iterCancel := context.WithTimeout(ctx, maxIterationTimeout)
+		resp, err := provider.GenerateContent(iterCtx, req)
+		iterCancel()
 		elapsed := time.Since(start)
 
 		if err != nil {
+			if isTimeoutError(err) {
+				fmt.Printf("  ⏱️ [%s] Iteration %d timed out after %.1fs — stopping agent loop\n",
+					config.Type, iteration+1, elapsed.Seconds())
+				// Return whatever we have so far rather than a hard error
+				if len(result.Comments) > 0 {
+					return result
+				}
+			}
 			result.Error = fmt.Errorf("LLM API error: %w", err)
 			return result
 		}
@@ -198,7 +237,7 @@ func RunAgentReview(
 				Parts: modelParts,
 			})
 
-			fmt.Printf("  🔧 [%s] Executing %d parallel tool calls [iter %d, %.1fs]\n",
+			fmt.Printf("  🔧 [%s] Model requested %d tool calls [iter %d after %.1fs]\n",
 				config.Type, len(resp.FunctionCalls), iteration+1, elapsed.Seconds())
 
 			var wg sync.WaitGroup
@@ -216,6 +255,7 @@ func RunAgentReview(
 					}
 
 					fmt.Printf("     ├── Call %d: %s(%v)\n", idx+1, call.Name, call.Args)
+					toolStart := time.Now()
 					var content string
 					if toolExecutor != nil {
 						res := toolExecutor.Execute(ctx, req)
@@ -223,7 +263,7 @@ func RunAgentReview(
 					} else {
 						content = "Error: Tool execution is not available in this context."
 					}
-					fmt.Printf("     └── Resp %d: %s (%d chars)\n", idx+1, call.Name, len(content))
+					fmt.Printf("     └── Resp %d: %s (%d chars, %.3fs)\n", idx+1, call.Name, len(content), time.Since(toolStart).Seconds())
 
 					funcParts[idx] = Part{
 						FunctionResp: &FunctionResponse{
@@ -396,7 +436,7 @@ func buildDynamicPrompt(config agents.AgentConfig) string {
 			focused := extractDiffWithContext(content, diffSections, 40)
 			b.WriteString(focused)
 		} else {
-			// Fallback: If no diff sections matched, show the first 100 lines 
+			// Fallback: If no diff sections matched, show the first 100 lines
 			lines := strings.Split(content, "\n")
 			limit := 100
 			if len(lines) < limit {
@@ -474,6 +514,26 @@ func parseAgentResponse(text string) models.ReviewResult {
 		}
 	}
 	return result
+}
+
+func buildCachedReviewInstruction() string {
+	return strings.TrimSpace(`Review the cached code changes now and return the final JSON result.
+Use tools only when a specific missing symbol, caller, or file is essential to verify a concrete defect.
+Avoid exploratory searches and do not repeat tool calls unless the previous response explicitly requires a new target.`)
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "deadline_exceeded") ||
+		strings.Contains(msg, "deadline expired") ||
+		strings.Contains(msg, "context deadline exceeded")
 }
 
 // grepLinePattern matches: file/path.go:42: severity: message

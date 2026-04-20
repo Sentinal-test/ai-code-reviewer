@@ -59,9 +59,11 @@ func filterReviewableFiles(files map[string]string, manifest *CoverageManifest) 
 
 // ReviewChunk runs 3 specialist agents in parallel on a single chunk,
 // then consolidates their results using LLM-based consolidation.
+// consolidationProvider, if non-nil, is used for the consolidation step instead of provider.
 func ReviewChunk(
 	ctx context.Context,
 	provider llm.LLMProvider,
+	consolidationProvider llm.LLMProvider,
 	chunkFiles map[string]string,
 	chunkDiff string,
 	chunkIndex, chunkTotal int,
@@ -221,8 +223,14 @@ func ReviewChunk(
 		consolidatorTe.WithMultiRepo(matchSummary, remoteGraphs, remoteFetch)
 	}
 
+	// Use the dedicated consolidation provider (e.g. flash) when provided, else fall back to main provider
+	consProvider := provider
+	if consolidationProvider != nil {
+		consProvider = consolidationProvider
+	}
+
 	// LLM-based consolidation with tool access (falls back to deterministic on failure)
-	consolidated := llm.RunConsolidation(ctx, provider, results, chunkDiff, agents.DefaultMaxComments, matchSummary, consolidatorTe)
+	consolidated := llm.RunConsolidation(ctx, consProvider, results, chunkDiff, agents.DefaultMaxComments, matchSummary, consolidatorTe)
 
 	// Mark the remaining files in this chunk as reviewed
 	if manifest != nil {

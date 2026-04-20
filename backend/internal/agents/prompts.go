@@ -55,6 +55,22 @@ MANDATORY REVIEW RULES
 8. DEDUP:
   ✓ If the exact same issue repeats in the same block/file, report it once on the first relevant line.
   ✗ Do not emit duplicate comments for the same underlying defect.
+
+9. TOOL CALL DISCIPLINE (STRICTLY ENFORCED):
+  You have a hard limit of 3 tool call iterations. Treat them as scarce. Every wasted
+  call means less budget for the calls that actually matter.
+
+  ✗ Do NOT fetch files already visible in the ACTIONABLE TARGET section above.
+  ✗ Do NOT call search_codebase with vague natural-language strings (e.g. "no merge base",
+    "initErr != nil", "error handling"). Only search for specific symbol/identifier names.
+  ✗ Do NOT call get_symbol_definition for tiny structs/types you can infer from context.
+  ✗ Do NOT fetch the same symbol or file twice.
+
+  ✓ Use get_callers when a function signature changed — this is the highest-value call.
+  ✓ Use get_symbol_definition only if you cannot determine a type/signature from context.
+  ✓ Use get_file_content only for files NOT shown in the diff context.
+  ✓ If your tool calls didn't resolve the uncertainty, report based on what you can see
+    and stop calling more tools. Inconclusive evidence = skip the finding.
 `
 
 // CorrectnessSystemPrompt is the system prompt for the Bugs + Performance agent.
@@ -210,12 +226,18 @@ For each changed function or block:
   6. CHECK DEPENDENCIES: If a function signature or behavior changed, USE get_callers to
      verify nothing breaks. This is CRITICAL for catching silent breakage across files.
 
-TOOL USAGE:
-  - See a function call you're unsure about → USE get_symbol_definition
-  - See a changed function signature → USE get_callers to check for breakage
-  - Need to understand error handling upstream → USE get_file_content
-  - Need to check how a value flows through code → USE search_codebase
-  - Need to discover test files or understand module structure → USE list_directory
+TOOL USAGE (MAX 2 CALLS — spend them wisely):
+  BEST USES (highest value):
+  - Changed function/method signature → get_callers to find broken callers across repo
+  - Unknown type or struct you cannot infer → get_symbol_definition (one call only)
+
+  AVOID:
+  - get_file_content on any file already shown in the ACTIONABLE TARGET section
+  - search_codebase for error message strings, variable names, or phrases you already see
+  - Any tool call where you already have enough context to make the determination
+  - Calling the same tool twice on the same symbol/path
+
+  If you exhaust your iterations without conclusive evidence → skip the finding.
 
 DO NOT REVIEW: Security vulnerabilities, code style, architecture, package structure.
 Those are handled by other specialist reviewers running in parallel.
@@ -336,11 +358,18 @@ For each changed function or block:
   6. CHECK MULTI-TENANCY: If the code handles data for multiple users/orgs/tenants,
      verify there is a proper isolation check (tenant_id, org_id) and not just user_id.
 
-TOOL USAGE:
-  - See a function handling user input → USE get_symbol_definition to trace where input goes
-  - See an auth check → USE get_callers to verify it's not bypassed elsewhere
-  - See a string that looks like a credential → USE search_codebase to find other exposures
-  - See an HTTP handler/route → USE get_file_content to check middleware/auth setup
+TOOL USAGE (MAX 2 CALLS — spend them wisely):
+  BEST USES (highest value):
+  - Suspected auth bypass → get_callers to verify middleware/guard is NOT applied
+  - Suspected credential exposure → search_codebase with the exact credential variable name
+  - Unknown HTTP handler/auth setup → get_file_content on the router/middleware file (NOT files in context)
+
+  AVOID:
+  - get_file_content on any file already shown in the ACTIONABLE TARGET section
+  - search_codebase for generic phrases or variable names you can already see in context
+  - Chasing a suspicion through 3+ tool calls — if 1-2 calls don't confirm it, skip the finding
+
+  If you exhaust your iterations without conclusive evidence → skip the finding.
 
 DO NOT REVIEW: Business logic bugs, performance, code style, architecture.
 Those are handled by other specialist reviewers running in parallel.
@@ -471,12 +500,19 @@ For each changed file:
   6. ORGANIZATION: Is this the right file/module for this code? Does the file do too
      many unrelated things?
 
-TOOL USAGE:
-  - Changed or renamed an export → USE get_callers to check for breakage
-  - Want to verify a pattern → USE search_codebase to find precedent in codebase
-  - Need to understand file organization → USE get_file_content on related files
-  - Checking if something is dead code → USE get_callers to verify zero references
-  - Need to verify file organization or discover related modules/tests → USE list_directory
+TOOL USAGE (MAX 2 CALLS — spend them wisely):
+  BEST USES (highest value):
+  - Changed or renamed an exported symbol → get_callers to check for breakage (highest ROI)
+  - Suspect duplicated logic → search_codebase for the specific function/type name
+  - Need file organization context → list_directory or get_file_content on ONE related file
+
+  AVOID:
+  - get_file_content on any file already shown in the ACTIONABLE TARGET section
+  - search_codebase for generic phrases — only search for specific identifier names
+  - Reading multiple files to "understand the project" — use the repo structure tree provided
+  - Calling tools when the repo structure tree already answers the question
+
+  If you exhaust your iterations without conclusive evidence → skip the finding.
 
 DO NOT REVIEW: Runtime bugs, security vulnerabilities, performance issues.
 Those are handled by other specialist reviewers running in parallel.
@@ -495,11 +531,12 @@ You are equipped with tools to verify the findings. YOU MUST NOT TRUST THE AGENT
 CONSOLIDATION RULES:
 1. DEDUPLICATE (SEMANTIC): The 3 agents often flag the EXACT SAME issue using different words. If multiple comments highlight the CONCEPTUALLY SAME bug/vulnerability on the same line or block, MERGE them into ONE single comment. Pick the best description and highest severity. Do NOT output two comments about the same underlying issue.
 2. GROUP LINES: If the same issue appears on multiple lines in the same file, merge them into ONE comment on the first affected line. Start your message with "Lines X, Y, Z: ...".
-3. TOOL VERIFICATION (OPTIONAL): You have access to tools to verify the agents' claims. Use them if you are unsure about a finding, suspect a hallucination, or need to confirm details (e.g., line numbers, symbols, or callers). 
-   - 'get_file_content' can confirm the code at reported line numbers.
-   - 'get_symbol_definition' can verify claims about signatures or fields.
-   - 'get_callers' can verify claims about impact.
-   - You should drop any findings that you determine are incorrect or false positives after your verification.
+3. TOOL VERIFICATION (USE SPARINGLY — MAX 1 CALL): You have tools to spot-check agent findings.
+   Use ONE tool call only if you strongly suspect a hallucinated line number or a false positive.
+   - 'get_file_content' to confirm a reported line number exists in the diff.
+   - 'get_symbol_definition' to verify a claimed signature.
+   Do NOT use tools to explore or investigate — your job is to consolidate, not re-review.
+   Drop findings that you determine are incorrect after your single verification call.
 4. CRITICAL DIFF VALIDATION: Cross-reference findings with the provided TARGET DIFF. Drop any comment where the line number does not exist inside a [NEW_LIVE_CODE] block in the diff.
 5. BE EXTREMELY CONCISE: Keep messages strictly under 3-4 sentences. The total output JSON must not exceed token limits.
 6. REMOVE false positives, vague/speculative comments, or feedback that asks questions instead of providing a fix.

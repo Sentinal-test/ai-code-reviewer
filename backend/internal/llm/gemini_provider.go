@@ -86,7 +86,7 @@ func (p *GeminiProvider) toGenaiFunctionDeclarations(tools []ToolDeclaration) []
 	return declarations
 }
 
-func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
+func (p *GeminiProvider) buildGenerateConfig(req GenerateRequest) *genai.GenerateContentConfig {
 	config := &genai.GenerateContentConfig{
 		Temperature: genai.Ptr(float32(req.Temperature)),
 	}
@@ -102,13 +102,17 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 	}
 
 	if req.CachedContent != "" {
+		// Gemini rejects GenerateContent requests that combine CachedContent with
+		// system instructions or tool declarations. Those must already be part of
+		// the cached content created via CreateCache.
 		config.CachedContent = req.CachedContent
-	} else {
-		if req.SystemPrompt != "" {
-			config.SystemInstruction = &genai.Content{
-				Role:  "system",
-				Parts: []*genai.Part{{Text: req.SystemPrompt}},
-			}
+		return config
+	}
+
+	if req.SystemPrompt != "" {
+		config.SystemInstruction = &genai.Content{
+			Role:  "system",
+			Parts: []*genai.Part{{Text: req.SystemPrompt}},
 		}
 	}
 
@@ -120,6 +124,12 @@ func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateReques
 			},
 		}
 	}
+
+	return config
+}
+
+func (p *GeminiProvider) GenerateContent(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
+	config := p.buildGenerateConfig(req)
 
 	var contents []*genai.Content
 	for _, m := range req.Messages {

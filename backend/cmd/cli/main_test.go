@@ -53,3 +53,51 @@ func TestDetectSCMProvider(t *testing.T) {
 		t.Fatalf("expected explicit flag to win, got %s", got)
 	}
 }
+
+func TestResolveSCMValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		explicit string
+		github   string
+		gitlab   string
+		want     string
+	}{
+		{
+			name:     "explicit wins",
+			provider: "gitlab",
+			explicit: "manual-token",
+			github:   "github-token",
+			gitlab:   "gitlab-token",
+			want:     "manual-token",
+		},
+		{
+			name:     "gitlab prefers gitlab env",
+			provider: "gitlab",
+			github:   "github-token",
+			gitlab:   "gitlab-token",
+			want:     "gitlab-token",
+		},
+		{
+			name:     "github prefers github env",
+			provider: "github",
+			github:   "github-token",
+			gitlab:   "gitlab-token",
+			want:     "github-token",
+		},
+		{
+			name:     "gitlab falls back to github env",
+			provider: "gitlab",
+			github:   "github-token",
+			want:     "github-token",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveSCMValue(tt.provider, tt.explicit, tt.github, tt.gitlab); got != tt.want {
+				t.Fatalf("resolveSCMValue(%q) = %q, want %q", tt.provider, got, tt.want)
+			}
+		})
+	}
+}

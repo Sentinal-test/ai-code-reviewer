@@ -46,8 +46,10 @@ ai_code_review:
         fi
       fi
   script:
-    - echo "🏗️ Building AI Reviewer from trusted branch..."
-    # Build from origin/main to prevent MR branches from executing arbitrary code with CI secrets.
+    - echo "🏗️ Building AI Reviewer from origin/main..."
+    # This keeps the reviewer binary pinned to the default branch, but it is NOT a
+    # security boundary for MR pipelines. If this job exposes unprotected secrets,
+    # a modified .gitlab-ci.yml in the MR can still run arbitrary commands with them.
     - git fetch origin main --depth=1
     - git checkout origin/main -- backend/
     - cd backend

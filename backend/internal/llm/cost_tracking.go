@@ -128,6 +128,80 @@ func (l *UsageLedger) TotalsUSD() float64 {
 	return l.cacheStorageCostUSD + l.cacheReadCostUSD + l.nonCachedInputCostUSD + l.outputCostUSD
 }
 
+// Merge folds another ledger into this one so a single end-of-run summary can
+// include usage from multiple providers/models, such as flash consolidation.
+func (l *UsageLedger) Merge(other *UsageLedger) {
+	if l == nil || other == nil || l == other {
+		return
+	}
+
+	other.mu.Lock()
+	snapshot := struct {
+		provider              string
+		model                 string
+		generateCalls         int
+		inputTokens           int
+		outputTokens          int
+		cachedTokens          int
+		toolTokens            int
+		thoughtTokens         int
+		cacheCreates          int
+		cacheDeletes          int
+		cacheStoredTokens     int
+		cacheStorageHours     float64
+		cacheStorageCostUSD   float64
+		cacheReadCostUSD      float64
+		nonCachedInputCostUSD float64
+		outputCostUSD         float64
+		unknownPricing        bool
+		cacheStoragePrice     float64
+	}{
+		provider:              other.provider,
+		model:                 other.model,
+		generateCalls:         other.generateCalls,
+		inputTokens:           other.inputTokens,
+		outputTokens:          other.outputTokens,
+		cachedTokens:          other.cachedTokens,
+		toolTokens:            other.toolTokens,
+		thoughtTokens:         other.thoughtTokens,
+		cacheCreates:          other.cacheCreates,
+		cacheDeletes:          other.cacheDeletes,
+		cacheStoredTokens:     other.cacheStoredTokens,
+		cacheStorageHours:     other.cacheStorageHours,
+		cacheStorageCostUSD:   other.cacheStorageCostUSD,
+		cacheReadCostUSD:      other.cacheReadCostUSD,
+		nonCachedInputCostUSD: other.nonCachedInputCostUSD,
+		outputCostUSD:         other.outputCostUSD,
+		unknownPricing:        other.unknownPricing,
+		cacheStoragePrice:     other.pricing.CacheStoragePer1MTokenHour,
+	}
+	other.mu.Unlock()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.provider = mergeUsageLabel(l.provider, snapshot.provider)
+	l.model = mergeUsageLabel(l.model, snapshot.model)
+	l.generateCalls += snapshot.generateCalls
+	l.inputTokens += snapshot.inputTokens
+	l.outputTokens += snapshot.outputTokens
+	l.cachedTokens += snapshot.cachedTokens
+	l.toolTokens += snapshot.toolTokens
+	l.thoughtTokens += snapshot.thoughtTokens
+	l.cacheCreates += snapshot.cacheCreates
+	l.cacheDeletes += snapshot.cacheDeletes
+	l.cacheStoredTokens += snapshot.cacheStoredTokens
+	l.cacheStorageHours += snapshot.cacheStorageHours
+	l.cacheStorageCostUSD += snapshot.cacheStorageCostUSD
+	l.cacheReadCostUSD += snapshot.cacheReadCostUSD
+	l.nonCachedInputCostUSD += snapshot.nonCachedInputCostUSD
+	l.outputCostUSD += snapshot.outputCostUSD
+	l.unknownPricing = l.unknownPricing || snapshot.unknownPricing
+	if l.pricing.CacheStoragePer1MTokenHour <= 0 && snapshot.cacheStoragePrice > 0 {
+		l.pricing.CacheStoragePer1MTokenHour = snapshot.cacheStoragePrice
+	}
+}
+
 func (l *UsageLedger) PrintSummary(prefix string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -265,6 +339,15 @@ func defaultPricing(providerName, model string) modelPricing {
 				},
 				CacheStoragePer1MTokenHour: 4.50,
 			}
+		case "gemini-3-flash-preview":
+			return modelPricing{
+				Provider: providerName,
+				Model:    model,
+				Tiers: []pricingTier{
+					{PromptTokenThreshold: int(^uint(0) >> 1), InputPer1M: 0.50, OutputPer1M: 3.00, CachedInputPer1M: 0.05},
+				},
+				CacheStoragePer1MTokenHour: 1.00,
+			}
 		case "gemini-2.5-pro":
 			return modelPricing{
 				Provider: providerName,
@@ -382,4 +465,32 @@ func safeStr(s, fallback string) string {
 		return fallback
 	}
 	return s
+}
+
+func mergeUsageLabel(existing, next string) string {
+	existing = strings.TrimSpace(existing)
+	next = strings.TrimSpace(next)
+	if existing == "" {
+		return next
+	}
+	if next == "" || existing == next {
+		return existing
+	}
+
+	seen := map[string]struct{}{}
+	var parts []string
+	for _, chunk := range []string{existing, next} {
+		for _, part := range strings.Split(chunk, ",") {
+			label := strings.TrimSpace(part)
+			if label == "" {
+				continue
+			}
+			if _, ok := seen[label]; ok {
+				continue
+			}
+			seen[label] = struct{}{}
+			parts = append(parts, label)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
