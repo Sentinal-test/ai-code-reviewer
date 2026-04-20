@@ -34,13 +34,21 @@ func AgentToolDeclarations() []ToolDeclaration {
 		},
 		{
 			Name:        "get_file_content",
-			Description: "Get the full content of a file from the repository. Use this to inspect files not included in the diff.",
+			Description: "Get content from a file in the repository. Prefer requesting a narrow line range with start_line/end_line instead of the full file.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"path": map[string]interface{}{
 						"type":        "string",
 						"description": "Relative path to the file (e.g. 'internal/llm/llm.go')",
+					},
+					"start_line": map[string]interface{}{
+						"type":        "integer",
+						"description": "Optional 1-indexed starting line. Use this to fetch only the relevant section.",
+					},
+					"end_line": map[string]interface{}{
+						"type":        "integer",
+						"description": "Optional 1-indexed ending line. Use this with start_line to avoid loading the full file.",
 					},
 				},
 				"required": []string{"path"},
@@ -357,14 +365,28 @@ func (te *ToolExecutor) getFileContent(args map[string]interface{}) agents.ToolC
 			return agents.ToolCallResponse{Name: "get_file_content", Content: "Error: start_line cannot be greater than end_line"}
 		}
 
-		content = strings.Join(lines[start-1:end], "\n")
-		return agents.ToolCallResponse{Name: "get_file_content", Content: content}
+		const maxWindowLines = 400
+		if end-start+1 > maxWindowLines {
+			end = start + maxWindowLines - 1
+			if end > len(lines) {
+				end = len(lines)
+			}
+		}
+
+		var b strings.Builder
+		for i := start - 1; i < end; i++ {
+			b.WriteString(fmt.Sprintf("%d: %s\n", i+1, lines[i]))
+		}
+		if hasEnd && int(endLineF) > end {
+			b.WriteString(fmt.Sprintf("... (truncated to %d lines; request a smaller window)\n", maxWindowLines))
+		}
+		return agents.ToolCallResponse{Name: "get_file_content", Content: strings.TrimRight(b.String(), "\n")}
 	}
 
 	// Cap full file content to prevent massive responses
-	const maxChars = 40000 // Increased from 20000
+	const maxChars = 12000
 	if len(content) > maxChars {
-		content = content[:maxChars] + "\n... (truncated at 40K chars. Use start_line/end_line to read specific sections.)"
+		content = content[:maxChars] + "\n... (truncated at 12K chars. Use start_line/end_line to read specific sections.)"
 	}
 
 	return agents.ToolCallResponse{Name: "get_file_content", Content: content}

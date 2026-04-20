@@ -40,3 +40,18 @@ func TestUsageLedgerMerge(t *testing.T) {
 		t.Fatalf("expected merged model list to include both models, got %q", main.model)
 	}
 }
+
+func TestDefaultPricingGemini3FlashPreview(t *testing.T) {
+	pricing := defaultPricing("gemini", "gemini-3-flash-preview")
+
+	if len(pricing.Tiers) != 1 {
+		t.Fatalf("expected one pricing tier, got %d", len(pricing.Tiers))
+	}
+	tier := pricing.Tiers[0]
+	if tier.InputPer1M != 0.50 || tier.OutputPer1M != 3.00 || tier.CachedInputPer1M != 0.05 {
+		t.Fatalf("unexpected pricing tier: %+v", tier)
+	}
+	if pricing.CacheStoragePer1MTokenHour != 1.00 {
+		t.Fatalf("expected cache storage price 1.00, got %.2f", pricing.CacheStoragePer1MTokenHour)
+	}
+}
