@@ -433,6 +433,7 @@ func runReviewByApproach(
 			r, err := orchestrator.ReviewChunk(
 				ctx,
 				provider,
+				nil, // no dedicated consolidation provider in benchmarks
 				chunk.Files,
 				chunk.Diff,
 				chunk.Index,

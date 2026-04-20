@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -374,6 +375,7 @@ func run() int {
 	ctx := context.Background()
 
 	var provider llm.LLMProvider
+	var flashProvider llm.LLMProvider // faster model used only for consolidation
 	var initErr error
 	var costLedger *llm.UsageLedger
 
@@ -392,6 +394,10 @@ func run() int {
 		provider = llm.NewClaudeProvider(key, "")
 	default:
 		provider, initErr = llm.NewGeminiProvider(apiKey, "")
+		if initErr == nil {
+			// Use gemini-2.5-flash for consolidation — same API key, faster + cheaper
+			flashProvider, _ = llm.NewGeminiProvider(apiKey, llm.GeminiFlashModel)
+		}
 	}
 
 	if initErr != nil || provider == nil {
@@ -506,33 +512,51 @@ func run() int {
 		}
 	}
 
-	var results []*models.ReviewResult
+	// Run chunks in parallel — bounded to 3 concurrent to respect provider rate limits.
+	const maxParallelChunks = 3
+	rawResults := make([]*models.ReviewResult, len(chunks))
 	manifest := orchestrator.NewCoverageManifest()
-	for _, chunk := range chunks {
-		// Scope dependencies to this chunk's files
-		scopedDeps := scopeDependencies(dependencies, chunk, cgService)
+	sem := make(chan struct{}, maxParallelChunks)
+	var wg sync.WaitGroup
 
-		// Multi-agent review: 3 specialist agents in parallel per chunk
-		r, err := orchestrator.ReviewChunk(ctx, provider,
-			chunk.Files, chunk.Diff,
-			chunk.Index, chunk.Total,
-			chunk.CrossRefs,
-			scopedDeps, repoStructure,
-			prContext,
-			cgService.Graph, wd,
-			matchSummary,
-			remoteGraphs,
-			remoteFetch,
-			devRules,
-			cacheIDs,
-			previousFindings,
-			manifest,
-		)
-		if err != nil {
-			fmt.Printf("❌ Chunk %d/%d review failed: %v\n", chunk.Index, chunk.Total, err)
-			continue // Don't abort — review remaining chunks
+	for i, chunk := range chunks {
+		wg.Add(1)
+		sem <- struct{}{} // acquire slot
+		go func(idx int, ch chunker.Chunk) {
+			defer wg.Done()
+			defer func() { <-sem }() // release slot
+
+			scopedDeps := scopeDependencies(dependencies, ch, cgService)
+			r, err := orchestrator.ReviewChunk(ctx, provider, flashProvider,
+				ch.Files, ch.Diff,
+				ch.Index, ch.Total,
+				ch.CrossRefs,
+				scopedDeps, repoStructure,
+				prContext,
+				cgService.Graph, wd,
+				matchSummary,
+				remoteGraphs,
+				remoteFetch,
+				devRules,
+				cacheIDs,
+				previousFindings,
+				manifest,
+			)
+			if err != nil {
+				fmt.Printf("❌ Chunk %d/%d review failed: %v\n", ch.Index, ch.Total, err)
+				return
+			}
+			rawResults[idx] = r
+		}(i, chunk)
+	}
+	wg.Wait()
+
+	// Collect non-nil results (preserving chunk order)
+	var results []*models.ReviewResult
+	for _, r := range rawResults {
+		if r != nil {
+			results = append(results, r)
 		}
-		results = append(results, r)
 	}
 
 	if len(results) == 0 {

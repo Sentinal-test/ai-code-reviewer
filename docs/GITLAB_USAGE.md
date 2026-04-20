@@ -36,7 +36,7 @@ You need an API key from at least one provider:
 
 The reviewer needs a token with **`api`** scope to post comments on merge requests.
 
-**Option A: Project Access Token** (single project)
+**Option A: Project Access Token** (single project, any plan)
 1. Go to your project → **Settings → Access Tokens**
 2. Click **Add new token**
 3. Name: `ai-code-reviewer`
@@ -45,7 +45,21 @@ The reviewer needs a token with **`api`** scope to post comments on merge reques
 6. Click **Create project access token**
 7. **Copy the token immediately** (you won't see it again)
 
-**Option B: Group Access Token** (organization-wide — recommended)
+**Option B: Service Account PAT** (organization-wide — recommended, free tier)
+
+A service account is a dedicated GitLab user for automation. Its Personal Access Token works org-wide when the account is a group member — no Premium plan required.
+
+1. Create a new GitLab account with a dedicated email (e.g. `ai-reviewer-bot@yourcompany.com`)
+2. Log in as your group Owner and go to **your-group → Members**
+3. Invite the service account with **Developer** role — this gives it access to all group projects, including the private `ai-code-reviewer` repo
+4. Log in as the service account and go to **User Settings → Access Tokens**
+5. Click **Add new token**
+6. Name: `ai-reviewer-bot`, Scopes: ✅ **api**, Expiration: up to 1 year (renewable)
+7. **Copy the token immediately** — this becomes your `GITLAB_BOT_TOKEN`
+
+> **Note:** The service account appears as `@ai-reviewer-bot` on MR comments, making reviews clearly identifiable as automated. Its PAT grants access to all group projects via group membership — equivalent to a Group Access Token but available on free plans.
+
+**Option C: Group Access Token** (organization-wide, GitLab Premium only)
 1. Go to your group → **Settings → Access Tokens**
 2. Click **Add new token**
 3. Name: `ai-code-reviewer-bot`
@@ -54,7 +68,7 @@ The reviewer needs a token with **`api`** scope to post comments on merge reques
 6. Click **Create group access token**
 7. **Copy the token immediately**
 
-> **Note:** Group tokens grant access to all projects in the group. This is the GitLab equivalent of a GitHub App installation.
+> **Note:** Group tokens require a GitLab Premium subscription. If you are on the free tier, use Option B (service account) instead.
 
 ### 3. Add CI/CD Variables
 
@@ -124,7 +138,7 @@ ai_code_review:
       fi
     # Clone the reviewer and build
     - git clone --depth=1
-        "https://gitlab-ci-token:${GITLAB_BOT_TOKEN}@gitlab.com/your-group/ai-code-reviewer.git"
+        "https://oauth2:${GITLAB_BOT_TOKEN}@gitlab.com/your-group/ai-code-reviewer.git"
         /tmp/ai-reviewer-src
     - cd /tmp/ai-reviewer-src/backend
     - go build -o /usr/local/bin/ai-reviewer cmd/cli/main.go
@@ -152,6 +166,8 @@ Push a branch, open a merge request, and the review will run automatically!
 
 This is the GitLab equivalent of your GitHub org setup where you have a private repo with the action, added API keys to org secrets, and allow the action to be reused.
 
+> **Free Tier Note:** GitLab Group Access Tokens require a Premium plan. If you are on the free tier, use a **service account** (a dedicated GitLab user) instead — see [Prerequisites → Option B](#2-gitlab-access-token) for setup. Once you have the service account's PAT stored as `GITLAB_BOT_TOKEN`, the rest of this rollout is identical.
+
 ### Architecture
 
 ```
@@ -163,9 +179,29 @@ your-gitlab-group/
 ├── project-a/             ← Any project: 3 lines to enable
 ├── project-b/             ← Any project: 3 lines to enable
 └── project-c/             ← Any project: 3 lines to enable
+
+Service account (@ai-reviewer-bot):
+  • Developer member of the group (accesses all projects above)
+  • PAT stored as group-level GITLAB_BOT_TOKEN variable
 ```
 
-### Step 1: Push the Reviewer Source to Your Group
+### Step 1: Set Up the Service Account (Free Tier) or Group Token (Premium)
+
+**Free Tier — Service Account:**
+
+1. Create a GitLab account for the bot (e.g. `ai-reviewer-bot@yourcompany.com`)
+2. As group Owner: **your-group → Members → Invite Member**
+   - Username: `@ai-reviewer-bot`
+   - Role: **Developer**
+3. Log in as the service account: **User Settings → Access Tokens**
+   - Name: `ai-reviewer-bot`, Scopes: ✅ `api`
+   - Copy the generated token — this is your `GITLAB_BOT_TOKEN`
+
+**Premium — Group Token:**
+
+Go to **your-group → Settings → Access Tokens**, create a token with **Developer** role and `api` scope.
+
+### Step 2: Push the Reviewer Source to Your Group
 
 ```bash
 # Mirror the reviewer into your GitLab group
@@ -175,7 +211,7 @@ git remote add gitlab https://gitlab.com/your-group/ai-code-reviewer.git
 git push gitlab main
 ```
 
-### Step 2: Create the CI Templates Project
+### Step 3: Create the CI Templates Project
 
 Create a new project: `your-group/ci-templates`
 
@@ -205,7 +241,7 @@ Add the file `templates/ai-review.yml`:
         git fetch --prune --unshallow || true
       fi
     - git clone --depth=1 --branch "$AI_REVIEWER_REF"
-        "https://gitlab-ci-token:${GITLAB_BOT_TOKEN}@${CI_SERVER_HOST}/${AI_REVIEWER_REPO}.git"
+        "https://oauth2:${GITLAB_BOT_TOKEN}@${CI_SERVER_HOST}/${AI_REVIEWER_REPO}.git"
         /tmp/ai-reviewer-src
     - cd /tmp/ai-reviewer-src/backend
     - go build -o /usr/local/bin/ai-reviewer cmd/cli/main.go
@@ -224,16 +260,18 @@ Add the file `templates/ai-review.yml`:
         --llm-provider "$LLM_PROVIDER"
 ```
 
-### Step 3: Add Group-Level CI/CD Variables
+### Step 4: Add Group-Level CI/CD Variables
 
 Go to **your-group → Settings → CI/CD → Variables** and add:
 
 | Variable | Value | Masked | Protected |
 |----------|-------|--------|-----------|
-| `GITLAB_BOT_TOKEN` | Group access token | ✅ | ❌ (uncheck to allow all branches) |
+| `GITLAB_BOT_TOKEN` | Service account PAT (free) or Group access token (Premium) | ✅ | ❌ (uncheck to allow all branches) |
 | `GEMINI_API_KEY` | Your Gemini API key | ✅ | ❌ |
 
-### Step 4: Enable in Any Project (3 Lines!)
+> **Why Protected ❌?** Keeping Protected unchecked lets the token be available on all MR branches, not just protected ones. Since the token is masked in logs and scoped to `api`, this is safe.
+
+### Step 5: Enable in Any Project (3 Lines!)
 
 Any project in the group just needs to add this to their `.gitlab-ci.yml`:
 
@@ -252,7 +290,7 @@ ai_code_review:
 
 That's it! Anyone in the group can enable AI reviews by adding these 8 lines. The secrets are inherited from the group level.
 
-### Step 5: Customize Per-Project (Optional)
+### Step 6: Customize Per-Project (Optional)
 
 Projects can customize behavior by overriding variables or adding review rules:
 
