@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // FileCoverageStatus represents what happened to a file during the review process.
@@ -28,6 +29,7 @@ type FileStatus struct {
 // CoverageManifest tracks the review status of all changed files in a PR.
 // It provides an audit trail answering "which hunks were actually reviewed?".
 type CoverageManifest struct {
+	mu    sync.RWMutex
 	Files map[string]*FileStatus
 }
 
@@ -40,6 +42,8 @@ func NewCoverageManifest() *CoverageManifest {
 
 // AddFile registers a file with an initial status.
 func (m *CoverageManifest) AddFile(path string, status FileCoverageStatus, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.Files[path] = &FileStatus{
 		Path:   path,
 		Status: status,
@@ -49,23 +53,43 @@ func (m *CoverageManifest) AddFile(path string, status FileCoverageStatus, reaso
 
 // UpdateStatus changes the status of a previously registered file.
 func (m *CoverageManifest) UpdateStatus(path string, status FileCoverageStatus, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if fs, exists := m.Files[path]; exists {
 		fs.Status = status
 		fs.Reason = reason
 	} else {
-		m.AddFile(path, status, reason)
+		m.Files[path] = &FileStatus{
+			Path:   path,
+			Status: status,
+			Reason: reason,
+		}
 	}
 }
 
 // MarkFiles updates a batch of files with the same status.
 func (m *CoverageManifest) MarkFiles(paths []string, status FileCoverageStatus, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, p := range paths {
-		m.UpdateStatus(p, status, reason)
+		if fs, exists := m.Files[p]; exists {
+			fs.Status = status
+			fs.Reason = reason
+			continue
+		}
+		m.Files[p] = &FileStatus{
+			Path:   p,
+			Status: status,
+			Reason: reason,
+		}
 	}
 }
 
 // GenerateSummary produces a Markdown-formatted coverage string for the PR comment.
 func (m *CoverageManifest) GenerateSummary() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	total := len(m.Files)
 	if total == 0 {
 		return "📊 **Coverage:** No files processed."
@@ -76,7 +100,7 @@ func (m *CoverageManifest) GenerateSummary() string {
 	partial := 0
 	errors := 0
 	pending := 0
-	
+
 	var skippedDetails []string
 
 	paths := make([]string, 0, total)
@@ -135,7 +159,7 @@ func (m *CoverageManifest) GenerateSummary() string {
 			// If it's just 6 or 7, list them all rather than truncating 2
 			limit = len(skippedDetails)
 		}
-		
+
 		b.WriteString("  \n_Skipped:_ ")
 		if len(skippedDetails) > limit {
 			b.WriteString(strings.Join(skippedDetails[:limit], ", "))

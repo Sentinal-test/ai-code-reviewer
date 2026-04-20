@@ -84,10 +84,10 @@ Add these variables:
 
 | Variable | Value | Settings |
 |----------|-------|----------|
-| `GITLAB_BOT_TOKEN` | Your access token | ✅ Mask variable, ✅ Protected (optional) |
-| `GEMINI_API_KEY` | Your Gemini API key | ✅ Mask variable, ✅ Protected (optional) |
+| `GITLAB_BOT_TOKEN` | Your access token | ✅ Mask variable, ✅ Protected recommended |
+| `GEMINI_API_KEY` | Your Gemini API key | ✅ Mask variable, ✅ Protected recommended |
 
-> **Tip:** Setting "Protected" restricts the variable to protected branches only. Uncheck it if you want the reviewer to run on all MR branches.
+> **Security note:** Merge request pipelines execute the `.gitlab-ci.yml` from the source branch. Keep `GITLAB_BOT_TOKEN` and LLM API keys **Protected** unless every MR author is trusted with those secrets. Unprotecting them to run on all branches is convenient, but it is not a safe default for untrusted contributors.
 
 ---
 
@@ -155,6 +155,8 @@ ai_code_review:
         --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
         --head "$CI_COMMIT_SHA"
 ```
+
+> **Important:** Cloning or checking out reviewer code from `main` only pins the reviewer binary. It does **not** stop a merge request from changing the pipeline definition itself. If MR pipelines receive unprotected secrets, the MR can still run arbitrary commands before the reviewer starts. For untrusted contributors, use protected variables or a separately trusted pipeline configuration.
 
 ### Step 3: Create a Merge Request
 
@@ -266,10 +268,10 @@ Go to **your-group → Settings → CI/CD → Variables** and add:
 
 | Variable | Value | Masked | Protected |
 |----------|-------|--------|-----------|
-| `GITLAB_BOT_TOKEN` | Service account PAT (free) or Group access token (Premium) | ✅ | ❌ (uncheck to allow all branches) |
-| `GEMINI_API_KEY` | Your Gemini API key | ✅ | ❌ |
+| `GITLAB_BOT_TOKEN` | Service account PAT (free) or Group access token (Premium) | ✅ | ✅ Recommended |
+| `GEMINI_API_KEY` | Your Gemini API key | ✅ | ✅ Recommended |
 
-> **Why Protected ❌?** Keeping Protected unchecked lets the token be available on all MR branches, not just protected ones. Since the token is masked in logs and scoped to `api`, this is safe.
+> **Why Protected ✅?** Masking only hides values in logs. It does not stop a merge request pipeline from executing code that uses those secrets. If you need reviews on untrusted MRs, move the secret-bearing logic to a trusted pipeline definition or accept that unprotected variables give MR authors code execution with those credentials.
 
 ### Step 5: Enable in Any Project (3 Lines!)
 
@@ -466,6 +468,7 @@ When running in GitLab CI:
 - ✅ **Token scope is minimal** — only `api` for posting comments
 - ✅ **Secrets are masked** — GitLab masks CI/CD variables in logs
 - ✅ **Same review engine** — identical accuracy to the GitHub version
+- ⚠️ **Pipeline config is still code** — if MR pipelines can access unprotected secrets, the MR author can change `.gitlab-ci.yml` to use them. Treat Protected variables or a trusted external pipeline definition as the real security boundary.
 
 ---
 
@@ -494,6 +497,8 @@ The reviewer automatically falls back to a general MR note in this case.
 ### "gitlab api ... failed (HTTP 401)"
 
 Your `GITLAB_BOT_TOKEN` is missing, expired, or doesn't have the `api` scope.
+
+If both GitHub and GitLab tokens exist in the environment, upgrade to a build that resolves SCM-specific env vars correctly. Older builds could prefer `GITHUB_TOKEN` first and send the wrong token to GitLab.
 
 ### "gitlab api ... failed (HTTP 403)"
 

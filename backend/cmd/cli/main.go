@@ -398,6 +398,7 @@ func run() int {
 	var flashProvider llm.LLMProvider // faster model used only for consolidation
 	var initErr error
 	var costLedger *llm.UsageLedger
+	var flashCostLedger *llm.UsageLedger
 
 	switch llmProvider {
 	case "openai":
@@ -427,6 +428,9 @@ func run() int {
 
 	// Instrument provider to track actual token usage + cost.
 	provider, costLedger = llm.WrapWithCostTracking(provider)
+	if flashProvider != nil {
+		flashProvider, flashCostLedger = llm.WrapWithCostTracking(flashProvider)
+	}
 
 	// Get graph edges for smart chunk grouping
 	var graphEdges []codegraph.Edge
@@ -626,6 +630,7 @@ func run() int {
 
 	// End-of-run cost log (includes all LLM calls + Gemini cache pricing).
 	if costLedger != nil {
+		costLedger.Merge(flashCostLedger)
 		costLedger.PrintSummary("💰 [LLM Cost]")
 	}
 	return 0
