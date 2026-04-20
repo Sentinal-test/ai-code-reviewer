@@ -14,6 +14,9 @@ func TestUsageLedgerMerge(t *testing.T) {
 		outputTokens:          40,
 		nonCachedInputCostUSD: 0.10,
 		outputCostUSD:         0.20,
+		pricing: modelPricing{
+			CacheStoragePer1MTokenHour: 0,
+		},
 	}
 	flash := &UsageLedger{
 		provider:         "gemini",
@@ -23,6 +26,9 @@ func TestUsageLedgerMerge(t *testing.T) {
 		outputTokens:     10,
 		cacheReadCostUSD: 0.01,
 		outputCostUSD:    0.02,
+		pricing: modelPricing{
+			CacheStoragePer1MTokenHour: 1.25,
+		},
 	}
 
 	main.Merge(flash)
@@ -38,6 +44,9 @@ func TestUsageLedgerMerge(t *testing.T) {
 	}
 	if !strings.Contains(main.model, "gemini-3.1-pro-preview-customtools") || !strings.Contains(main.model, "gemini-3-flash-preview") {
 		t.Fatalf("expected merged model list to include both models, got %q", main.model)
+	}
+	if main.pricing.CacheStoragePer1MTokenHour != 1.25 {
+		t.Fatalf("expected merged cache storage price 1.25, got %.2f", main.pricing.CacheStoragePer1MTokenHour)
 	}
 }
 

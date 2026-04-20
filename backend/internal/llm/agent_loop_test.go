@@ -4,6 +4,7 @@ import (
 	"code-review/backend/internal/agents"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -82,5 +83,17 @@ func TestRunAgentReviewCachesFullPromptWhenItIsLarge(t *testing.T) {
 	}
 	if !strings.Contains(gotPrompt, "Review the cached code changes now") {
 		t.Fatalf("expected cached review instruction in runtime prompt, got %q", gotPrompt)
+	}
+}
+
+func TestIsTimeoutError(t *testing.T) {
+	if !isTimeoutError(context.DeadlineExceeded) {
+		t.Fatalf("expected context deadline exceeded to be detected as timeout")
+	}
+	if !isTimeoutError(errors.New("Error 504, Message: Deadline expired before operation could complete., Status: DEADLINE_EXCEEDED")) {
+		t.Fatalf("expected provider deadline error to be detected as timeout")
+	}
+	if isTimeoutError(errors.New("some other failure")) {
+		t.Fatalf("did not expect non-timeout error to be detected as timeout")
 	}
 }

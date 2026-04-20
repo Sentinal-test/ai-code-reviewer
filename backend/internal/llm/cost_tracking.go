@@ -137,43 +137,43 @@ func (l *UsageLedger) Merge(other *UsageLedger) {
 
 	other.mu.Lock()
 	snapshot := struct {
-		provider               string
-		model                  string
-		generateCalls          int
-		inputTokens            int
-		outputTokens           int
-		cachedTokens           int
-		toolTokens             int
-		thoughtTokens          int
-		cacheCreates           int
-		cacheDeletes           int
-		cacheStoredTokens      int
-		cacheStorageHours      float64
-		cacheStorageCostUSD    float64
-		cacheReadCostUSD       float64
-		nonCachedInputCostUSD  float64
-		outputCostUSD          float64
-		unknownPricing         bool
-		cacheStoragePriceKnown bool
+		provider              string
+		model                 string
+		generateCalls         int
+		inputTokens           int
+		outputTokens          int
+		cachedTokens          int
+		toolTokens            int
+		thoughtTokens         int
+		cacheCreates          int
+		cacheDeletes          int
+		cacheStoredTokens     int
+		cacheStorageHours     float64
+		cacheStorageCostUSD   float64
+		cacheReadCostUSD      float64
+		nonCachedInputCostUSD float64
+		outputCostUSD         float64
+		unknownPricing        bool
+		cacheStoragePrice     float64
 	}{
-		provider:               other.provider,
-		model:                  other.model,
-		generateCalls:          other.generateCalls,
-		inputTokens:            other.inputTokens,
-		outputTokens:           other.outputTokens,
-		cachedTokens:           other.cachedTokens,
-		toolTokens:             other.toolTokens,
-		thoughtTokens:          other.thoughtTokens,
-		cacheCreates:           other.cacheCreates,
-		cacheDeletes:           other.cacheDeletes,
-		cacheStoredTokens:      other.cacheStoredTokens,
-		cacheStorageHours:      other.cacheStorageHours,
-		cacheStorageCostUSD:    other.cacheStorageCostUSD,
-		cacheReadCostUSD:       other.cacheReadCostUSD,
-		nonCachedInputCostUSD:  other.nonCachedInputCostUSD,
-		outputCostUSD:          other.outputCostUSD,
-		unknownPricing:         other.unknownPricing,
-		cacheStoragePriceKnown: other.pricing.CacheStoragePer1MTokenHour > 0,
+		provider:              other.provider,
+		model:                 other.model,
+		generateCalls:         other.generateCalls,
+		inputTokens:           other.inputTokens,
+		outputTokens:          other.outputTokens,
+		cachedTokens:          other.cachedTokens,
+		toolTokens:            other.toolTokens,
+		thoughtTokens:         other.thoughtTokens,
+		cacheCreates:          other.cacheCreates,
+		cacheDeletes:          other.cacheDeletes,
+		cacheStoredTokens:     other.cacheStoredTokens,
+		cacheStorageHours:     other.cacheStorageHours,
+		cacheStorageCostUSD:   other.cacheStorageCostUSD,
+		cacheReadCostUSD:      other.cacheReadCostUSD,
+		nonCachedInputCostUSD: other.nonCachedInputCostUSD,
+		outputCostUSD:         other.outputCostUSD,
+		unknownPricing:        other.unknownPricing,
+		cacheStoragePrice:     other.pricing.CacheStoragePer1MTokenHour,
 	}
 	other.mu.Unlock()
 
@@ -197,8 +197,8 @@ func (l *UsageLedger) Merge(other *UsageLedger) {
 	l.nonCachedInputCostUSD += snapshot.nonCachedInputCostUSD
 	l.outputCostUSD += snapshot.outputCostUSD
 	l.unknownPricing = l.unknownPricing || snapshot.unknownPricing
-	if l.pricing.CacheStoragePer1MTokenHour <= 0 && snapshot.cacheStoragePriceKnown {
-		l.pricing.CacheStoragePer1MTokenHour = 1
+	if l.pricing.CacheStoragePer1MTokenHour <= 0 && snapshot.cacheStoragePrice > 0 {
+		l.pricing.CacheStoragePer1MTokenHour = snapshot.cacheStoragePrice
 	}
 }
 

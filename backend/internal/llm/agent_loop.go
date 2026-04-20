@@ -6,6 +6,7 @@ import (
 	"code-review/backend/internal/rules"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -188,7 +189,7 @@ func RunAgentReview(
 		elapsed := time.Since(start)
 
 		if err != nil {
-			if elapsed >= maxIterationTimeout {
+			if isTimeoutError(err) {
 				fmt.Printf("  ⏱️ [%s] Iteration %d timed out after %.1fs — stopping agent loop\n",
 					config.Type, iteration+1, elapsed.Seconds())
 				// Return whatever we have so far rather than a hard error
@@ -519,6 +520,20 @@ func buildCachedReviewInstruction() string {
 	return strings.TrimSpace(`Review the cached code changes now and return the final JSON result.
 Use tools only when a specific missing symbol, caller, or file is essential to verify a concrete defect.
 Avoid exploratory searches and do not repeat tool calls unless the previous response explicitly requires a new target.`)
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "deadline_exceeded") ||
+		strings.Contains(msg, "deadline expired") ||
+		strings.Contains(msg, "context deadline exceeded")
 }
 
 // grepLinePattern matches: file/path.go:42: severity: message
