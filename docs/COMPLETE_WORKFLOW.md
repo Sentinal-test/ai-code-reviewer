@@ -110,7 +110,7 @@ Flag (--api-key) → Env (GEMINI_API_KEY) → Env (OPENAI_API_KEY) → Env (ANTH
 
 | Provider | Env Variable | Model |
 |----------|-------------|-------|
-| Gemini (default) | `GEMINI_API_KEY` | `gemini-3.1-pro-preview-customtools` |
+| Gemini (default) | `GEMINI_API_KEY` | `gemini-3.5-flash` |
 | OpenAI | `OPENAI_API_KEY` | Configurable |
 | Claude | `ANTHROPIC_API_KEY` | Configurable |
 
@@ -882,8 +882,8 @@ Tracks:
 | Max tool iterations per agent | **10** | `agent_loop.maxToolIterations` |
 | Max comments after consolidation | **15** | `agents.DefaultMaxComments` |
 | Agent temperature | **0.0** | `agent_loop.go`, `consolidator.go` |
-| LLM model (main review) | `gemini-3.1-pro-preview-customtools` | `llm.go` |
-| LLM model (consolidation) | `gemini-2.5-flash` | `llm.go` |
+| LLM model (main review) | `gemini-3.5-flash` | `llm.go` |
+| LLM model (consolidation) | `gemini-3.5-flash` | `llm.go` |
 
 ### Code Graph Limits
 

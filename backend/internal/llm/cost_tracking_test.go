@@ -8,7 +8,7 @@ import (
 func TestUsageLedgerMerge(t *testing.T) {
 	main := &UsageLedger{
 		provider:              "gemini",
-		model:                 "gemini-3.1-pro-preview-customtools",
+		model:                 "gemini-3.5-flash",
 		generateCalls:         2,
 		inputTokens:           100,
 		outputTokens:          40,
@@ -20,7 +20,7 @@ func TestUsageLedgerMerge(t *testing.T) {
 	}
 	flash := &UsageLedger{
 		provider:         "gemini",
-		model:            "gemini-3-flash-preview",
+		model:            "gemini-3.5-flash",
 		generateCalls:    1,
 		inputTokens:      20,
 		outputTokens:     10,
@@ -42,22 +42,22 @@ func TestUsageLedgerMerge(t *testing.T) {
 	if got := main.TotalsUSD(); got != 0.33 {
 		t.Fatalf("expected merged total cost 0.33, got %.2f", got)
 	}
-	if !strings.Contains(main.model, "gemini-3.1-pro-preview-customtools") || !strings.Contains(main.model, "gemini-3-flash-preview") {
-		t.Fatalf("expected merged model list to include both models, got %q", main.model)
+	if !strings.Contains(main.model, "gemini-3.5-flash") {
+		t.Fatalf("expected merged model list to include gemini-3.5-flash, got %q", main.model)
 	}
 	if main.pricing.CacheStoragePer1MTokenHour != 1.25 {
 		t.Fatalf("expected merged cache storage price 1.25, got %.2f", main.pricing.CacheStoragePer1MTokenHour)
 	}
 }
 
-func TestDefaultPricingGemini3FlashPreview(t *testing.T) {
-	pricing := defaultPricing("gemini", "gemini-3-flash-preview")
+func TestDefaultPricingGemini35Flash(t *testing.T) {
+	pricing := defaultPricing("gemini", "gemini-3.5-flash")
 
 	if len(pricing.Tiers) != 1 {
 		t.Fatalf("expected one pricing tier, got %d", len(pricing.Tiers))
 	}
 	tier := pricing.Tiers[0]
-	if tier.InputPer1M != 0.50 || tier.OutputPer1M != 3.00 || tier.CachedInputPer1M != 0.05 {
+	if tier.InputPer1M != 1.50 || tier.OutputPer1M != 9.00 || tier.CachedInputPer1M != 0.15 {
 		t.Fatalf("unexpected pricing tier: %+v", tier)
 	}
 	if pricing.CacheStoragePer1MTokenHour != 1.00 {

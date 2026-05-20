@@ -13,12 +13,12 @@ import (
 )
 
 const (
-	// Gemini 3.1 Pro — Highly capable SWE reasoning model
-	geminiModel = "gemini-3.1-pro-preview-customtools"
+	// Gemini 3.5 Flash — Highly capable SWE reasoning and fast model
+	geminiModel = "gemini-3.5-flash"
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
 
 	// GeminiFlashModel is a faster, cheaper model used for the consolidation step.
-	GeminiFlashModel = "gemini-3-flash-preview"
+	GeminiFlashModel = "gemini-3.5-flash"
 )
 
 // FIX #4: Safe UTF-8 truncation helper
