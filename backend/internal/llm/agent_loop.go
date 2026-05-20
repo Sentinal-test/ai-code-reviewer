@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const maxToolIterations = 3
+const maxToolIterations = 4
 const minCacheableContextChars = 135000
 
 // maxIterationTimeout is the per-LLM-call deadline. Gemini can stall for 400s+
@@ -306,7 +306,58 @@ func RunAgentReview(
 		}
 	}
 
-	result.Error = fmt.Errorf("exceeded max tool iterations (%d)", maxToolIterations)
+	// Tool budget exhausted — send one final call with no tools so the model
+	// produces a JSON result from the context it has already gathered.
+	fmt.Printf("  ⚠️ [%s] Tool budget exhausted — requesting final answer from gathered context\n", config.Type)
+
+	// Gemini rejects combining a tool-bearing cache with responseMimeType=JSON,
+	// so drop the cache for the finalization call. If the cache held the full
+	// prompt (lightweight messages[0]), re-inject the prompt inline so the model
+	// still sees the diff and changed files.
+	if cacheContainsFullPrompt && len(messages) > 0 {
+		messages[0] = Message{
+			Role:  "user",
+			Parts: []Part{{Text: fullPrompt}},
+		}
+	}
+
+	messages = append(messages, Message{
+		Role: "user",
+		Parts: []Part{{
+			Text: "Tool call budget is exhausted. Based on all the context and tool results you have gathered so far, " +
+				"produce your final JSON review now. Do not request any more tools. " +
+				"Respond ONLY with the JSON object containing \"summary\", \"comments\", and \"resolutions\".",
+		}},
+	})
+
+	finalCtx, finalCancel := context.WithTimeout(ctx, maxIterationTimeout)
+	defer finalCancel()
+	finalReq := GenerateRequest{
+		SystemPrompt:  config.SystemPrompt,
+		Messages:      messages,
+		Tools:         nil, // no tools — force a text answer
+		CachedContent: "",  // drop cache: tool-bearing cache + JSON mode is rejected by Gemini
+		Temperature:   0.0,
+		ResponseJSON:  true,
+	}
+	finalResp, err := provider.GenerateContent(finalCtx, finalReq)
+	if err != nil {
+		result.Error = fmt.Errorf("finalization call failed after max tool iterations: %w", err)
+		return result
+	}
+	result.InputTokens += finalResp.InputTokens
+	result.OutputTokens += finalResp.OutputTokens
+
+	if finalResp.Text != "" {
+		parsed := parseAgentResponse(finalResp.Text)
+		result.Comments = parsed.Comments
+		result.Summary = parsed.Summary
+		result.Resolutions = parsed.Resolutions
+		fmt.Printf("  ✅ [%s] Finalized after tool budget: %d comments (%d tool calls)\n",
+			config.Type, len(result.Comments), result.ToolCalls)
+	} else {
+		result.Summary = fmt.Sprintf("No findings from %s agent (tool budget exhausted)", config.Type)
+	}
 	return result
 }
 

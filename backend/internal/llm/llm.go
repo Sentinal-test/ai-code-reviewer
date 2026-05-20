@@ -13,12 +13,12 @@ import (
 )
 
 const (
-	// Gemini 3.1 Pro — Highly capable SWE reasoning model
-	geminiModel = "gemini-3.1-pro-preview-customtools"
+	// Gemini 3.5 Flash — Highly capable SWE reasoning and fast model
+	geminiModel = "gemini-3.5-flash"
 	geminiURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent"
 
 	// GeminiFlashModel is a faster, cheaper model used for the consolidation step.
-	GeminiFlashModel = "gemini-3-flash-preview"
+	GeminiFlashModel = "gemini-3.5-flash"
 )
 
 // FIX #4: Safe UTF-8 truncation helper
@@ -167,6 +167,26 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 				if len(parts) >= 4 {
 					currentFile = strings.TrimPrefix(strings.Trim(parts[3], "\""), "b/")
 				}
+			}
+			continue
+		} else if strings.HasPrefix(line, "+++ ") && !strings.HasPrefix(line, "+++ /dev/null") {
+			file := strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
+			// Git diff headers use a TAB to separate the path from optional
+			// timestamp/mode metadata. Splitting on space corrupts paths that
+			// legitimately contain spaces (e.g. "b/some folder/file.go").
+			if idx := strings.IndexByte(file, '\t'); idx >= 0 {
+				file = file[:idx]
+			}
+			// Strip surrounding quotes BEFORE removing the "b/" prefix:
+			// quoted paths look like `"b/path"`, so trimming `b/` first is a no-op.
+			file = strings.Trim(file, "\"")
+			file = strings.TrimPrefix(file, "b/")
+			if file != currentFile {
+				if currentFile != "" && len(currentSection) > 0 {
+					result[currentFile] = append(result[currentFile], strings.Join(currentSection, "\n"))
+				}
+				currentSection = []string{}
+				currentFile = file
 			}
 			continue
 		}

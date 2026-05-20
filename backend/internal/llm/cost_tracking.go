@@ -329,7 +329,7 @@ func defaultPricing(providerName, model string) modelPricing {
 	switch providerName {
 	case "gemini":
 		switch model {
-		case "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools":
+		case "gemini-3.1-pro", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools":
 			return modelPricing{
 				Provider: providerName,
 				Model:    model,
@@ -338,6 +338,15 @@ func defaultPricing(providerName, model string) modelPricing {
 					{PromptTokenThreshold: int(^uint(0) >> 1), InputPer1M: 4.00, OutputPer1M: 18.00, CachedInputPer1M: 0.40},
 				},
 				CacheStoragePer1MTokenHour: 4.50,
+			}
+		case "gemini-3.5-flash":
+			return modelPricing{
+				Provider: providerName,
+				Model:    model,
+				Tiers: []pricingTier{
+					{PromptTokenThreshold: int(^uint(0) >> 1), InputPer1M: 1.50, OutputPer1M: 9.00, CachedInputPer1M: 0.15},
+				},
+				CacheStoragePer1MTokenHour: 1.00,
 			}
 		case "gemini-3-flash-preview":
 			return modelPricing{

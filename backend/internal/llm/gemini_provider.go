@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -23,7 +24,9 @@ func NewGeminiProvider(apiKey string, model string) (*GeminiProvider, error) {
 		return nil, fmt.Errorf("failed to initialize gemini client: %w", err)
 	}
 
-	if model == "" {
+	if envModel := os.Getenv("GEMINI_MODEL"); envModel != "" {
+		model = envModel
+	} else if model == "" {
 		model = geminiModel // fallback to constant
 	}
 
