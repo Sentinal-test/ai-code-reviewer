@@ -169,6 +169,21 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 				}
 			}
 			continue
+		} else if strings.HasPrefix(line, "+++ ") && !strings.HasPrefix(line, "+++ /dev/null") {
+			file := strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
+			file = strings.TrimPrefix(file, "b/")
+			if idx := strings.IndexAny(file, " \t"); idx >= 0 {
+				file = file[:idx]
+			}
+			file = strings.Trim(file, "\"")
+			if file != currentFile {
+				if currentFile != "" && len(currentSection) > 0 {
+					result[currentFile] = append(result[currentFile], strings.Join(currentSection, "\n"))
+				}
+				currentSection = []string{}
+				currentFile = file
+			}
+			continue
 		}
 
 		// Track hunk headers and changed lines

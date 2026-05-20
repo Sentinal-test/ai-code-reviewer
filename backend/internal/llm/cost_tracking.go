@@ -329,7 +329,7 @@ func defaultPricing(providerName, model string) modelPricing {
 	switch providerName {
 	case "gemini":
 		switch model {
-		case "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools":
+		case "gemini-3.1-pro", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools":
 			return modelPricing{
 				Provider: providerName,
 				Model:    model,

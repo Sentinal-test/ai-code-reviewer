@@ -1040,7 +1040,61 @@ func normalizeDatasetDiff(diff string) string {
 			}
 		}
 	}
-	return strings.Join(lines, "\n")
+	return reverseDiff(strings.Join(lines, "\n"))
+}
+
+func reverseDiff(diff string) string {
+	lines := strings.Split(diff, "\n")
+	var reversedLines []string
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if strings.HasPrefix(line, "diff --git") {
+			reversedLines = append(reversedLines, line)
+		} else if strings.HasPrefix(line, "--- ") {
+			headerOld := line
+			if i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++ ") {
+				headerNew := lines[i+1]
+				i++ // skip +++ line in iteration
+				// Swap --- and +++
+				reversedLines = append(reversedLines, "--- "+strings.TrimPrefix(headerNew, "+++ "))
+				reversedLines = append(reversedLines, "+++ "+strings.TrimPrefix(headerOld, "--- "))
+			} else {
+				reversedLines = append(reversedLines, line)
+			}
+		} else if strings.HasPrefix(line, "+++ ") {
+			// If we hit a +++ without --- beforehand, just output it as ---
+			reversedLines = append(reversedLines, "--- "+strings.TrimPrefix(line, "+++ "))
+		} else if strings.HasPrefix(line, "@@ ") {
+			idx := strings.Index(line[3:], " @@")
+			if idx >= 0 {
+				header := line[3 : 3+idx]
+				extra := line[3+idx+3:]
+				headerParts := strings.Fields(header)
+				if len(headerParts) >= 2 {
+					oldPart := headerParts[0]
+					newPart := headerParts[1]
+
+					newOld := "-" + strings.TrimPrefix(newPart, "+")
+					newNew := "+" + strings.TrimPrefix(oldPart, "-")
+
+					reversedLines = append(reversedLines, "@@ "+newOld+" "+newNew+" @@"+extra)
+				} else {
+					reversedLines = append(reversedLines, line)
+				}
+			} else {
+				reversedLines = append(reversedLines, line)
+			}
+		} else if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			reversedLines = append(reversedLines, "-"+line[1:])
+		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			reversedLines = append(reversedLines, "+"+line[1:])
+		} else {
+			reversedLines = append(reversedLines, line)
+		}
+	}
+
+	return strings.Join(reversedLines, "\n")
 }
 
 func normalizePatchPath(path string) string {
