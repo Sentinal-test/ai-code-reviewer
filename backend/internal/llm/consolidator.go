@@ -95,7 +95,6 @@ func RunConsolidation(
 
 	// Build the consolidation prompt
 	prompt := buildConsolidationPrompt(agentResults, diff)
-	fmt.Printf("   DEBUG CONSOLIDATION PROMPT:\n%s\n", prompt)
 	systemPrompt := agents.BuildConsolidatorSystemPrompt(maxComments, matchSummary)
 
 	fmt.Printf("🔄 [Consolidator] Sending %d agent results to LLM for intelligent consolidation\n",
@@ -204,7 +203,6 @@ func RunConsolidation(
 			cleaned = strings.TrimPrefix(cleaned, "```")
 			cleaned = strings.TrimSuffix(cleaned, "```")
 			cleaned = strings.TrimSpace(cleaned)
-			fmt.Printf("   DEBUG CONSOLIDATOR RAW RESPONSE: %s\n", cleaned)
 
 			if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
 				lastErr = err

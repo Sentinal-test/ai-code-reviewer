@@ -309,6 +309,18 @@ func RunAgentReview(
 	// Tool budget exhausted — send one final call with no tools so the model
 	// produces a JSON result from the context it has already gathered.
 	fmt.Printf("  ⚠️ [%s] Tool budget exhausted — requesting final answer from gathered context\n", config.Type)
+
+	// Gemini rejects combining a tool-bearing cache with responseMimeType=JSON,
+	// so drop the cache for the finalization call. If the cache held the full
+	// prompt (lightweight messages[0]), re-inject the prompt inline so the model
+	// still sees the diff and changed files.
+	if cacheContainsFullPrompt && len(messages) > 0 {
+		messages[0] = Message{
+			Role:  "user",
+			Parts: []Part{{Text: fullPrompt}},
+		}
+	}
+
 	messages = append(messages, Message{
 		Role: "user",
 		Parts: []Part{{
@@ -324,7 +336,7 @@ func RunAgentReview(
 		SystemPrompt:  config.SystemPrompt,
 		Messages:      messages,
 		Tools:         nil, // no tools — force a text answer
-		CachedContent: cacheName,
+		CachedContent: "",  // drop cache: tool-bearing cache + JSON mode is rejected by Gemini
 		Temperature:   0.0,
 		ResponseJSON:  true,
 	}

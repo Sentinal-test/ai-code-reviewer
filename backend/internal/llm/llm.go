@@ -172,7 +172,10 @@ func extractChangedLinesFromDiff(diff string) map[string][]string {
 		} else if strings.HasPrefix(line, "+++ ") && !strings.HasPrefix(line, "+++ /dev/null") {
 			file := strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
 			file = strings.TrimPrefix(file, "b/")
-			if idx := strings.IndexAny(file, " \t"); idx >= 0 {
+			// Git diff headers use a TAB to separate the path from optional
+			// timestamp/mode metadata. Splitting on space corrupts paths that
+			// legitimately contain spaces (e.g. "b/some folder/file.go").
+			if idx := strings.IndexByte(file, '\t'); idx >= 0 {
 				file = file[:idx]
 			}
 			file = strings.Trim(file, "\"")
