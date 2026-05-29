@@ -94,6 +94,12 @@ func (p *GeminiProvider) buildGenerateConfig(req GenerateRequest) *genai.Generat
 		Temperature: genai.Ptr(float32(req.Temperature)),
 	}
 
+	if strings.Contains(p.model, "gemini-3.5-flash") {
+		config.ThinkingConfig = &genai.ThinkingConfig{
+			ThinkingLevel: genai.ThinkingLevelHigh,
+		}
+	}
+
 	if req.ResponseJSON {
 		config.ResponseMIMEType = "application/json"
 		if req.ResponseSchema != nil {

@@ -1,6 +1,10 @@
 package llm
 
-import "testing"
+import (
+	"testing"
+
+	"google.golang.org/genai"
+)
 
 func TestBuildGenerateConfig_OmitsSystemAndToolsWhenUsingCachedContent(t *testing.T) {
 	provider := &GeminiProvider{}
@@ -54,5 +58,20 @@ func TestBuildGenerateConfig_IncludesSystemAndToolsWithoutCachedContent(t *testi
 	}
 	if config.ToolConfig == nil {
 		t.Fatalf("expected tool config to be included without cached content")
+	}
+}
+
+func TestBuildGenerateConfig_SetsThinkingLevelForGemini35Flash(t *testing.T) {
+	provider := &GeminiProvider{model: "gemini-3.5-flash"}
+	req := GenerateRequest{
+		Temperature: 0.1,
+	}
+
+	config := provider.buildGenerateConfig(req)
+	if config.ThinkingConfig == nil {
+		t.Fatalf("expected ThinkingConfig to be set")
+	}
+	if config.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelHigh {
+		t.Fatalf("expected ThinkingLevel to be HIGH, got %v", config.ThinkingConfig.ThinkingLevel)
 	}
 }
